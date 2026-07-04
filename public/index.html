@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Yahboom Rover Cockpit & Telemetry</title>
+  <!-- Google Fonts for premium typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glow-bg"></div>
+  <div class="container">
+    <!-- Header Area -->
+    <header class="main-header">
+      <div class="header-left">
+        <span class="logo-icon">🤖</span>
+        <h1>YAHBOOM ROVER <span>COCKPIT</span></h1>
+      </div>
+      
+      <!-- Connection Status and Battery -->
+      <div class="header-status">
+        <div class="status-badge" id="ws-status">
+          <span class="status-indicator alert"></span> WS: Connecting
+        </div>
+        <div class="status-badge" id="serial-status">
+          <span class="status-indicator alert"></span> Serial: Checking
+        </div>
+        <div class="serial-port-selector">
+          <input type="text" id="com-port-input" value="COM18" placeholder="Port">
+          <button id="btn-change-port">Connect</button>
+        </div>
+        
+        <!-- Battery Meter -->
+        <div class="battery-meter" id="battery-container">
+          <span class="battery-icon">🔋</span>
+          <div class="battery-bar-bg">
+            <div class="battery-bar-fill" id="battery-fill" style="width: 0%;"></div>
+          </div>
+          <span class="battery-text" id="battery-value">--.- V</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-navigation-bar">
+      <button class="tab-btn active" data-tab="tab-dashboard">🎮 Cockpit Dashboard</button>
+      <button class="tab-btn" data-tab="tab-imu">🧭 IMU & Position Tracking</button>
+    </nav>
+
+    <!-- Tab Contents -->
+    <div id="tab-dashboard" class="tab-content active">
+      <!-- Main Grid Dashboard -->
+      <main class="dashboard-grid">
+      
+      <!-- Left Column: Driving Control Room -->
+      <section class="panel controls-panel glass">
+        <div class="panel-header">
+          <h2>🕹️ Driving Control Room</h2>
+        </div>
+        
+        <!-- Movement Direction Pad -->
+        <div class="control-group">
+          <h3>Direction Control</h3>
+          <div class="dpad-wrapper">
+            <div class="dpad">
+              <button class="dpad-btn up" id="ctrl-forward" title="Forward">▲</button>
+              <button class="dpad-btn left" id="ctrl-left" title="Turn Left">◀</button>
+              <button class="dpad-btn center-stop" id="ctrl-stop-center" title="ESTOP">STOP</button>
+              <button class="dpad-btn right" id="ctrl-right" title="Turn Right">▶</button>
+              <button class="dpad-btn down" id="ctrl-reverse" title="Reverse">▼</button>
+            </div>
+          </div>
+          <div class="spin-controls">
+            <button class="btn btn-spin-left" id="ctrl-spin-left">↺ Spin Left</button>
+            <button class="btn btn-spin-right" id="ctrl-spin-right">Spin Right ↻</button>
+          </div>
+        </div>
+
+        <!-- Speed & PWM Sliders -->
+        <div class="control-group">
+          <div class="slider-header">
+            <h3>Synchronized Speed Scale</h3>
+            <span class="value-readout" id="sync-speed-readout">0</span>
+          </div>
+          <input type="range" class="styled-slider" id="sync-speed-slider" min="-1000" max="1000" value="0">
+          <div class="speed-presets">
+            <button class="preset-btn" data-val="-500">Reverse (Mid)</button>
+            <button class="preset-btn stop" data-val="0">Stop All</button>
+            <button class="preset-btn" data-val="500">Forward (Mid)</button>
+            <button class="preset-btn" data-val="1000">Forward (Max)</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <h3>Individual Speed Fine-Tuning</h3>
+          <div class="individual-sliders">
+            <div class="indiv-slider-col">
+              <span class="label">M1</span>
+              <input type="range" class="styled-slider vertical" id="speed-m1" min="-1000" max="1000" value="0" orient="vertical">
+              <span class="val" id="readout-m1">0</span>
+            </div>
+            <div class="indiv-slider-col">
+              <span class="label">M2</span>
+              <input type="range" class="styled-slider vertical" id="speed-m2" min="-1000" max="1000" value="0" orient="vertical">
+              <span class="val" id="readout-m2">0</span>
+            </div>
+            <div class="indiv-slider-col">
+              <span class="label">M3</span>
+              <input type="range" class="styled-slider vertical" id="speed-m3" min="-1000" max="1000" value="0" orient="vertical">
+              <span class="val" id="readout-m3">0</span>
+            </div>
+            <div class="indiv-slider-col">
+              <span class="label">M4</span>
+              <input type="range" class="styled-slider vertical" id="speed-m4" min="-1000" max="1000" value="0" orient="vertical">
+              <span class="val" id="readout-m4">0</span>
+            </div>
+          </div>
+          <button class="btn btn-danger btn-block" id="btn-estop">🚨 EMERGENCY STOP ALL MOTORS</button>
+          <div class="diag-row">
+            <button class="btn btn-warning btn-block" id="btn-motor-proof">Run Motor Power Proof</button>
+            <span class="diag-chip" id="encoder-activity">Encoder: waiting for packets</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Center & Right: Wheel Telemetry Grid -->
+      <section class="telemetry-section">
+        <div class="panel telemetry-panel glass">
+          <div class="panel-header">
+            <h2>📊 Real-time Wheel Telemetry</h2>
+            <div class="stream-control">
+              <label><input type="checkbox" id="stream-total" checked> Total Ticks</label>
+              <label><input type="checkbox" id="stream-realtime" checked> Real-time (10ms)</label>
+              <label><input type="checkbox" id="stream-speed" checked> Speed (mm/s)</label>
+            </div>
+          </div>
+
+          <div class="wheels-grid">
+            <!-- FRONT LEFT - M1 -->
+            <div class="wheel-card" id="card-m1">
+              <div class="card-header">
+                <h3>Front Left <span>(M1)</span></h3>
+                <span class="dir-badge status-indicator off">STOP</span>
+              </div>
+              <div class="wheel-visual-wrapper">
+                <div class="wheel-visual">
+                  <div class="tire-treads"></div>
+                  <div class="wheel-hub"></div>
+                </div>
+              </div>
+              <div class="telemetry-readouts">
+                <div class="readout-item">
+                  <span class="label">Speed</span>
+                  <span class="value" id="telemetry-speed-m1">0.0 <small>mm/s</small></span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Pulses (10ms)</span>
+                  <span class="value" id="telemetry-real-m1">0</span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Total Ticks</span>
+                  <span class="value" id="telemetry-total-m1">0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- FRONT RIGHT - M3 -->
+            <div class="wheel-card" id="card-m3">
+              <div class="card-header">
+                <h3>Front Right <span>(M3)</span></h3>
+                <span class="dir-badge status-indicator off">STOP</span>
+              </div>
+              <div class="wheel-visual-wrapper">
+                <div class="wheel-visual">
+                  <div class="tire-treads"></div>
+                  <div class="wheel-hub"></div>
+                </div>
+              </div>
+              <div class="telemetry-readouts">
+                <div class="readout-item">
+                  <span class="label">Speed</span>
+                  <span class="value" id="telemetry-speed-m3">0.0 <small>mm/s</small></span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Pulses (10ms)</span>
+                  <span class="value" id="telemetry-real-m3">0</span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Total Ticks</span>
+                  <span class="value" id="telemetry-total-m3">0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- REAR LEFT - M2 -->
+            <div class="wheel-card" id="card-m2">
+              <div class="card-header">
+                <h3>Rear Left <span>(M2)</span></h3>
+                <span class="dir-badge status-indicator off">STOP</span>
+              </div>
+              <div class="wheel-visual-wrapper">
+                <div class="wheel-visual">
+                  <div class="tire-treads"></div>
+                  <div class="wheel-hub"></div>
+                </div>
+              </div>
+              <div class="telemetry-readouts">
+                <div class="readout-item">
+                  <span class="label">Speed</span>
+                  <span class="value" id="telemetry-speed-m2">0.0 <small>mm/s</small></span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Pulses (10ms)</span>
+                  <span class="value" id="telemetry-real-m2">0</span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Total Ticks</span>
+                  <span class="value" id="telemetry-total-m2">0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- REAR RIGHT - M4 -->
+            <div class="wheel-card" id="card-m4">
+              <div class="card-header">
+                <h3>Rear Right <span>(M4)</span></h3>
+                <span class="dir-badge status-indicator off">STOP</span>
+              </div>
+              <div class="wheel-visual-wrapper">
+                <div class="wheel-visual">
+                  <div class="tire-treads"></div>
+                  <div class="wheel-hub"></div>
+                </div>
+              </div>
+              <div class="telemetry-readouts">
+                <div class="readout-item">
+                  <span class="label">Speed</span>
+                  <span class="value" id="telemetry-speed-m4">0.0 <small>mm/s</small></span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Pulses (10ms)</span>
+                  <span class="value" id="telemetry-real-m4">0</span>
+                </div>
+                <div class="readout-item">
+                  <span class="label">Total Ticks</span>
+                  <span class="value" id="telemetry-total-m4">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Configurations & Parameters -->
+        <div class="panel config-panel glass">
+          <div class="panel-header">
+            <h2>⚙️ Board Configurations & Tuning</h2>
+          </div>
+          <form id="config-form" class="config-grid">
+            <div class="form-group">
+              <label for="motor-type">Motor Type</label>
+              <select id="motor-type">
+                <option value="1">1: 520 Motor</option>
+                <option value="2">2: 310 Motor</option>
+                <option value="3" selected>3: TT Motor (With Encoder)</option>
+                <option value="4">4: TT Motor (Without Encoder)</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="deadband">Deadband Pulse (0-3600)</label>
+              <input type="number" id="deadband" min="0" max="3600" value="1600">
+            </div>
+
+            <div class="form-group">
+              <label for="phase-lines">Encoder Phase Lines</label>
+              <input type="number" id="phase-lines" min="1" max="100" value="11">
+            </div>
+
+            <div class="form-group">
+              <label for="reduction-ratio">Reduction Ratio</label>
+              <input type="number" id="reduction-ratio" min="1" max="1000" value="30">
+            </div>
+
+            <div class="form-group">
+              <label for="wheel-diameter">Wheel Diameter (mm)</label>
+              <input type="number" id="wheel-diameter" min="1" max="200" value="67">
+            </div>
+
+            <!-- PID Control Tuning -->
+            <div class="pid-group">
+              <label>PID Coefficients</label>
+              <div class="pid-inputs">
+                <input type="number" id="pid-p" step="0.01" min="0" max="100" value="0.80" placeholder="P">
+                <input type="number" id="pid-i" step="0.01" min="0" max="100" value="0.06" placeholder="I">
+                <input type="number" id="pid-d" step="0.01" min="0" max="100" value="0.50" placeholder="D">
+              </div>
+            </div>
+
+            <div class="form-buttons">
+              <button type="button" class="btn btn-secondary" id="btn-read-flash">Query Flash Info</button>
+              <button type="button" class="btn btn-warning" id="btn-reset-flash">Reset Defaults</button>
+              <button type="submit" class="btn btn-primary">Apply Settings to Board</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+    </main>
+    </div> <!-- End Dashboard Tab -->
+
+    <!-- IMU and Position Tracking Tab -->
+    <div id="tab-imu" class="tab-content">
+      <main class="imu-grid">
+        <!-- Left: 3D Attitude visualizer -->
+        <section class="panel orientation-panel glass">
+          <div class="panel-header">
+            <h2>🧭 3D Rover Attitude</h2>
+            <button class="btn btn-small" id="btn-reset-imu">Reset Orientation</button>
+          </div>
+          <div class="scene-3d-wrapper">
+            <div class="scene-3d">
+              <div class="rover-3d" id="rover-3d-model">
+                <div class="face front">FRONT</div>
+                <div class="face back">BACK</div>
+                <div class="face left">LEFT</div>
+                <div class="face right">RIGHT</div>
+                <div class="face top">YAHBOOM ROVER</div>
+                <div class="face bottom">CHASSIS</div>
+                <div class="wheel-3d fl"></div>
+                <div class="wheel-3d fr"></div>
+                <div class="wheel-3d rl"></div>
+                <div class="wheel-3d rr"></div>
+              </div>
+            </div>
+          </div>
+          <div class="attitude-gauges">
+            <div class="gauge-card">
+              <span class="label">Roll</span>
+              <span class="value" id="imu-roll">0.0°</span>
+            </div>
+            <div class="gauge-card">
+              <span class="label">Pitch</span>
+              <span class="value" id="imu-pitch">0.0°</span>
+            </div>
+            <div class="gauge-card">
+              <span class="label">Yaw</span>
+              <span class="value" id="imu-yaw">0.0°</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Center: Sensor readings -->
+        <section class="panel sensors-panel glass">
+          <div class="panel-header">
+            <h2>📈 IMU Sensor Readings</h2>
+          </div>
+          <div class="sensor-readouts-grid">
+            <div class="sensor-readout-group">
+              <h3>Accelerometer</h3>
+              <div class="sensor-row">
+                <span class="label">X-Axis</span>
+                <span class="value" id="imu-ax">0.00 <small>g</small></span>
+              </div>
+              <div class="sensor-row">
+                <span class="label">Y-Axis</span>
+                <span class="value" id="imu-ay">0.00 <small>g</small></span>
+              </div>
+              <div class="sensor-row">
+                <span class="label">Z-Axis</span>
+                <span class="value" id="imu-az">1.00 <small>g</small></span>
+              </div>
+            </div>
+            <div class="sensor-readout-group">
+              <h3>Gyroscope</h3>
+              <div class="sensor-row">
+                <span class="label">X-Axis</span>
+                <span class="value" id="imu-gx">0.00 <small>°/s</small></span>
+              </div>
+              <div class="sensor-row">
+                <span class="label">Y-Axis</span>
+                <span class="value" id="imu-gy">0.00 <small>°/s</small></span>
+              </div>
+              <div class="sensor-row">
+                <span class="label">Z-Axis</span>
+                <span class="value" id="imu-gz">0.00 <small>°/s</small></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right: Odometer and canvas path -->
+        <section class="panel map-panel glass">
+          <div class="panel-header">
+            <h2>🗺️ Rover Position Tracker</h2>
+            <button class="btn btn-small" id="btn-reset-odometry">Reset Odometer</button>
+          </div>
+          <div class="odometry-stats">
+            <div class="stat-item">
+              <span class="label">X Coordinate</span>
+              <span class="value" id="odom-x">0.00 <small>m</small></span>
+            </div>
+            <div class="stat-item">
+              <span class="label">Y Coordinate</span>
+              <span class="value" id="odom-y">0.00 <small>m</small></span>
+            </div>
+            <div class="stat-item">
+              <span class="label">Odom Speed</span>
+              <span class="value" id="odom-speed">0.0 <small>mm/s</small></span>
+            </div>
+          </div>
+          <div class="canvas-wrapper">
+            <canvas id="path-canvas"></canvas>
+          </div>
+        </section>
+      </main>
+    </div> <!-- End IMU Tab -->
+
+    <!-- Bottom: Live Logs and Custom Command Line Terminal -->
+    <footer class="panel logs-panel glass">
+      <div class="panel-header">
+        <h2>💻 Live Driver Logs & Command Terminal</h2>
+        <button class="btn btn-small" id="btn-clear-logs">Clear Logs</button>
+      </div>
+      <div class="terminal-logs" id="terminal-console">
+        <div class="log-line system-line">[System] Console initialized. Standing by for WebSocket connection...</div>
+      </div>
+      <div class="terminal-input-wrapper">
+        <span class="prompt">></span>
+        <input type="text" id="terminal-command-input" placeholder="Type raw serial command (e.g., $read_vol# or $spd:0,0,0,0#) and press Enter...">
+        <button id="btn-send-raw-command">Send</button>
+      </div>
+    </footer>
+  </div>
+  
+  <script src="app.js"></script>
+</body>
+</html>
