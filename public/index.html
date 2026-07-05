@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Yahboom Rover Cockpit & Telemetry</title>
+  <title>Maker ESP32 Pro Cockpit & Telemetry</title>
   <!-- Google Fonts for premium typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,12 +17,12 @@
     <header class="main-header">
       <div class="header-left">
         <span class="logo-icon">🤖</span>
-        <h1>YAHBOOM ROVER <span>COCKPIT</span></h1>
+        <h1>MAKER ESP32 PRO <span>COCKPIT</span></h1>
       </div>
       
       <!-- Connection Status and Battery -->
       <div class="header-status">
-        <div class="status-badge" id="ws-status">
+        <div class="status-badge" id="ws-status" title="WebSocket - Page connection to Windows Server">
           <span class="status-indicator alert"></span> WS: Connecting
         </div>
         <div class="status-badge" id="serial-status">
@@ -48,6 +48,7 @@
     <nav class="tab-navigation-bar">
       <button class="tab-btn active" data-tab="tab-dashboard">🎮 Cockpit Dashboard</button>
       <button class="tab-btn" data-tab="tab-imu">🧭 IMU & Position Tracking</button>
+      <button class="tab-btn" data-tab="tab-encoder">🔍 Encoder & Rotate Testing</button>
     </nav>
 
     <!-- Tab Contents -->
@@ -153,12 +154,12 @@
               </div>
               <div class="telemetry-readouts">
                 <div class="readout-item">
-                  <span class="label">Speed</span>
-                  <span class="value" id="telemetry-speed-m1">0.0 <small>mm/s</small></span>
+                  <span class="label">Speed (MPH)</span>
+                  <span class="value" id="telemetry-speed-m1">0.00 <small>mph</small></span>
                 </div>
                 <div class="readout-item">
-                  <span class="label">Pulses (10ms)</span>
-                  <span class="value" id="telemetry-real-m1">0</span>
+                  <span class="label">RPM</span>
+                  <span class="value" id="telemetry-real-m1">0.0</span>
                 </div>
                 <div class="readout-item">
                   <span class="label">Total Ticks</span>
@@ -181,12 +182,12 @@
               </div>
               <div class="telemetry-readouts">
                 <div class="readout-item">
-                  <span class="label">Speed</span>
-                  <span class="value" id="telemetry-speed-m3">0.0 <small>mm/s</small></span>
+                  <span class="label">Speed (MPH)</span>
+                  <span class="value" id="telemetry-speed-m3">0.00 <small>mph</small></span>
                 </div>
                 <div class="readout-item">
-                  <span class="label">Pulses (10ms)</span>
-                  <span class="value" id="telemetry-real-m3">0</span>
+                  <span class="label">RPM</span>
+                  <span class="value" id="telemetry-real-m3">0.0</span>
                 </div>
                 <div class="readout-item">
                   <span class="label">Total Ticks</span>
@@ -209,12 +210,12 @@
               </div>
               <div class="telemetry-readouts">
                 <div class="readout-item">
-                  <span class="label">Speed</span>
-                  <span class="value" id="telemetry-speed-m2">0.0 <small>mm/s</small></span>
+                  <span class="label">Speed (MPH)</span>
+                  <span class="value" id="telemetry-speed-m2">0.00 <small>mph</small></span>
                 </div>
                 <div class="readout-item">
-                  <span class="label">Pulses (10ms)</span>
-                  <span class="value" id="telemetry-real-m2">0</span>
+                  <span class="label">RPM</span>
+                  <span class="value" id="telemetry-real-m2">0.0</span>
                 </div>
                 <div class="readout-item">
                   <span class="label">Total Ticks</span>
@@ -237,12 +238,12 @@
               </div>
               <div class="telemetry-readouts">
                 <div class="readout-item">
-                  <span class="label">Speed</span>
-                  <span class="value" id="telemetry-speed-m4">0.0 <small>mm/s</small></span>
+                  <span class="label">Speed (MPH)</span>
+                  <span class="value" id="telemetry-speed-m4">0.00 <small>mph</small></span>
                 </div>
                 <div class="readout-item">
-                  <span class="label">Pulses (10ms)</span>
-                  <span class="value" id="telemetry-real-m4">0</span>
+                  <span class="label">RPM</span>
+                  <span class="value" id="telemetry-real-m4">0.0</span>
                 </div>
                 <div class="readout-item">
                   <span class="label">Total Ticks</span>
@@ -327,7 +328,7 @@
                 <div class="face back">BACK</div>
                 <div class="face left">LEFT</div>
                 <div class="face right">RIGHT</div>
-                <div class="face top">YAHBOOM ROVER</div>
+                <div class="face top">MAKER ESP32 PRO</div>
                 <div class="face bottom">CHASSIS</div>
                 <div class="wheel-3d fl"></div>
                 <div class="wheel-3d fr"></div>
@@ -417,6 +418,96 @@
         </section>
       </main>
     </div> <!-- End IMU Tab -->
+
+    <!-- Encoder and Rotate Testing Tab -->
+    <div id="tab-encoder" class="tab-content">
+      <main class="encoder-grid" style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; padding: 20px 0;">
+        <!-- Encoder monitoring panel -->
+        <section class="panel encoder-panel glass">
+          <div class="panel-header">
+            <h2>🔍 Encoder Diagnostics & Calibration</h2>
+            <button class="btn btn-small" id="btn-reset-encoders-ui">Zero Counts</button>
+          </div>
+          <p class="panel-desc" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
+            Drive each motor individually to verify that the encoder counts increase (+) when rotating forward and decrease (-) when rotating in reverse.
+          </p>
+          <div class="encoder-cards-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">LF (Motor 1)</span>
+              <div class="ticks-display" id="test-ticks-m1" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
+              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                <div>PWM: <span id="test-pwm-m1" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
+                <div>RPM: <span id="test-rpm-m1" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
+              </div>
+              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
+                <button class="btn btn-test btn-fwd" data-motor="1" style="flex: 1; font-weight: bold;">FWD</button>
+                <button class="btn btn-test btn-rev" data-motor="1" style="flex: 1; font-weight: bold;">REV</button>
+              </div>
+            </div>
+            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">RF (Motor 2)</span>
+              <div class="ticks-display" id="test-ticks-m2" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
+              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                <div>PWM: <span id="test-pwm-m2" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
+                <div>RPM: <span id="test-rpm-m2" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
+              </div>
+              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
+                <button class="btn btn-test btn-fwd" data-motor="2" style="flex: 1; font-weight: bold;">FWD</button>
+                <button class="btn btn-test btn-rev" data-motor="2" style="flex: 1; font-weight: bold;">REV</button>
+              </div>
+            </div>
+            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">LR (Motor 3)</span>
+              <div class="ticks-display" id="test-ticks-m3" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
+              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                <div>PWM: <span id="test-pwm-m3" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
+                <div>RPM: <span id="test-rpm-m3" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
+              </div>
+              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
+                <button class="btn btn-test btn-fwd" data-motor="3" style="flex: 1; font-weight: bold;">FWD</button>
+                <button class="btn btn-test btn-rev" data-motor="3" style="flex: 1; font-weight: bold;">REV</button>
+              </div>
+            </div>
+            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">RR (Motor 4)</span>
+              <div class="ticks-display" id="test-ticks-m4" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
+              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                <div>PWM: <span id="test-pwm-m4" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
+                <div>RPM: <span id="test-rpm-m4" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
+              </div>
+              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
+                <button class="btn btn-test btn-fwd" data-motor="4" style="flex: 1; font-weight: bold;">FWD</button>
+                <button class="btn btn-test btn-rev" data-motor="4" style="flex: 1; font-weight: bold;">REV</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Position rotate control panel -->
+        <section class="panel rotate-panel glass">
+          <div class="panel-header">
+            <h2>🔄 Rotation Control & Stops</h2>
+          </div>
+          <p class="panel-desc" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
+            Set target revolutions for individual wheels or all wheels. If the motor doesn't stop, press ESTOP immediately.
+          </p>
+          <div class="control-group" style="margin-bottom: 20px;">
+            <label style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 8px; display: block;">Target Revolutions:</label>
+            <input type="number" id="test-num-turns" step="0.1" value="1.0" style="background: #12121c; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; width: 100%; box-sizing: border-box; outline: none; font-size: 1.2rem; font-weight: bold; text-align: center;">
+          </div>
+          <div class="btn-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
+            <button class="btn btn-turn" data-wheel="m1">M1 (LF)</button>
+            <button class="btn btn-turn" data-wheel="m2">M2 (RF)</button>
+            <button class="btn btn-turn" data-wheel="m3">M3 (LR)</button>
+            <button class="btn btn-turn" data-wheel="m4">M4 (RR)</button>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <button class="btn" style="background: var(--accent-grad); box-shadow: 0 0 10px rgba(0, 242, 254, 0.2); font-weight: bold; font-size: 1.1rem; padding: 12px 0;" id="btn-turn-all">Rotate All Wheels</button>
+            <button class="btn" style="background: linear-gradient(135deg, #f43f5e, #e11d48); font-weight: bold; font-size: 1.1rem; padding: 12px 0; box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);" id="btn-estop-rotate">⚠️ ESTOP POSITION MODE</button>
+          </div>
+        </section>
+      </main>
+    </div> <!-- End Encoder Tab -->
 
     <!-- Bottom: Live Logs and Custom Command Line Terminal -->
     <footer class="panel logs-panel glass">
