@@ -141,7 +141,7 @@ int calculatePositionSpeed(int32_t current, int32_t target, volatile bool &mode)
   if (!mode) return 0;
   
   int32_t error = target - current;
-  if (abs(error) <= 3) {
+  if (abs(error) <= 15) { // Widened from 3 to 15 ticks (~5.7 deg) to stop end-of-move oscillation
     mode = false; // Reached!
     return 0;
   }

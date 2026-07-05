@@ -486,7 +486,7 @@ function parseTelemetryPacket(extType, data) {
         if (positionMode[i]) {
           anyPositionMode = true;
           const error = targetPosition[i] - currentTicks[i];
-          if (Math.abs(error) <= 3) {
+          if (Math.abs(error) <= 15) { // Widened from 3 to 15 ticks (~5.7 deg) to stop end-of-move oscillation
             positionMode[i] = false;
             console.log(`[Position Control] Motor ${i + 1} reached target.`);
           } else {
