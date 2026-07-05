@@ -21,7 +21,23 @@ if (fs.existsSync(path.join(__dirname, '.env'))) {
 }
 
 const PORT = process.env.PORT || 3000;
-let COM_PORT = process.env.SERIAL_PORT || (process.platform === 'linux' ? '/dev/ttyAMA0' : 'COM18');
+let COM_PORT = process.env.SERIAL_PORT;
+if (process.platform === 'win32' && COM_PORT && COM_PORT.startsWith('/dev/')) {
+  COM_PORT = null;
+}
+if (!COM_PORT) {
+  if (process.platform === 'linux') {
+    if (fs.existsSync('/dev/ttyUSB0')) {
+      COM_PORT = '/dev/ttyUSB0';
+    } else if (fs.existsSync('/dev/ttyACM0')) {
+      COM_PORT = '/dev/ttyACM0';
+    } else {
+      COM_PORT = '/dev/ttyAMA0';
+    }
+  } else {
+    COM_PORT = 'COM18';
+  }
+}
 const BAUD_RATE = parseInt(process.env.BAUD_RATE) || 115200;
 
 // ────────────────────────────────────────────────────────────
@@ -68,6 +84,15 @@ let motorProofRunning = false;
 let encoderPacketCount = 0;
 let lastEncoderActivityBroadcast = 0;
 
+// Position Control State
+let positionMode = [false, false, false, false];
+let targetPosition = [0, 0, 0, 0];
+let currentTicks = [0, 0, 0, 0];
+const TICKS_PER_REV = 937.2;
+const KP_POSITION = 0.15;
+const MIN_POSITION_SPEED = 20;
+const MAX_POSITION_SPEED = 60;
+
 // ────────────────────────────────────────────────────────────
 // IMU State (for sensor fusion)
 // ────────────────────────────────────────────────────────────
@@ -108,8 +133,8 @@ function broadcast(data) {
 function buildPacket(funcId, payload) {
   // Build: [HEAD, DEVICE_ID, extLen_placeholder, funcId, ...payload]
   const cmd = [HEAD, DEVICE_ID, 0x00, funcId, ...payload];
-  // extLen counts bytes from the extLen position to end (excl. HEAD, DEVICE_ID, checksum)
-  cmd[2] = cmd.length - 1; // = funcId(1) + payload.length + (checksum will be appended)
+  // extLen counts bytes from the extLen position to end (excluding HEAD and DEVICE_ID)
+  cmd[2] = cmd.length - 2; 
   // Checksum: sum bytes starting at index 2 (extLen byte), stop before checksum
   let sum = 0;
   for (let i = 2; i < cmd.length; i++) {
@@ -119,11 +144,10 @@ function buildPacket(funcId, payload) {
   return Buffer.from(cmd);
 }
 
-// Legacy checksum variant used by some Yahboom firmware branches:
-// checksum = (sum(all bytes including HEAD + DEVICE_ID) + COMPLEMENT) & 0xFF
+// Legacy checksum variant:
 function buildPacketLegacyChecksum(funcId, payload) {
   const cmd = [HEAD, DEVICE_ID, 0x00, funcId, ...payload];
-  cmd[2] = cmd.length - 1;
+  cmd[2] = cmd.length - 2;
   let sum = COMPLEMENT;
   for (let i = 0; i < cmd.length; i++) {
     sum += cmd[i];
@@ -187,6 +211,7 @@ function sendMotorPacket(m1, m2, m3, m4) {
     const c = clampMotor(v);
     return c < 0 ? (256 + c) : c;
   }
+  // No swapping needed – index matches ESP32 board terminal index layout (M1=LF, M2=RF, M3=LR, M4=RR)
   const payload = [toSignedByte(m1), toSignedByte(m2), toSignedByte(m3), toSignedByte(m4)];
   // Send both checksum styles to maximize compatibility with firmware variants.
   sendBinaryCommand(FUNC_MOTOR, payload, { dualChecksum: true });
@@ -199,6 +224,7 @@ function sendMotorSpeeds(m1, m2, m3, m4) {
     motorStopNeedsFlush = true;
   }
   sendMotorPacket(targetMotorSpeeds[0], targetMotorSpeeds[1], targetMotorSpeeds[2], targetMotorSpeeds[3]);
+  broadcast({ type: 'motor_speeds', speeds: targetMotorSpeeds });
 }
 
 function startMotorKeepaliveLoop() {
@@ -442,10 +468,46 @@ function parseTelemetryPacket(extType, data) {
   } else if (extType === TYPE_ENCODER) {
     // ff fb 13 0d -- four int32 LE wheel encoder counts (M1..M4)
     if (data.length >= 16) {
-      const m1 = data.readInt32LE(0);
-      const m2 = data.readInt32LE(4);
-      const m3 = data.readInt32LE(8);
-      const m4 = data.readInt32LE(12);
+      const m1 = data.readInt32LE(0);  // LF
+      const m2 = data.readInt32LE(4);  // RF
+      const m3 = data.readInt32LE(8);  // LR
+      const m4 = data.readInt32LE(12); // RR
+
+      currentTicks[0] = m1;
+      currentTicks[1] = m2;
+      currentTicks[2] = m3;
+      currentTicks[3] = m4;
+
+      // Position Control Loop (run every time we get an encoder telemetry update)
+      let motorSpeeds = [0, 0, 0, 0];
+      let anyPositionMode = false;
+      
+      for (let i = 0; i < 4; i++) {
+        if (positionMode[i]) {
+          anyPositionMode = true;
+          const error = targetPosition[i] - currentTicks[i];
+          if (Math.abs(error) <= 3) {
+            positionMode[i] = false;
+            console.log(`[Position Control] Motor ${i + 1} reached target.`);
+          } else {
+            let speed = error * KP_POSITION;
+            if (speed > 0) {
+              if (speed < MIN_POSITION_SPEED) speed = MIN_POSITION_SPEED;
+              if (speed > MAX_POSITION_SPEED) speed = MAX_POSITION_SPEED;
+            } else {
+              if (speed > -MIN_POSITION_SPEED) speed = -MIN_POSITION_SPEED;
+              if (speed < -MAX_POSITION_SPEED) speed = -MAX_POSITION_SPEED;
+            }
+            motorSpeeds[i] = Math.round(speed);
+          }
+        }
+      }
+      
+      if (anyPositionMode) {
+        // Send motor speeds to serial
+        sendMotorSpeeds(motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
+      }
+
       encoderPacketCount += 1;
       const now = Date.now();
       if ((now - lastEncoderActivityBroadcast) > 250) {
@@ -490,7 +552,7 @@ function initSerial(portName = COM_PORT) {
   lastImuTimestamp = null;
   isSerialConnecting = true;
 
-  console.log(`Connecting to Yahboom ROS Expansion Board on ${COM_PORT} at ${BAUD_RATE} baud (binary protocol)...`);
+  console.log(`Connecting to Maker ESP32 Pro Board on ${COM_PORT} at ${BAUD_RATE} baud (binary protocol)...`);
   broadcast({ type: 'status', key: 'serial', val: 'connecting', port: COM_PORT });
 
   serialPort = new SerialPort({
@@ -575,6 +637,7 @@ wss.on('connection', (ws) => {
         case 'set_speed':
           // Frontend sends { type:'set_speed', speeds:[m1,m2,m3,m4] } in range -1000..1000
           if (Array.isArray(msg.speeds) && msg.speeds.length === 4) {
+            positionMode = [false, false, false, false];
             sendMotorSpeeds(msg.speeds[0], msg.speeds[1], msg.speeds[2], msg.speeds[3]);
           }
           break;
@@ -582,6 +645,7 @@ wss.on('connection', (ws) => {
         case 'set_pwm':
           // Alias for set_speed (frontend uses both)
           if (Array.isArray(msg.pwms) && msg.pwms.length === 4) {
+            positionMode = [false, false, false, false];
             sendMotorSpeeds(msg.pwms[0], msg.pwms[1], msg.pwms[2], msg.pwms[3]);
           }
           break;
@@ -651,6 +715,7 @@ wss.on('connection', (ws) => {
 // GET /api/beep
 // ────────────────────────────────────────────────────────────
 app.get('/api/motor', (req, res) => {
+  positionMode = [false, false, false, false];
   const m1 = parseInt(req.query.m1 || 0);
   const m2 = parseInt(req.query.m2 || 0);
   const m3 = parseInt(req.query.m3 || 0);
@@ -671,6 +736,7 @@ app.get('/api/motor', (req, res) => {
 });
 
 app.get('/api/stop', (req, res) => {
+  positionMode = [false, false, false, false];
   const pkt = buildPacket(FUNC_MOTOR, [0, 0, 0, 0]);
   const hex = Array.from(pkt).map(b => b.toString(16).padStart(2, '0')).join(' ');
   if (serialPort && serialPort.isOpen) {
@@ -680,6 +746,28 @@ app.get('/api/stop', (req, res) => {
   } else {
     res.status(503).json({ ok: false, error: 'Serial port not open', packet: hex });
   }
+});
+
+app.get('/api/turn', (req, res) => {
+  if (req.query.stop || req.query.estop) {
+    positionMode = [false, false, false, false];
+    sendMotorSpeeds(0, 0, 0, 0);
+    console.log('[Position Control] ESTOP triggered - all wheels stopped.');
+    return res.json({ ok: true, stopped: true });
+  }
+
+  let active = false;
+  ['m1', 'm2', 'm3', 'm4'].forEach((key, idx) => {
+    if (req.query[key]) {
+      const turns = parseFloat(req.query[key]);
+      targetPosition[idx] = currentTicks[idx] + Math.round(turns * TICKS_PER_REV);
+      positionMode[idx] = true;
+      active = true;
+      console.log(`[Position Control] Motor ${idx + 1} target set to ${targetPosition[idx]} (current: ${currentTicks[idx]})`);
+    }
+  });
+
+  res.json({ ok: true, positionMode, targetPosition });
 });
 
 app.get('/api/beep', (req, res) => {
@@ -770,7 +858,7 @@ startI2CSidecarPoller();
 initSerial(COM_PORT);
 
 server.listen(PORT, () => {
-  console.log(`Yahboom ROS V3.0 Cockpit running at http://localhost:${PORT}`);
+  console.log(`Maker ESP32 Pro Cockpit running at http://localhost:${PORT}`);
   console.log(`Binary protocol on ${COM_PORT} @ ${BAUD_RATE} baud`);
   console.log(`Motor test: http://localhost:${PORT}/api/motor?m1=50&m2=0&m3=0&m4=0`);
   console.log(`Stop:       http://localhost:${PORT}/api/stop`);

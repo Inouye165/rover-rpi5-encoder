@@ -90,6 +90,10 @@ const terminalCommandInput = document.getElementById('terminal-command-input');
 const btnSendRawCommand = document.getElementById('btn-send-raw-command');
 const btnClearLogs = document.getElementById('btn-clear-logs');
 
+// Encoder calculations for RPM and MPH
+let prevEncoderTime = null;
+let prevM1 = 0, prevM2 = 0, prevM3 = 0, prevM4 = 0;
+
 // Connect WebSocket
 function connectWebSocket() {
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -217,20 +221,26 @@ function handleServerMessage(msg) {
       break;
 
     case 'battery':
-      // Map 6.0V - 8.4V battery pack (2S LiPo usually) to percentage
-      const minV = 6.0;
-      const maxV = 8.4;
-      const pct = Math.min(100, Math.max(0, ((msg.voltage - minV) / (maxV - minV)) * 100));
-      batteryFill.style.width = `${pct}%`;
-      batteryValue.textContent = `${msg.voltage.toFixed(2)} V`;
-      
-      // Update battery colors based on voltage levels
-      if (msg.voltage > 7.4) {
-        batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
-      } else if (msg.voltage > 6.8) {
-        batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
+      if (msg.voltage <= 2.0) {
+        batteryFill.style.width = '0%';
+        batteryValue.textContent = 'Unknown';
+        batteryFill.style.background = '#64748b'; // gray
       } else {
-        batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
+        // Map 6.0V - 8.4V battery pack (2S LiPo usually) to percentage
+        const minV = 6.0;
+        const maxV = 8.4;
+        const pct = Math.min(100, Math.max(0, ((msg.voltage - minV) / (maxV - minV)) * 100));
+        batteryFill.style.width = `${pct}%`;
+        batteryValue.textContent = `${msg.voltage.toFixed(2)} V`;
+        
+        // Update battery colors based on voltage levels
+        if (msg.voltage > 7.4) {
+          batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
+        } else if (msg.voltage > 6.8) {
+          batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
+        } else {
+          batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
+        }
       }
       break;
 
@@ -239,6 +249,73 @@ function handleServerMessage(msg) {
       totalValM2.textContent = msg.m2;
       totalValM3.textContent = msg.m3;
       totalValM4.textContent = msg.m4;
+
+      // Update diagnostics page ticks if they exist
+      const testTicksM1 = document.getElementById('test-ticks-m1');
+      if (testTicksM1) {
+        testTicksM1.textContent = msg.m1 - encoderOffsets[0];
+        document.getElementById('test-ticks-m2').textContent = msg.m2 - encoderOffsets[1];
+        document.getElementById('test-ticks-m3').textContent = msg.m3 - encoderOffsets[2];
+        document.getElementById('test-ticks-m4').textContent = msg.m4 - encoderOffsets[3];
+      }
+
+      // Calculate RPM and MPH
+      const now = Date.now();
+      if (prevEncoderTime !== null) {
+        const dt = (now - prevEncoderTime) / 1000.0;
+        if (dt > 0.1) {
+          const deltaM1 = msg.m1 - prevM1;
+          const deltaM2 = msg.m2 - prevM2;
+          const deltaM3 = msg.m3 - prevM3;
+          const deltaM4 = msg.m4 - prevM4;
+
+          const tpr = 937.2;
+          const rpm1 = (deltaM1 / dt) / tpr * 60.0;
+          const rpm2 = (deltaM2 / dt) / tpr * 60.0;
+          const rpm3 = (deltaM3 / dt) / tpr * 60.0;
+          const rpm4 = (deltaM4 / dt) / tpr * 60.0;
+
+          const rpmToMph = 2.559 * Math.PI * 5.0 / 5280.0; // ~0.007613
+          const mph1 = rpm1 * rpmToMph;
+          const mph2 = rpm2 * rpmToMph;
+          const mph3 = rpm3 * rpmToMph;
+          const mph4 = rpm4 * rpmToMph;
+
+          speedValM1.innerHTML = `${Math.abs(mph1).toFixed(2)} <small>mph</small>`;
+          speedValM2.innerHTML = `${Math.abs(mph2).toFixed(2)} <small>mph</small>`;
+          speedValM3.innerHTML = `${Math.abs(mph3).toFixed(2)} <small>mph</small>`;
+          speedValM4.innerHTML = `${Math.abs(mph4).toFixed(2)} <small>mph</small>`;
+
+          realValM1.textContent = rpm1.toFixed(1);
+          realValM2.textContent = rpm2.toFixed(1);
+          realValM3.textContent = rpm3.toFixed(1);
+          realValM4.textContent = rpm4.toFixed(1);
+
+          // Update diagnostics page RPM values
+          const testRpmM1 = document.getElementById('test-rpm-m1');
+          if (testRpmM1) {
+            testRpmM1.textContent = rpm1.toFixed(1);
+            document.getElementById('test-rpm-m2').textContent = rpm2.toFixed(1);
+            document.getElementById('test-rpm-m3').textContent = rpm3.toFixed(1);
+            document.getElementById('test-rpm-m4').textContent = rpm4.toFixed(1);
+          }
+        }
+      }
+      prevM1 = msg.m1;
+      prevM2 = msg.m2;
+      prevM3 = msg.m3;
+      prevM4 = msg.m4;
+      prevEncoderTime = now;
+      break;
+
+    case 'motor_speeds':
+      const testPwmM1 = document.getElementById('test-pwm-m1');
+      if (testPwmM1 && Array.isArray(msg.speeds)) {
+        testPwmM1.textContent = msg.speeds[0];
+        document.getElementById('test-pwm-m2').textContent = msg.speeds[1];
+        document.getElementById('test-pwm-m3').textContent = msg.speeds[2];
+        document.getElementById('test-pwm-m4').textContent = msg.speeds[3];
+      }
       break;
 
     case 'encoder_realtime':
@@ -472,21 +549,23 @@ function driveRover(direction) {
       break;
     case 'left':
       // Turn left: Left wheels backward, right wheels forward
-      m1 = m2 = -activeSpeed;
-      m3 = m4 = activeSpeed;
+      m1 = m3 = -activeSpeed;
+      m2 = m4 = activeSpeed;
       break;
     case 'right':
       // Turn right: Left wheels forward, right wheels backward
-      m1 = m2 = activeSpeed;
-      m3 = m4 = -activeSpeed;
+      m1 = m3 = activeSpeed;
+      m2 = m4 = -activeSpeed;
       break;
     case 'spin_left':
-      m1 = m2 = -activeSpeed;
-      m3 = m4 = activeSpeed;
+      // Spin left: Left wheels backward, right wheels forward
+      m1 = m3 = -activeSpeed;
+      m2 = m4 = activeSpeed;
       break;
     case 'spin_right':
-      m1 = m2 = activeSpeed;
-      m3 = m4 = -activeSpeed;
+      // Spin right: Left wheels forward, right wheels backward
+      m1 = m3 = activeSpeed;
+      m2 = m4 = -activeSpeed;
       break;
     case 'stop':
     default:
@@ -587,7 +666,7 @@ configForm.addEventListener('submit', (e) => {
   const i = pidI.value;
   const d = pidD.value;
 
-  logSystem('Applying configurations to Yahboom board...');
+  logSystem('Applying configurations to Maker ESP32 Pro board...');
   
   sendServerMessage({ type: 'config_motor_type', val: mType });
   setTimeout(() => sendServerMessage({ type: 'config_deadband', val: db }), 100);
@@ -685,8 +764,8 @@ function updateOdometry() {
   const dt = 0.1; // 100ms loop
   
   // Calculate average left and right velocities
-  const vLeft = (m1Speed + m2Speed) / 2;
-  const vRight = (m3Speed + m4Speed) / 2;
+  const vLeft = (m1Speed + m3Speed) / 2;
+  const vRight = (m2Speed + m4Speed) / 2;
   
   // Linear speed (mm/s) and angular speed (rad/s)
   const linearSpeed = (vLeft + vRight) / 2;
@@ -859,4 +938,105 @@ document.getElementById('btn-reset-odometry').addEventListener('click', () => {
 
 // Run odometry kinematics loop at 10Hz (100ms)
 setInterval(updateOdometry, 100);
+
+// --- Encoder Diagnostics and Testing Tab Helpers ---
+let encoderOffsets = [0, 0, 0, 0];
+
+// FWD/REV holding speed test helper
+let activeTestSpeeds = [0, 0, 0, 0];
+function sendTestSpeed(motorIdx, speed) {
+  activeTestSpeeds = [0, 0, 0, 0];
+  if (motorIdx >= 0 && motorIdx < 4) {
+    activeTestSpeeds[motorIdx] = speed;
+  }
+  // WebSocket uses range -1000..1000 for speeds
+  sendServerMessage({ type: 'set_speed', speeds: activeTestSpeeds });
+}
+
+// Bind Hold-to-Run FWD/REV buttons for all 4 wheels
+document.querySelectorAll('.btn-test').forEach(btn => {
+  const motorIdx = parseInt(btn.dataset.motor) - 1;
+  const isFwd = btn.classList.contains('btn-fwd');
+  const testSpeed = isFwd ? 400 : -400; // 40% speed
+
+  const startMotor = (e) => {
+    e.preventDefault();
+    btn.classList.add('active');
+    sendTestSpeed(motorIdx, testSpeed);
+  };
+
+  const stopMotor = (e) => {
+    e.preventDefault();
+    btn.classList.remove('active');
+    sendTestSpeed(motorIdx, 0);
+  };
+
+  // Mouse events
+  btn.addEventListener('mousedown', startMotor);
+  btn.addEventListener('mouseup', stopMotor);
+  btn.addEventListener('mouseleave', stopMotor);
+
+  // Touch events (for mobile screens)
+  btn.addEventListener('touchstart', startMotor);
+  btn.addEventListener('touchend', stopMotor);
+  btn.addEventListener('touchcancel', stopMotor);
+});
+
+// Zero Encoders button (Frontend client-side offset calibration)
+const btnResetEncodersUI = document.getElementById('btn-reset-encoders-ui');
+if (btnResetEncodersUI) {
+  btnResetEncodersUI.addEventListener('click', () => {
+    const rawM1 = parseInt(document.getElementById('telemetry-total-m1').textContent || 0);
+    const rawM2 = parseInt(document.getElementById('telemetry-total-m2').textContent || 0);
+    const rawM3 = parseInt(document.getElementById('telemetry-total-m3').textContent || 0);
+    const rawM4 = parseInt(document.getElementById('telemetry-total-m4').textContent || 0);
+
+    encoderOffsets = [rawM1, rawM2, rawM3, rawM4];
+
+    document.getElementById('test-ticks-m1').textContent = 0;
+    document.getElementById('test-ticks-m2').textContent = 0;
+    document.getElementById('test-ticks-m3').textContent = 0;
+    document.getElementById('test-ticks-m4').textContent = 0;
+
+    logSystem(`Zeroed out diagnostics encoder offsets: [${encoderOffsets.join(', ')}]`);
+  });
+}
+
+// Position turning triggers
+document.querySelectorAll('.btn-turn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const wheel = btn.dataset.wheel; // "m1", "m2", "m3", "m4"
+    const turns = parseFloat(document.getElementById('test-num-turns').value) || 1.0;
+    logSystem(`Rotating wheel ${wheel.toUpperCase()} by ${turns} turns...`);
+    fetch(`/api/turn?${wheel}=${turns}`)
+      .then(res => res.json())
+      .then(data => console.log('Turn started:', data))
+      .catch(err => console.error('Turn API Error:', err));
+  });
+});
+
+const btnTurnAll = document.getElementById('btn-turn-all');
+if (btnTurnAll) {
+  btnTurnAll.addEventListener('click', () => {
+    const turns = parseFloat(document.getElementById('test-num-turns').value) || 1.0;
+    logSystem(`Rotating ALL wheels by ${turns} turns...`);
+    fetch(`/api/turn?m1=${turns}&m2=${turns}&m3=${turns}&m4=${turns}`)
+      .then(res => res.json())
+      .then(data => console.log('Rotate all started:', data))
+      .catch(err => console.error('Turn API Error:', err));
+  });
+}
+
+const btnEstopRotate = document.getElementById('btn-estop-rotate');
+if (btnEstopRotate) {
+  btnEstopRotate.addEventListener('click', () => {
+    logSystem('⚠️ POSITION ESTOP SENT!');
+    fetch('/api/turn?stop=1')
+      .then(res => res.json())
+      .then(data => {
+        logSystem('Stopped all position modes.');
+      })
+      .catch(err => console.error('ESTOP API Error:', err));
+  });
+}
 
