@@ -821,6 +821,7 @@ function startCamera() {
 
   const rpiArgs = [
     '-t', '0',                    // continuous streaming
+    '-n',                         // do not display a preview window
     '--codec', 'mjpeg',
     '--inline',
     '--width', width.toString(),
