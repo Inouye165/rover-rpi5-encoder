@@ -115,6 +115,8 @@ systemctl restart rover-i2c.service
 
 echo "Enabling and starting rover-server service..."
 systemctl enable rover-server.service
+echo "Killing any processes on port 3000..."
+fuser -k 3000/tcp || true
 systemctl restart rover-server.service
 
 echo "=== Setup Completed Successfully ==="

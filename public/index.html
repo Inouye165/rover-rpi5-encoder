@@ -127,6 +127,34 @@
         </div>
       </section>
 
+      <!-- RPi Camera Feed Panel -->
+      <section class="panel camera-panel glass">
+        <div class="panel-header">
+          <h2>📷 RPi Camera Feed</h2>
+          <div class="status-badge" id="camera-status-badge">
+            <span class="status-indicator off" id="camera-status-dot"></span> <span id="camera-status-text">OFFLINE</span>
+          </div>
+        </div>
+        <div class="camera-viewport-container" id="camera-viewport">
+          <!-- Cyber HUD Overlays -->
+          <div class="camera-hud-grid"></div>
+          <div class="camera-hud-reticle"></div>
+          <div class="camera-hud-scanline"></div>
+          
+          <img id="camera-stream" src="" class="camera-stream-img" alt="Camera Feed Offline" style="display: none;">
+          <div class="camera-placeholder" id="camera-placeholder">
+            <div class="placeholder-icon">🎥</div>
+            <div class="placeholder-text">Camera Feed Offline</div>
+            <div class="placeholder-subtext">Click "Start Feed" to initialize the stream</div>
+          </div>
+        </div>
+        <div class="camera-controls">
+          <button class="btn btn-primary btn-block" id="btn-toggle-camera">Start Feed</button>
+          <button class="btn btn-secondary btn-block" id="btn-fullscreen-camera" disabled>Fullscreen</button>
+        </div>
+      </section>
+
+
       <!-- Center & Right: Wheel Telemetry Grid -->
       <section class="telemetry-section">
         <div class="panel telemetry-panel glass">

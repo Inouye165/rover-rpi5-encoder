@@ -46,6 +46,16 @@ const btnEstop = document.getElementById('btn-estop');
 const btnMotorProof = document.getElementById('btn-motor-proof');
 const encoderActivity = document.getElementById('encoder-activity');
 
+// Camera Elements and State
+const cameraStream = document.getElementById('camera-stream');
+const cameraPlaceholder = document.getElementById('camera-placeholder');
+const btnToggleCamera = document.getElementById('btn-toggle-camera');
+const btnFullscreenCamera = document.getElementById('btn-fullscreen-camera');
+const cameraStatusDot = document.getElementById('camera-status-dot');
+const cameraStatusText = document.getElementById('camera-status-text');
+const cameraViewport = document.getElementById('camera-viewport');
+let isCameraStreaming = false;
+
 // Telemetry Elements
 const streamTotal = document.getElementById('stream-total');
 const streamRealtime = document.getElementById('stream-realtime');
@@ -1039,4 +1049,94 @@ if (btnEstopRotate) {
       .catch(err => console.error('ESTOP API Error:', err));
   });
 }
+
+// ────────────────────────────────────────────────────────────
+// Camera Control Operations
+// ────────────────────────────────────────────────────────────
+function updateCameraStatus(status, text, dotClass) {
+  if (cameraStatusText) cameraStatusText.textContent = text;
+  if (cameraStatusDot) {
+    cameraStatusDot.className = 'status-indicator ' + dotClass;
+  }
+}
+
+function startCameraStream() {
+  if (!cameraStream) return;
+  
+  isCameraStreaming = true;
+  updateCameraStatus('connecting', 'CONNECTING', 'alert');
+  
+  // Set image source to stream endpoint
+  cameraStream.src = '/api/camera';
+  cameraStream.style.display = 'block';
+  if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+  if (btnToggleCamera) btnToggleCamera.textContent = 'Stop Feed';
+  if (btnFullscreenCamera) btnFullscreenCamera.disabled = false;
+}
+
+function stopCameraStream() {
+  if (!cameraStream) return;
+  
+  isCameraStreaming = false;
+  updateCameraStatus('offline', 'OFFLINE', 'off');
+  
+  // Clear source to stop request
+  cameraStream.src = '';
+  cameraStream.style.display = 'none';
+  if (cameraPlaceholder) {
+    cameraPlaceholder.style.display = 'flex';
+    const pText = cameraPlaceholder.querySelector('.placeholder-text');
+    const pSub = cameraPlaceholder.querySelector('.placeholder-subtext');
+    if (pText) pText.textContent = 'Camera Feed Offline';
+    if (pSub) pSub.textContent = 'Click "Start Feed" to initialize the stream';
+  }
+  if (btnToggleCamera) btnToggleCamera.textContent = 'Start Feed';
+  if (btnFullscreenCamera) btnFullscreenCamera.disabled = true;
+}
+
+if (btnToggleCamera) {
+  btnToggleCamera.addEventListener('click', () => {
+    if (isCameraStreaming) {
+      stopCameraStream();
+    } else {
+      startCameraStream();
+    }
+  });
+}
+
+if (cameraStream) {
+  cameraStream.addEventListener('load', () => {
+    if (isCameraStreaming) {
+      updateCameraStatus('streaming', 'STREAMING', 'ok');
+    }
+  });
+
+  cameraStream.addEventListener('error', () => {
+    if (isCameraStreaming) {
+      updateCameraStatus('error', 'ERROR', 'alert');
+      // Show placeholder with error info
+      cameraStream.style.display = 'none';
+      if (cameraPlaceholder) {
+        cameraPlaceholder.style.display = 'flex';
+        const pText = cameraPlaceholder.querySelector('.placeholder-text');
+        const pSub = cameraPlaceholder.querySelector('.placeholder-subtext');
+        if (pText) pText.textContent = 'CAMERA ERROR';
+        if (pSub) pSub.textContent = 'Failed to load video stream. Check connection and physical camera.';
+      }
+    }
+  });
+}
+
+if (btnFullscreenCamera && cameraViewport) {
+  btnFullscreenCamera.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      cameraViewport.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  });
+}
+
 

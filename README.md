@@ -103,6 +103,40 @@ journalctl -u rover-i2c.service -f
 
 ---
 
+## 📷 Camera Setup & Troubleshooting
+
+The rover supports live camera streaming directly on the dashboard via an on-board **Raspberry Pi Camera Module 3 (IMX708)**.
+
+### 1. Hardware Configuration
+* The camera ribbon cable must be connected to the CSI port **closest to the HDMI ports** (**CAM1**).
+* To enable manual hardware overlay, edit `/boot/firmware/config.txt` on the Pi and add/uncomment:
+  ```txt
+  camera_auto_detect=0
+  dtoverlay=imx708,cam1
+  ```
+  *(Reboot required after changes)*
+
+### 2. Physical Trouble: The "Sunny" Connector
+If the system reports `No cameras available!` but a bus scan shows the focus driver at `0x0c` or the crypto chip at `0x64`, the tiny lego-style "Sunny" flex connector linking the sensor lens to the camera's green PCB has likely popped loose:
+1. Power down the Pi.
+2. Press down firmly but gently on the lens unit connector until it snaps in.
+3. Power on the Pi.
+
+### 3. Disabling Competing Services
+Ensure no other software is locking `/dev/video0`. If legacy services are locking the camera feed, stop and disable them:
+```bash
+sudo systemctl stop robot-tank-camera.service
+sudo systemctl disable robot-tank-camera.service
+sudo systemctl stop robot-tank-rpi.service
+sudo systemctl disable robot-tank-rpi.service
+sudo systemctl restart rover-server.service
+```
+
+### 4. Rotation
+The camera stream is automatically rotated **180 degrees** in `server.js` using the `--hflip` and `--vflip` flags for `rpicam-vid`, and `-vf vflip,hflip` for USB webcam fallbacks.
+
+---
+
 ## 📂 Project Structure
 
 * `server.js` - Primary Express & WebSocket telemetry + control server.

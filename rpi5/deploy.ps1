@@ -33,7 +33,7 @@ Write-Host "=== Unpacking and running setup on RPi5 ===" -ForegroundColor Cyan
 Write-Host "Enter 'Sanmina-1' when prompted for SSH password or sudo password." -ForegroundColor Yellow
 
 # SSH into RPi5, unpack archive, make setup.sh executable and run it
-ssh -t "${USER}@${IP}" "mkdir -p ${DEST_DIR} && tar -xzf ~/rover.tar.gz -C ${DEST_DIR} && cd ${DEST_DIR} && chmod +x rpi5/setup.sh && sudo ./rpi5/setup.sh"
+ssh -tt "${USER}@${IP}" "mkdir -p ${DEST_DIR} && tar -xzf ~/rover.tar.gz -C ${DEST_DIR} && cd ${DEST_DIR} && chmod +x rpi5/setup.sh && sudo ./rpi5/setup.sh"
 
 # Clean up local archive
 Remove-Item "rover.tar.gz"

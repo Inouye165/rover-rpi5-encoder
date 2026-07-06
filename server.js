@@ -5,6 +5,8 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const httpGet = require('http');  // used for I2C sidecar polling
 const fs = require('fs');
+const { spawn } = require('child_process');
+
 
 // Load environment variables manually from .env if present
 if (fs.existsSync(path.join(__dirname, '.env'))) {
@@ -798,6 +800,198 @@ app.get('/api/i2c', (req, res) => {
     res.status(503).json({ ok: false, error: `I2C sidecar not reachable: ${err.message}` });
   });
 });
+
+// ────────────────────────────────────────────────────────────
+// Camera Streaming Engine (RPi5 CSI/USB camera support)
+// ────────────────────────────────────────────────────────────
+let cameraProcess = null;
+let cameraClients = new Set();
+let latestFrame = null;
+let cameraTimeout = null;
+
+function startCamera() {
+  if (cameraProcess) return;
+
+  console.log('[Camera] Starting camera streaming subprocess...');
+  
+  // Resolution 640x480, 15fps, MJPEG codec
+  const width = 640;
+  const height = 480;
+  const fps = 15;
+
+  const rpiArgs = [
+    '-t', '0',                    // continuous streaming
+    '--codec', 'mjpeg',
+    '--inline',
+    '--width', width.toString(),
+    '--height', height.toString(),
+    '--framerate', fps.toString(),
+    '--hflip',                    // Rotate 180 (horizontal flip)
+    '--vflip',                    // Rotate 180 (vertical flip)
+    '-o', '-'                     // output to stdout
+  ];
+
+  // Try rpicam-vid first (modern RPi OS Bookworm)
+  let cmd = 'rpicam-vid';
+  let args = rpiArgs;
+
+  cameraProcess = spawn(cmd, args);
+
+  cameraProcess.on('error', (err) => {
+    console.warn(`[Camera] Failed to start ${cmd}: ${err.message}. Trying libcamera-vid...`);
+    cmd = 'libcamera-vid';
+    cameraProcess = spawn(cmd, args);
+
+    cameraProcess.on('error', (err2) => {
+      console.warn(`[Camera] Failed to start ${cmd}: ${err2.message}. Trying ffmpeg with /dev/video0 (USB Webcam)...`);
+      cmd = 'ffmpeg';
+      // FFmpeg USB grab command: ffmpeg -f v4l2 -video_size 640x480 -framerate 15 -i /dev/video0 -vf vflip,hflip -c:v mjpeg -f mjpeg -
+      args = [
+        '-f', 'v4l2',
+        '-video_size', `${width}x${height}`,
+        '-framerate', fps.toString(),
+        '-i', '/dev/video0',
+        '-vf', 'vflip,hflip',
+        '-c:v', 'mjpeg',
+        '-f', 'mjpeg',
+        '-'
+      ];
+      cameraProcess = spawn(cmd, args);
+
+      cameraProcess.on('error', (err3) => {
+        console.error(`[Camera] Failed to start USB camera stream via ffmpeg: ${err3.message}`);
+        broadcast({ type: 'camera_status', status: 'error', error: 'No camera utilities succeeded.' });
+        cameraProcess = null;
+      });
+
+      if (cameraProcess) handleCameraOutput(cameraProcess);
+    });
+
+    if (cameraProcess) handleCameraOutput(cameraProcess);
+  });
+
+  if (cameraProcess) handleCameraOutput(cameraProcess);
+}
+
+function handleCameraOutput(proc) {
+  let buffer = Buffer.alloc(0);
+
+  proc.stdout.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+
+    while (true) {
+      const startIndex = buffer.indexOf(Buffer.from([0xFF, 0xD8]));
+      if (startIndex === -1) {
+        // Discard buffer unless it ends with 0xFF (part of SOI)
+        if (buffer.length > 0 && buffer[buffer.length - 1] === 0xFF) {
+          buffer = buffer.subarray(buffer.length - 1);
+        } else {
+          buffer = Buffer.alloc(0);
+        }
+        break;
+      }
+
+      if (startIndex > 0) {
+        buffer = buffer.subarray(startIndex);
+      }
+
+      const endIndex = buffer.indexOf(Buffer.from([0xFF, 0xD9]));
+      if (endIndex === -1) {
+        break; // Wait for the rest of the frame
+      }
+
+      const frame = buffer.subarray(0, endIndex + 2);
+      buffer = buffer.subarray(endIndex + 2);
+
+      latestFrame = frame;
+
+      // Broadcast frame to all HTTP clients
+      for (const client of cameraClients) {
+        try {
+          client.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+          client.write(frame);
+          client.write('\r\n');
+        } catch (err) {
+          cameraClients.delete(client);
+        }
+      }
+    }
+  });
+
+  proc.stderr.on('data', (data) => {
+    const msg = data.toString().trim();
+    if (msg.toLowerCase().includes('error')) {
+      console.warn(`[Camera Process Error] ${msg}`);
+    }
+  });
+
+  proc.on('close', (code) => {
+    console.log(`[Camera] Process exited with code ${code}`);
+    cameraProcess = null;
+    latestFrame = null;
+    // Close remaining client connections
+    for (const client of cameraClients) {
+      try { client.end(); } catch(e) {}
+    }
+    cameraClients.clear();
+  });
+}
+
+function stopCamera() {
+  if (!cameraProcess) return;
+  console.log('[Camera] Stopping camera stream (no active clients)...');
+  cameraProcess.kill('SIGINT');
+  cameraProcess = null;
+}
+
+// GET /api/camera - MJPEG video stream route
+app.get('/api/camera', (req, res) => {
+  cameraClients.add(res);
+
+  res.writeHead(200, {
+    'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
+    'Pragma': 'no-cache',
+    'Connection': 'close',
+    'Content-Type': 'multipart/x-mixed-replace; boundary=--frame'
+  });
+
+  if (cameraTimeout) {
+    clearTimeout(cameraTimeout);
+    cameraTimeout = null;
+  }
+
+  if (!cameraProcess) {
+    startCamera();
+  } else if (latestFrame) {
+    // Write last frame immediately
+    try {
+      res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${latestFrame.length}\r\n\r\n`);
+      res.write(latestFrame);
+      res.write('\r\n');
+    } catch (e) {}
+  }
+
+  req.on('close', () => {
+    cameraClients.delete(res);
+    if (cameraClients.size === 0) {
+      // Shutdown camera after 5 seconds of inactivity
+      cameraTimeout = setTimeout(() => {
+        if (cameraClients.size === 0) {
+          stopCamera();
+        }
+      }, 5000);
+    }
+  });
+});
+
+// GET /api/camera/status - query current camera engine status
+app.get('/api/camera/status', (req, res) => {
+  res.json({
+    active: cameraProcess !== null,
+    clients: cameraClients.size
+  });
+});
+
 
 // ────────────────────────────────────────────────────────────
 // I2C Sidecar Poller
