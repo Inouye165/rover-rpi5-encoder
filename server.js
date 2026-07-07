@@ -3,7 +3,6 @@ const http = require('http');
 const WebSocket = require('ws');
 const { SerialPort } = require('serialport');
 const path = require('path');
-const httpGet = require('http');  // used for I2C sidecar polling
 const fs = require('fs');
 
 // Load environment variables manually from .env if present
@@ -41,8 +40,8 @@ if (!COM_PORT) {
 const BAUD_RATE = parseInt(process.env.BAUD_RATE) || 115200;
 
 // ────────────────────────────────────────────────────────────
-// Rosmaster Binary Protocol Constants
-// Source: github.com/mattzi/rosmasterx3-golang / Yahboom SDK
+// Expansion Board Binary Protocol Constants
+// Source: Compatible Serial Protocol SDK
 // ────────────────────────────────────────────────────────────
 const HEAD       = 0xFF;         // Frame start byte (both directions)
 const DEVICE_ID  = 0xFC;         // Host → Board device ID
@@ -99,13 +98,7 @@ const MAX_POSITION_SPEED = 60;
 let imuYaw = 0;
 let lastImuTimestamp = null;
 
-// ────────────────────────────────────────────────────────────
-// I2C Sidecar State
-// Polls yahboom_i2c.py running on localhost:3001
-// ────────────────────────────────────────────────────────────
-const I2C_SIDECAR_URL  = process.env.I2C_SIDECAR_URL || 'http://127.0.0.1:3001/data';
-const I2C_POLL_MS      = 250;   // poll every 250 ms
-let   i2cSidecarOnline = false;
+
 
 // ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
@@ -782,79 +775,12 @@ app.get('/api/beep', (req, res) => {
   }
 });
 
-// GET /api/i2c – proxy the latest I2C sidecar reading as JSON
-app.get('/api/i2c', (req, res) => {
-  httpGet.get(I2C_SIDECAR_URL, (sRes) => {
-    let body = '';
-    sRes.on('data', (c) => { body += c; });
-    sRes.on('end', () => {
-      try {
-        res.json(JSON.parse(body));
-      } catch (e) {
-        res.status(502).json({ ok: false, error: 'Bad response from I2C sidecar' });
-      }
-    });
-  }).on('error', (err) => {
-    res.status(503).json({ ok: false, error: `I2C sidecar not reachable: ${err.message}` });
-  });
-});
 
-// ────────────────────────────────────────────────────────────
-// I2C Sidecar Poller
-// Fetches JSON from yahboom_i2c.py and re-broadcasts it to all
-// WebSocket clients so the dashboard gets real I2C sensor data.
-// ────────────────────────────────────────────────────────────
-function startI2CSidecarPoller() {
-  setInterval(() => {
-    httpGet.get(I2C_SIDECAR_URL, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const d = JSON.parse(body);
-          if (!i2cSidecarOnline) {
-            i2cSidecarOnline = true;
-            console.log('[I2C] Sidecar online at', I2C_SIDECAR_URL);
-            broadcast({ type: 'status', key: 'i2c', val: 'connected' });
-          }
-          if (d.ok) {
-            // Broadcast battery update from I2C
-            if (d.battery !== null) {
-              broadcast({ type: 'battery', voltage: d.battery, source: 'i2c' });
-            }
-            // Broadcast IMU update from I2C
-            broadcast({
-              type:  'imu',
-              source: 'i2c',
-              yaw:   d.yaw,
-              pitch: d.pitch,
-              roll:  d.roll,
-              ax: d.ax, ay: d.ay, az: d.az,
-              gx: d.gx, gy: d.gy, gz: d.gz,
-              mx: d.mx, my: d.my, mz: d.mz,
-            });
-          } else {
-            broadcast({ type: 'status', key: 'i2c', val: 'error', error: d.error || 'unknown' });
-          }
-        } catch (e) {
-          // Malformed response – ignore
-        }
-      });
-    }).on('error', (err) => {
-      if (i2cSidecarOnline) {
-        i2cSidecarOnline = false;
-        console.warn('[I2C] Sidecar offline:', err.message);
-        broadcast({ type: 'status', key: 'i2c', val: 'disconnected', error: err.message });
-      }
-    });
-  }, I2C_POLL_MS);
-}
 
 // ────────────────────────────────────────────────────────────
 // Startup
 // ────────────────────────────────────────────────────────────
 startMotorKeepaliveLoop();
-startI2CSidecarPoller();
 initSerial(COM_PORT);
 
 server.listen(PORT, () => {

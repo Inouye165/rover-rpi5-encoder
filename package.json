@@ -1,7 +1,7 @@
 {
-  "name": "yahboom-encoder-dashboard",
+  "name": "rover-encoder-dashboard",
   "version": "1.0.0",
-  "description": "Local web server and dashboard for Yahboom 4-channel motor encoder driver module",
+  "description": "Local web server and dashboard for compatible 4-channel motor encoder driver module",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

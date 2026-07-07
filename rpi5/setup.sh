@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# RPi5 Setup Script for Yahboom Encoder Rover Server
+# RPi5 Setup Script for Encoder Rover Server
 # Run this script on the RPi5 to install dependencies and systemd services.
 # ==============================================================================
 
@@ -92,26 +92,34 @@ echo "Installing Node dependencies..."
 # Run npm install as the original user to ensure file ownership is correct
 sudo -u $REAL_USER npm install --prefix "$WORKING_DIR"
 
-# 6. Install Systemd Services
+# 6. Stop and Disable legacy I2C Sidecar if active
+echo "Cleaning up any legacy rover-i2c service..."
+if systemctl is-active --quiet rover-i2c.service 2>/dev/null; then
+  echo "Stopping active rover-i2c service..."
+  systemctl stop rover-i2c.service || true
+fi
+if systemctl is-enabled --quiet rover-i2c.service 2>/dev/null; then
+  echo "Disabling rover-i2c service..."
+  systemctl disable rover-i2c.service || true
+fi
+if [ -f /etc/systemd/system/rover-i2c.service ]; then
+  rm -f /etc/systemd/system/rover-i2c.service
+fi
+
+# 7. Install Systemd Services
 echo "Installing systemd services..."
 
 # Replace templates with actual paths
 SED_EXPR="s|{{USER}}|$REAL_USER|g; s|{{WORKING_DIR}}|$WORKING_DIR|g; s|{{NODE_PATH}}|$NODE_PATH|g; s|{{PYTHON_PATH}}|$PYTHON_PATH|g"
 
 sed "$SED_EXPR" rpi5/rover-server.service.template > /etc/systemd/system/rover-server.service
-sed "$SED_EXPR" rpi5/rover-i2c.service.template > /etc/systemd/system/rover-i2c.service
 
 # Set correct permissions
 chmod 644 /etc/systemd/system/rover-server.service
-chmod 644 /etc/systemd/system/rover-i2c.service
 
 # Reload systemd and enable/start services
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
-
-echo "Enabling and starting rover-i2c service..."
-systemctl enable rover-i2c.service
-systemctl restart rover-i2c.service
 
 echo "Enabling and starting rover-server service..."
 systemctl enable rover-server.service
@@ -120,9 +128,6 @@ systemctl restart rover-server.service
 echo "=== Setup Completed Successfully ==="
 echo "Status of rover-server:"
 systemctl status rover-server.service --no-pager || true
-echo "Status of rover-i2c:"
-systemctl status rover-i2c.service --no-pager || true
 
 echo "You can view logs using:"
 echo "  journalctl -u rover-server -f"
-echo "  journalctl -u rover-i2c -f"

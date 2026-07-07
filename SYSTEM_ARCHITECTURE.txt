@@ -1,0 +1,114 @@
+================================================================================
+ROVER SYSTEM ARCHITECTURE & COMMUNICATION SPECIFICATION
+================================================================================
+Target Hardware: Raspberry Pi 5 (Onboard Host) & Maker ESP32 Pro Board (Motor Driver)
+Subsystems: Maker ESP32 Pro (Integrated Motor/Telemetry)
+Firmware / Platform: Espressif ESP32 (Arduino PlatformIO)
+Backend Stack: Node.js (Express & WebSockets)
+Frontend Stack: Vanilla HTML5 / CSS3 / Javascript Web Cockpit Dashboard
+================================================================================
+
+1. OVERVIEW OF SYSTEM COMPONENTS
+--------------------------------------------------------------------------------
+The Custom 4WD/Mecanum Rover uses a dual-processor architecture split between high-level application processing and low-level real-time hardware control:
+
+*   Raspberry Pi 5 (Host Computer):
+    *   Hosts the main Cockpit Web Application and Express web server.
+    *   Establishes client browser communication via WebSockets.
+    *   Connects physically to the ESP32 via a USB-to-Serial connection.
+*   Maker ESP32 Pro Board (Low-level Controller):
+    *   Handles low-level H-bridge DC motor control (4 channels) using PWM.
+    *   Reads physical wheel quadrature encoder ticks via hardware PCNT registers.
+    *   Executes real-time velocity PI loop regulation and motor synchronization.
+    *   Emulates a compatible binary serial protocol (originally matching the expansion board layout).
+    *   Hosts a backup HTTP Web server on local WiFi.
+
+
+2. WEB COCKPIT HOSTING (RASPBERRY PI 5)
+--------------------------------------------------------------------------------
+*   Node.js Server (server.js):
+    *   Runs as a persistent systemd daemon (`rover-server.service`).
+    *   Launches an Express application serving static web files from the `/public` 
+        folder on Port 3000 (default URL: http://<your_rpi5_ip_address>:3000).
+    *   Sets up a WebSocket server using the 'ws' npm package to handle client commands
+        (e.g., joystick speed inputs, settings updates, emergency stops) and stream
+        real-time sensor telemetry back.
+*   Dashboard Client Interface (public/index.html, app.js, style.css):
+    *   Displays a three-tab glassmorphic Cockpit:
+        1. Cockpit Dashboard: Joystick control pad (supporting WASD/arrow keyboard triggers),
+           synchronized/fine-tuning motor speed sliders, and virtual wheel animations.
+        2. IMU & Position Tracking: Live 3D model orientation representation using CSS 3D
+           transforms and an odometry canvas tracing the rover's path.
+        3. Encoder & Rotate Testing: Diagnostic controls to individually trigger wheels or
+           execute precision rotation (turns) using position-based targeting.
+    *   Shows a "Live Driver Logs & Command Terminal" to monitor raw serial telemetry.
+
+
+3. PHYSICAL COMMUNICATION BETWEEN PI 5 AND ESP32
+--------------------------------------------------------------------------------
+*   Physical Link:
+    *   USB-to-Serial cable connects the Raspberry Pi 5 to the Maker ESP32 Pro board
+        (typically appearing as `/dev/ttyUSB0` or `/dev/ttyAMA0` / `/dev/ttyACM0` on Linux).
+    *   Baud Rate: 115200.
+*   Binary Communication Protocol:
+    *   A custom binary framing protocol emulates a standard/compatible expansion board binary serial interface.
+    *   Packet Header: Start bytes are consistently `0xFF` (HEAD) followed by device
+        identifiers: `0xFC` (Host -> ESP32) or `0xFB` (ESP32 -> Host).
+    *   Checksum Strategy: In the incoming packet stream, the checksum is a simple byte
+        sum mask: `sum(packet[2..n-2]) & 0xFF`.
+        For outgoing commands, the Node server implements a dual-checksum compatibility
+        routine, sending both standard sums and a legacy "complement check" to support
+        varying ESP32 firmware versions.
+*   Outgoing Commands (Host -> ESP32):
+    *   FUNC_MOTOR (`0x10`): Directly sets individual speeds (-100 to 100) for M1-M4.
+    *   FUNC_MOTION (`0x12`): Sets target physical linear/angular velocities (vx, vy, vz).
+    *   FUNC_BEEP (`0x02`): Triggers the onboard buzzer (accepts duration in ms).
+    *   FUNC_CAR_TYPE (`0x44`): Defines motion mode config (e.g. 4WD/Mecanum).
+*   Incoming Telemetry (ESP32 -> Host) - streamed at 20Hz (every 50ms):
+    *   TYPE_ENCODER (`0x0D`): Transmits four little-endian 32-bit integers containing 
+        total hardware encoder counts (M1, M2, M3, M4).
+    *   TYPE_BATTERY (`0x0A`): Transmits current battery voltage scaled by 10 (index 6).
+    *   TYPE_IMU (`0x0E`): Raw 9-axis IMU packet containing gyro, accel, and mag readings.
+
+
+4. LOW-LEVEL FIRMWARE & MOTOR CONTROL (ESP32)
+--------------------------------------------------------------------------------
+The firmware (`maker_esp32_pro/main.cpp`) configures the ESP32 to act as a dedicated
+motor controller:
+
+*   Quadrature Encoder Tracking:
+    *   Quadrature signals are processed using the ESP32 hardware PCNT (Pulse Counter)
+        driver via the `ESP32Encoder` library, bypassing CPU interrupt overhead.
+    *   Filters out high-frequency noise using software glitch filtering (`setFilter(1023)`).
+*   Motor Pin Mappings & H-Bridge:
+    *   Motors are driven by an onboard H-bridge. DIP switches must be toggled to
+        enable Motor/IO switch pins.
+    *   M1 (Left Front): GPIO 27 (IN1), GPIO 13 (IN2)
+    *   M2 (Right Front): GPIO 4 (IN1), GPIO 2 (IN2 - mirrors polarity physically)
+    *   M3 (Left Rear): GPIO 17 (IN1), GPIO 12 (IN2)
+    *   M4 (Right Rear): GPIO 14 (IN1), GPIO 15 (IN2)
+*   Closed-Loop PI Speed Regulation:
+    *   The ESP32 calculates delta ticks every 50ms (20Hz) to run a speed PI loop.
+    *   Features cross-coupling synchronization (`KC_SYNC` = 0.30, `KP_SPEED` = 0.5,
+        `KI_SPEED` = 0.15) which matches relative speeds of active wheels to prevent
+        skewing or drifting.
+*   Communication Failsafe (Watchdog):
+    *   If the ESP32 does not receive serial commands from the Pi for more than 1.0 second,
+        an automated safety watchdog triggers, bringing target motor speeds to 0 to
+        prevent a runaway rover.
+
+
+5. VIDEO FEED AND CAMERA STREAMING (TYPICAL SETUP)
+--------------------------------------------------------------------------------
+*   Current Status:
+    *   No custom camera-streaming scripts are stored in this software repository. 
+        The repository is focused strictly on kinematics, telemetry, and motor control.
+*   Typical Integration Architecture:
+    *   On a standard RPi5 build, a separate camera streamer daemon (such as `ustreamer` or
+        `mjpg-streamer` or `libcamera-vid`) is installed via `setup.sh`.
+    *   This streaming service accesses the Pi camera module or USB webcam, encoding video
+        to MJPEG or WebRTC format, and serves it on a dedicated port (e.g., Port 8080 or 8081).
+    *   The web interface (`public/index.html`) references this stream port in the page
+        layout using a simple `<img>` tag (for MJPEG streams) or a WebRTC player wrapper
+        (like MediaMTX/WebRTC-streamer), allowing live visual feed integration into the cockpit.
+================================================================================

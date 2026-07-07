@@ -1,0 +1,25 @@
+================================================================================
+ACTIVE HARDWARE REVISION: ESP32_ROVER_BUILD_V1
+================================================================================
+Platform: NULLLAB / emakefun Maker ESP32 Pro Board
+Chassis: 4WD / Mecanum Rover
+Motor Driver: Onboard H-bridge (DIP Switch MUST be set to "Motor" for M2/M3)
+Display: 128x32 OLED via I2C (Address: 0x3C, SDA: GPIO 21, SCL: GPIO 22)
+Baud Rate: 115200
+
+--------------------------------------------------------------------------------
+DC Motor Pin Mapping (IN1, IN2)
+--------------------------------------------------------------------------------
+M1 (Left Front):  IN1 = GPIO 27, IN2 = GPIO 13
+M2 (Right Front): IN1 = GPIO 4,  IN2 = GPIO 2  (Mirrored polarities)
+M3 (Left Rear):   IN1 = GPIO 17, IN2 = GPIO 12
+M4 (Right Rear):  IN1 = GPIO 14, IN2 = GPIO 15
+
+--------------------------------------------------------------------------------
+Incremental Encoder Pin Mapping (A, B)
+--------------------------------------------------------------------------------
+E1 (Left Front):  A = GPIO 18, B = GPIO 19
+E2 (Right Front): A = GPIO 5,  B = GPIO 23 (Mirrored rotation count)
+E3 (Left Rear):   A = GPIO 35, B = GPIO 36 (Input Only)
+E4 (Right Rear):  A = GPIO 34, B = GPIO 39 (Input Only - Mirrored rotation count)
+================================================================================

@@ -1,6 +1,6 @@
 /**
  * set_cartype_motor.js
- * The Yahboom V3.0 firmware requires carType to be set/confirmed before
+ * The V3.0 compatible expansion board firmware requires carType to be set/confirmed before
  * motor commands work. This script:
  *   1. Sets carType = 1 (Mecanum/4-wheel standard)
  *   2. Sends motor commands using FUNC_MOTOR (0x10)
@@ -21,7 +21,7 @@ const FUNC_MOTOR     = 0x10; // direct per-motor speed bytes
 const FUNC_MOTION    = 0x12; // chassis velocity vX,vY,vZ int16*1000
 const FUNC_CAR_TYPE  = 0x44; // Set car type (from Python SDK analysis)
 
-// Also worth trying – these are from the Yahboom Python set_motor docs
+// Also worth trying – these are from the expansion board Python set_motor docs
 const FUNC_PWM_SERVO = 0x20;  // PWM servo
 
 function buildPacket(funcId, payload) {
@@ -69,7 +69,7 @@ async function send(label, funcId, payload) {
 async function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 port.on('open', async () => {
-  console.log('=== Yahboom V3.0 Car Type + Motor Test ===\n');
+  console.log('=== V3.0 Car Type + Motor Test ===\n');
   await wait(500);
 
   // ── Step 1: Confirm comms with beep ──
@@ -77,7 +77,7 @@ port.on('open', async () => {
   await wait(1000);
 
   // ── Step 2: Try setting car type to different values ──
-  // Yahboom Python SDK uses FUNC_CAR_TYPE to set the car mode
+  // Compatible Python SDK uses FUNC_CAR_TYPE to set the car mode
   // carType 1 = Mecanum 4WD, 2 = Ackermann, 3 = Tank diff
   for (const carType of [1, 2, 3, 4]) {
     console.log(`\n--- Trying carType=${carType} ---`);

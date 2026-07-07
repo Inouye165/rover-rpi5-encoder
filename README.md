@@ -1,4 +1,4 @@
-# Yahboom Rover Cockpit & Controller
+# Rover Cockpit & Telemetry Dashboard
 
 A high-performance control cockpit and telemetry dashboard for a custom 4WD / Mecanum Rover tank. The system is designed to run on a **Raspberry Pi 5** on board the rover, which communicates with a **Maker ESP32 Pro Board** (the low-level motor/encoder controller) and drives **4 wheel encoder motors**.
 
@@ -16,28 +16,37 @@ A high-performance control cockpit and telemetry dashboard for a custom 4WD / Me
 +----------------------------------------------+----------------------------------------------+
 | Raspberry Pi 5 On-Board Computer                                                            |
 |                                                                                             |
-|   +---------------------------------------+       +---------------------------------------+ |
-|   |         Node.js Cockpit Server        |       |          Python I2C Sidecar           | |
-|   |             (server.js)               |       |           (yahboom_i2c.py)            | |
-|   +-------------------+-------------------+       +-------------------+-------------------+ |
-|                       |                                               |                     |
-|                       | (USB Serial /dev/ttyUSB0)                     | (I2C Bus 1)         |
-|                       v                                               v                     |
-+-----------------------+-----------------------------------------------+---------------------+
-                        |                                               |
-                        v                                               v
-        +---------------+---------------+               +---------------+---------------+
-        |     Maker ESP32 Pro Board     |               |    Yahboom STM32 Subsystem    |
-        |    (Low-level Motor Controller) |               |     (Battery/IMU Backup)      |
-        +---------------+---------------+               +-------------------------------+
-                        |
-                        +---> 4x Encoder Motors
+|   +---------------------------------------------------------------------------------------+ |
+|   |                                 Node.js Cockpit Server                                | |
+|   |                                       (server.js)                                     | |
+|   +-------------------------------------------+-------------------------------------------+ |
+|                                               |                                             |
+|                                               | (USB Serial /dev/ttyUSB0)                   |
+|                                               v                                             |
++-----------------------------------------------+---------------------------------------------+
+                                                |
+                                                v
+                                +---------------+---------------+
+                                |     Maker ESP32 Pro Board     |
+                                |  (Low-level Motor Controller) |
+                                +---------------+---------------+
+                                                |
+                                                +---> 4x Encoder Motors
 ```
 
-The system comprises three core parts:
-1. **Low-level Brains (Maker ESP32 Pro Board)**: Directly interfaces with the 4 encoder motors (M1..M4), processing encoder ticks and driving motor power. It communicates with the host server over a fast binary protocol via USB serial.
+The system comprises two core parts:
+1. **Low-level Brains (Maker ESP32 Pro Board)**: Directly interfaces with the 4 encoder motors (M1..M4), processing encoder ticks and driving motor power. It communicates with the host server over a fast binary protocol via USB serial. It also mocks gyro/accelerometer data based on motor control and sends simulated battery level.
 2. **Host Server (Node.js)**: Runs on the RPi5. Serves the web interface, manages the serial connection to the ESP32 (`/dev/ttyUSB0`), processes joystick speed commands, and handles motor closed-loop position control.
-3. **I2C Sidecar (Python)**: Reads secondary sensor data (attitude/battery telemetry) from the Yahboom STM32 controller board at I2C address `0x34` (Bus 1) and exposes it locally for the Node.js server.
+
+---
+
+## 🔩 Hardware References
+
+Use this section to store authoritative hardware links (board repositories, schematics, pinout docs, and vendor resources).
+
+* **Maker ESP32 Pro (physical driver/control board) repository:** https://github.com/nulllaborg/maker-esp32-pro.git
+* **Raspberry Pi 5 GPIO Pinout:**
+  ![Raspberry Pi 5 GPIO Pinout](pictures/rpi5_gpio.jpg)
 
 ---
 
@@ -52,17 +61,15 @@ Create or edit your local `.env` file (which is git-ignored) in the root of the 
 WIFI_SSID=<your_wifi_ssid>
 WIFI_PASSWORD=<your_wifi_password>
 
+# RPi5 Deployment & Target Configurations
+RPI_IP=<your_rpi5_ip_address>
+RPI_USER=ron
+RPI_PASSWORD=<your_rpi5_password>
+
 # Server Settings
 PORT=3000
 SERIAL_PORT=/dev/ttyUSB0
 BAUD_RATE=115200
-
-# I2C Sidecar Settings
-I2C_SIDECAR_URL=http://127.0.0.1:3001/data
-I2C_PORT=3001
-I2C_BUS=1
-I2C_ADDRESS=0x34
-I2C_INTERVAL=0.1
 ```
 
 ### 2. Deploy from Windows to RPi5
@@ -70,17 +77,15 @@ Open a PowerShell terminal in the project directory on your Windows dev machine 
 ```powershell
 .\rpi5\deploy.ps1
 ```
-*This script will pack the project files (excluding dependencies/cache), transfer them to the Pi at `<your_rpi5_ip_address>`, and execute the remote installation script using the password `<your_rpi5_password>`.*
+*This script will pack the project files (excluding dependencies/cache), transfer them to the Pi (using details specified in your `.env` file), and execute the remote installation script.*
 
 ### 3. Remote Setup Details
 The script automatically executes `rpi5/setup.sh` on the RPi5, which:
-* Installs system prerequisites (`nodejs`, `python3-smbus`, `i2c-tools`, `build-essential`).
-* Ensures I2C hardware is enabled.
-* Configures local NetworkManager to connect to the configured WiFi (e.g. `<your_wifi_ssid>`).
+* Installs system prerequisites (`nodejs`, `build-essential`).
+* Configures local NetworkManager to connect to the configured WiFi (defined in `.env` as `WIFI_SSID`).
 * Installs all Node dependency modules.
-* Installs and launches two persistent systemd background services:
+* Installs and launches the persistent systemd background service:
   * **`rover-server.service`**: Automatically starts the Node server on boot.
-  * **`rover-i2c.service`**: Automatically starts the Python I2C telemetry poller on boot.
 
 ---
 
@@ -94,11 +99,9 @@ To monitor the background services on the Pi, SSH into `<your_rpi5_ip_address>` 
 ```bash
 # Check service status
 systemctl status rover-server.service
-systemctl status rover-i2c.service
 
 # View real-time output logs
 journalctl -u rover-server.service -f
-journalctl -u rover-i2c.service -f
 ```
 
 ---
@@ -106,10 +109,9 @@ journalctl -u rover-i2c.service -f
 ## 📂 Project Structure
 
 * `server.js` - Primary Express & WebSocket telemetry + control server.
-* `yahboom_i2c.py` - Python background poller for the STM32 board.
 * `public/` - Dashboard web frontend (HTML/CSS/JS).
 * `maker_esp32_pro/` - Firmware project directory for the ESP32 microcontroller.
 * `rpi5/` - Deployment artifacts:
   * `deploy.ps1` - Windows packaging & SSH/SFTP deployment automation.
   * `setup.sh` - System configuration, dependencies, and service installation.
-  * `rover-server.service.template` / `rover-i2c.service.template` - Service unit configuration templates.
+  * `rover-server.service.template` - Service unit configuration template.
