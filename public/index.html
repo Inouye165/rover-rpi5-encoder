@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='25' y='45' width='50' height='22' rx='4' fill='%2300f2fe' stroke='%23090e16' stroke-width='2'/><rect x='35' y='38' width='30' height='7' rx='2' fill='%23ffffff' stroke='%23090e16' stroke-width='2'/><line x1='50' y1='38' x2='50' y2='20' stroke='%23ff4e50' stroke-width='4' stroke-linecap='round'/><rect x='42' y='14' width='16' height='10' rx='3' fill='%23ff4e50' stroke='%23090e16' stroke-width='1.5'/><circle cx='50' cy='19' r='3' fill='%2300f2fe'/><line x1='68' y1='45' x2='78' y2='25' stroke='%23ffffff' stroke-width='3' stroke-linecap='round'/><circle cx='78' cy='25' r='3.5' fill='%23ffffff'/><circle cx='30' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='30' cy='74' r='4' fill='%23ffffff'/><circle cx='50' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='50' cy='74' r='4' fill='%23ffffff'/><circle cx='70' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='70' cy='74' r='4' fill='%23ffffff'/></svg>">
 </head>
 <body>
   <div class="glow-bg"></div>
@@ -22,11 +23,17 @@
       
       <!-- Connection Status and Battery -->
       <div class="header-status">
+        <div class="status-badge" id="time-status" style="font-family: monospace; font-weight: bold; color: #00f2fe;">
+          Time: --:--:--
+        </div>
         <div class="status-badge" id="ws-status" title="WebSocket - Page connection to Windows Server">
           <span class="status-indicator alert"></span> WS: Connecting
         </div>
         <div class="status-badge" id="serial-status">
           <span class="status-indicator alert"></span> Serial: Checking
+        </div>
+        <div class="status-badge" id="gamepad-status">
+          <span class="status-indicator off"></span> Gamepad: Disconnected
         </div>
         <div class="serial-port-selector">
           <input type="text" id="com-port-input" value="COM18" placeholder="Port">

@@ -1,4 +1,4 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 
 # Local environment variables/secrets
@@ -16,3 +16,4 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+deploy_yahboom.py

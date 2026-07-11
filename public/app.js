@@ -1139,4 +1139,119 @@ if (btnFullscreenCamera && cameraViewport) {
   });
 }
 
+// ==============================================================================
+// Real-time Clock Update
+// ==============================================================================
+function updateTimeBadge() {
+  const timeStatus = document.getElementById('time-status');
+  if (timeStatus) {
+    const now = new Date();
+    timeStatus.textContent = `Time: ${now.toLocaleTimeString()}`;
+  }
+}
+setInterval(updateTimeBadge, 1000);
+updateTimeBadge();
+
+// ==============================================================================
+// Gamepad Integration
+// ==============================================================================
+let gamepadIndex = null;
+let gamepadActive = false;
+let lastSentSpeeds = [0, 0, 0, 0];
+let lastSpeedSendTime = 0;
+
+window.addEventListener('gamepadconnected', (e) => {
+  logSystem(`Gamepad connected: ${e.gamepad.id} at index ${e.gamepad.index}`);
+  gamepadIndex = e.gamepad.index;
+  gamepadActive = true;
+  updateGamepadStatus(true, e.gamepad.id);
+  startGamepadLoop();
+});
+
+window.addEventListener('gamepaddisconnected', (e) => {
+  if (gamepadIndex === e.gamepad.index) {
+    logSystem(`Gamepad disconnected: ${e.gamepad.id}`);
+    gamepadIndex = null;
+    gamepadActive = false;
+    updateGamepadStatus(false);
+    // Enforce safety stop
+    sendMotorSpeeds(0, 0, 0, 0);
+  }
+});
+
+function updateGamepadStatus(connected, name = '') {
+  const gpStatus = document.getElementById('gamepad-status');
+  if (gpStatus) {
+    if (connected) {
+      updateBadge(gpStatus, 'ok', `Gamepad: Connected (${name.substring(0, 12)}...)`);
+    } else {
+      updateBadge(gpStatus, 'alert', 'Gamepad: Disconnected');
+    }
+  }
+}
+
+function startGamepadLoop() {
+  function poll() {
+    if (!gamepadActive || gamepadIndex === null) return;
+    const gp = navigator.getGamepads()[gamepadIndex];
+    if (!gp) {
+      requestAnimationFrame(poll);
+      return;
+    }
+
+    let throttle = -gp.axes[1];
+    let turn = gp.axes[0];
+
+    // Apply deadzone
+    if (Math.abs(throttle) < 0.1) throttle = 0;
+    if (Math.abs(turn) < 0.1) turn = 0;
+
+    // Scale to -1000..1000
+    throttle *= 1000;
+    turn *= 1000;
+
+    let left = throttle + turn;
+    let right = throttle - turn;
+
+    left = Math.max(-1000, Math.min(1000, left));
+    right = Math.max(-1000, Math.min(1000, right));
+
+    const m1 = Math.round(left);
+    const m3 = Math.round(left);
+    const m2 = Math.round(right);
+    const m4 = Math.round(right);
+
+    // Safety buttons: A (0) or B (1) triggers ESTOP
+    if (gp.buttons[0].pressed || gp.buttons[1].pressed) {
+      triggerEstop();
+      lastSentSpeeds = [0, 0, 0, 0];
+      lastSpeedSendTime = Date.now();
+      requestAnimationFrame(poll);
+      return;
+    }
+
+    // Only send speeds if they changed, or every 100ms as a keepalive
+    const now = Date.now();
+    const changed = m1 !== lastSentSpeeds[0] || m2 !== lastSentSpeeds[1] || m3 !== lastSentSpeeds[2] || m4 !== lastSentSpeeds[3];
+    const timeElapsed = now - lastSpeedSendTime > 100;
+
+    if (changed || (timeElapsed && (m1 !== 0 || m2 !== 0 || m3 !== 0 || m4 !== 0))) {
+      // Update UI readouts
+      updateIndividualSliderValues(m1, m2, m3, m4);
+      // Send speed commands
+      sendMotorSpeeds(m1, m2, m3, m4);
+      lastSentSpeeds = [m1, m2, m3, m4];
+      lastSpeedSendTime = now;
+    } else if (changed && m1 === 0 && m2 === 0 && m3 === 0 && m4 === 0) {
+      // Force hard stop
+      triggerEstop();
+      lastSentSpeeds = [0, 0, 0, 0];
+      lastSpeedSendTime = now;
+    }
+
+    requestAnimationFrame(poll);
+  }
+  requestAnimationFrame(poll);
+}
+
 
