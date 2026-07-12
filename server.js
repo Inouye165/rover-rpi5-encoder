@@ -22,6 +22,17 @@ if (fs.existsSync(path.join(__dirname, '.env'))) {
   });
 }
 
+// Calculate last modified time of server code
+let serverUpdatedTime = 'unknown';
+try {
+  const stats = fs.statSync(__filename);
+  const d = new Date(stats.mtime);
+  const pad = n => String(n).padStart(2, '0');
+  serverUpdatedTime = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} PDT`;
+} catch (err) {
+  console.error("Error reading server update time:", err);
+}
+
 const PORT = process.env.PORT || 3000;
 let COM_PORT = process.env.SERIAL_PORT;
 if (process.platform === 'win32' && COM_PORT && COM_PORT.startsWith('/dev/')) {
@@ -129,6 +140,8 @@ let accumLeftDist = 0.0;
 let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
+let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
+let TRACK_WIDTH = 0.170;  // mutable track width (synchronized with ESP32 NVS)
 
 // Limits configuration and active command source
 let floorTesting = true; // default to safe floor testing limits on startup
@@ -142,6 +155,56 @@ let recordedPath = [];
 // Backtracking Controller State
 let backtracking = false;
 let backtrackIndex = -1;
+
+// Calibration parameters database
+const CALIBRATION_DB_FILE = path.join(__dirname, 'calibration_db.json');
+let calibrationDb = {
+  currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.170 },
+  proposedConfig: { wheelDiameter: null, effectiveTrackWidth: null },
+  previousConfig: { wheelDiameter: null, effectiveTrackWidth: null },
+  testLogs: []
+};
+
+function loadCalibrationDb() {
+  try {
+    if (fs.existsSync(CALIBRATION_DB_FILE)) {
+      const data = fs.readFileSync(CALIBRATION_DB_FILE, 'utf8');
+      calibrationDb = JSON.parse(data);
+      console.log('[Config DB] Calibration database loaded successfully.');
+      if (calibrationDb.currentConfig) {
+        if (calibrationDb.currentConfig.wheelDiameter) {
+          WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
+        }
+        if (calibrationDb.currentConfig.effectiveTrackWidth) {
+          TRACK_WIDTH = calibrationDb.currentConfig.effectiveTrackWidth;
+        }
+        console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m`);
+      }
+    } else {
+      saveCalibrationDb();
+    }
+  } catch (err) {
+    console.error('[Config DB] Failed to load calibration database, using defaults:', err.message);
+  }
+}
+
+function saveCalibrationDb() {
+  try {
+    fs.writeFileSync(CALIBRATION_DB_FILE, JSON.stringify(calibrationDb, null, 2), 'utf8');
+    console.log('[Config DB] Calibration database saved successfully.');
+  } catch (err) {
+    console.error('[Config DB] Failed to save calibration database:', err.message);
+  }
+}
+
+// Convert float to 4 little-endian bytes array
+function floatToLEBytes(f) {
+  const buf = Buffer.alloc(4);
+  buf.writeFloatLE(f, 0);
+  return Array.from(buf);
+}
+
+loadCalibrationDb();
 
 // ────────────────────────────────────────────────────────────
 // IMU State (for sensor fusion)
@@ -585,8 +648,6 @@ function parseTelemetryPacket(extType, data) {
         const dLeftTicks = (dm1 + dm3) / 2.0;
         const dRightTicks = (dm2 + dm4) / 2.0;
 
-        const WHEEL_RADIUS = 0.0325; // meters (65mm diameter)
-        const TRACK_WIDTH = 0.170;  // meters
         const TICKS_PER_REV = 937.2;
         const M_PER_TICK = (2.0 * Math.PI * WHEEL_RADIUS) / TICKS_PER_REV;
 
@@ -934,6 +995,16 @@ function parseTelemetryPacket(extType, data) {
       });
     }
 
+  } else if (extType === 0x37) { // TYPE_ROVER_PARAMS
+    if (data.length >= 8) {
+      const diameter = data.readFloatLE(0);
+      const separation = data.readFloatLE(4);
+      WHEEL_RADIUS = diameter / 2.0;
+      TRACK_WIDTH = separation;
+      console.log(`[Config Sync] ESP32 reported wheel diameter = ${diameter.toFixed(4)} m, effective track width = ${separation.toFixed(4)} m`);
+      broadcast({ type: 'rover_params_sync', diameter, separation });
+    }
+
   } else {
     // Unknown telemetry packet – log once per type to avoid flooding
     const hex = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
@@ -989,6 +1060,16 @@ function initSerial(portName = COM_PORT) {
     // Set a default car type and send a short beep to confirm two-way communication.
     sendBinaryCommand(FUNC_CAR_TYPE, [1, 0], { dualChecksum: true });
     setTimeout(() => {
+      if (calibrationDb && calibrationDb.currentConfig && calibrationDb.currentConfig.wheelDiameter) {
+        const diaBytes = floatToLEBytes(calibrationDb.currentConfig.wheelDiameter);
+        const sepBytes = floatToLEBytes(calibrationDb.currentConfig.effectiveTrackWidth);
+        sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+        console.log(`[Config Sync] Pushed database parameters to ESP32: dia=${calibrationDb.currentConfig.wheelDiameter}, sep=${calibrationDb.currentConfig.effectiveTrackWidth}`);
+      } else {
+        sendBinaryCommand(0x37, [], { dualChecksum: true });
+      }
+    }, 600);
+    setTimeout(() => {
       const beepLo = 100 & 0xFF;
       const beepHi = (100 >> 8) & 0xFF;
       sendBinaryCommand(FUNC_BEEP, [beepLo, beepHi], { dualChecksum: true });
@@ -1040,6 +1121,18 @@ wss.on('connection', (ws) => {
   // Send current serial connection state
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
+  ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
+
+  // Push dynamic parameters from database immediately on client connection
+  if (serialPort && serialPort.isOpen) {
+    if (calibrationDb && calibrationDb.currentConfig && calibrationDb.currentConfig.wheelDiameter) {
+      const diaBytes = floatToLEBytes(calibrationDb.currentConfig.wheelDiameter);
+      const sepBytes = floatToLEBytes(calibrationDb.currentConfig.effectiveTrackWidth);
+      sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+    } else {
+      sendBinaryCommand(0x37, [], { dualChecksum: true });
+    }
+  }
 
   ws.on('message', (message) => {
     try {
@@ -1074,31 +1167,66 @@ wss.on('connection', (ws) => {
               deadmanPressed = true; // Implicit deadman true for keyboard/browser
             }
             
-            let throttle = Math.abs(y) < 0.10 ? 0 : y;
-            let turn = Math.abs(x) < 0.10 ? 0 : x;
+            let throttle = Math.abs(y) < 0.10 ? 0 : Math.sign(y) * Math.pow(Math.abs(y), 2.0);
+            
+            let turnScaled = 0;
+            if (Math.abs(x) >= 0.10) {
+              const MIN_COEFF = 0.35; // Starts at 0.35 * MAX_ANGULAR to immediately break stiction
+              const normalizedStick = (Math.abs(x) - 0.10) / 0.90;
+              const scaledStick = Math.pow(normalizedStick, 1.5);
+              turnScaled = Math.sign(x) * (MIN_COEFF + scaledStick * (1.0 - MIN_COEFF));
+            }
 
             if (backtracking && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
               abortBacktrack('Joystick override');
             }
 
+            if (cmdSource === 'CALIBRATION_TEST' && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
+              broadcast({ type: 'test_abort', reason: 'Joystick override' });
+              targetLinear = 0.0;
+              targetAngular = 0.0;
+              cmdSource = 'NONE';
+            }
+
             if (deadmanPressed) {
-              if (!backtracking) {
-                const MAX_LINEAR = floorTesting ? 0.15 : 0.80;
-                const MAX_ANGULAR = floorTesting ? 0.80 : 3.00;
+              if (!backtracking && cmdSource !== 'CALIBRATION_TEST') {
+                const MAX_LINEAR = floorTesting ? 0.17 : 0.80;
+                const MAX_ANGULAR = floorTesting ? 0.90 : 3.00;
                 
                 targetLinear = throttle * MAX_LINEAR;
-                targetAngular = -turn * MAX_ANGULAR;
+                targetAngular = -turnScaled * MAX_ANGULAR;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
                 startDriveKeepaliveLoop();
               }
             } else {
               if (backtracking) {
                 abortBacktrack('Deadman released');
-              } else if (cmdSource === 'GAMEPAD') {
+              } else if (cmdSource === 'CALIBRATION_TEST') {
+                broadcast({ type: 'test_abort', reason: 'Deadman released' });
+                targetLinear = 0.0;
+                targetAngular = 0.0;
+                cmdSource = 'NONE';
+              } else if (cmdSource === 'GAMEPAD' || cmdSource === 'BROWSER') {
                 targetLinear = 0.0;
                 targetAngular = 0.0;
                 cmdSource = 'NONE';
               }
+            }
+          }
+          break;
+
+        case 'test_drive':
+          if (msg.v !== undefined && msg.w !== undefined) {
+            if (backtracking) break;
+            if (deadmanPressed) {
+              targetLinear = msg.v;
+              targetAngular = msg.w;
+              cmdSource = 'CALIBRATION_TEST';
+              startDriveKeepaliveLoop();
+            } else {
+              targetLinear = 0.0;
+              targetAngular = 0.0;
+              cmdSource = 'NONE';
             }
           }
           break;
@@ -1134,6 +1262,71 @@ wss.on('connection', (ws) => {
 
         case 'run_motor_proof':
           runMotorProofSequence();
+          break;
+
+        case 'get_calibration_db':
+          ws.send(JSON.stringify({ type: 'calibration_db', db: calibrationDb }));
+          break;
+
+        case 'save_proposed_config':
+          if (msg.wheelDiameter !== undefined && msg.effectiveTrackWidth !== undefined) {
+            calibrationDb.proposedConfig.wheelDiameter = msg.wheelDiameter;
+            calibrationDb.proposedConfig.effectiveTrackWidth = msg.effectiveTrackWidth;
+            saveCalibrationDb();
+            broadcast({ type: 'calibration_db', db: calibrationDb });
+          }
+          break;
+
+        case 'apply_calibration':
+          if (calibrationDb.proposedConfig.wheelDiameter && calibrationDb.proposedConfig.effectiveTrackWidth) {
+            // Backup current to previous
+            calibrationDb.previousConfig = { ...calibrationDb.currentConfig };
+            // Set proposed to current
+            calibrationDb.currentConfig.wheelDiameter = calibrationDb.proposedConfig.wheelDiameter;
+            calibrationDb.currentConfig.effectiveTrackWidth = calibrationDb.proposedConfig.effectiveTrackWidth;
+            saveCalibrationDb();
+            
+            // Program ESP32 NVS
+            if (serialPort && serialPort.isOpen) {
+              const diaBytes = floatToLEBytes(calibrationDb.currentConfig.wheelDiameter);
+              const sepBytes = floatToLEBytes(calibrationDb.currentConfig.effectiveTrackWidth);
+              sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+              broadcast({ type: 'message', data: `[Config] Applied calibration: diameter=${calibrationDb.currentConfig.wheelDiameter}m, track=${calibrationDb.currentConfig.effectiveTrackWidth}m` });
+            }
+            broadcast({ type: 'calibration_db', db: calibrationDb });
+          }
+          break;
+
+        case 'restore_previous':
+          if (calibrationDb.previousConfig.wheelDiameter && calibrationDb.previousConfig.effectiveTrackWidth) {
+            const temp = { ...calibrationDb.currentConfig };
+            calibrationDb.currentConfig = { ...calibrationDb.previousConfig };
+            calibrationDb.previousConfig = temp;
+            saveCalibrationDb();
+            
+            // Program ESP32 NVS
+            if (serialPort && serialPort.isOpen) {
+              const diaBytes = floatToLEBytes(calibrationDb.currentConfig.wheelDiameter);
+              const sepBytes = floatToLEBytes(calibrationDb.currentConfig.effectiveTrackWidth);
+              sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+              broadcast({ type: 'message', data: `[Config] Restored previous calibration: diameter=${calibrationDb.currentConfig.wheelDiameter}m, track=${calibrationDb.currentConfig.effectiveTrackWidth}m` });
+            }
+            broadcast({ type: 'calibration_db', db: calibrationDb });
+          }
+          break;
+
+        case 'log_test_run':
+          if (msg.testType && msg.results) {
+            calibrationDb.testLogs.push({
+              timestamp: Date.now(),
+              testType: msg.testType,
+              results: msg.results,
+              surfaceType: msg.surfaceType || 'unknown',
+              firmwareVersion: msg.firmwareVersion || '1.3.0-phase4'
+            });
+            saveCalibrationDb();
+            broadcast({ type: 'calibration_db', db: calibrationDb });
+          }
           break;
 
         // Legacy commands from old protocol – silently ignore to avoid errors
@@ -1378,6 +1571,12 @@ app.get('/api/calibration/results', (req, res) => {
   } else {
     res.status(404).json({ ok: false, error: 'No calibration results available.' });
   }
+});
+
+app.get('/api/calibration/export', (req, res) => {
+  res.setHeader('Content-disposition', 'attachment; filename=calibration_db.json');
+  res.setHeader('Content-type', 'application/json');
+  res.send(JSON.stringify(calibrationDb, null, 2));
 });
 
 app.get('/api/faults/clear', (req, res) => {
@@ -1826,6 +2025,7 @@ function startI2CSidecarPoller() {
 // ────────────────────────────────────────────────────────────
 // Startup
 // ────────────────────────────────────────────────────────────
+loadCalibrationDb();
 startMotorKeepaliveLoop();
 startI2CSidecarPoller();
 initSerial(COM_PORT);

@@ -4,6 +4,15 @@ let reconnectInterval = 1000;
 const maxReconnectInterval = 16000;
 let driveArmed = false;
 let realOdomActive = false;
+let gpDeadmanPressed = false;
+
+// Calibration variables
+let currentWheelDiameter = 0.065; // synchronized from ESP32 parameters
+let currentTrackWidth = 0.170;    // synchronized from ESP32 parameters
+let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 'out_and_back'
+let testTimer = null;
+let testStartOdom = null;
+let calibrationDatabase = null;
 
 // Odom and IMU State variables
 let m1Speed = 0, m2Speed = 0, m3Speed = 0, m4Speed = 0;
@@ -125,6 +134,9 @@ function connectWebSocket() {
     
     // Automatically query firmware identity from ESP32
     fetch('/api/firmware').catch(err => console.error('Firmware query failed:', err));
+
+    // Request current calibration database
+    sendServerMessage({ type: 'get_calibration_db' });
   };
 
   ws.onmessage = (event) => {
@@ -418,6 +430,14 @@ function handleServerMessage(msg) {
       if (odomXE) odomXE.innerText = `${msg.x.toFixed(3)} m`;
       if (odomYE) odomYE.innerText = `${msg.y.toFixed(3)} m`;
       if (odomYawE) odomYawE.innerText = `${(msg.yaw * 180 / Math.PI).toFixed(1)}°`;
+
+      // Update compass heading visualizer
+      latestOdomYaw = msg.yaw;
+      const arrowSvg = document.getElementById('cal-rot-arrow-group');
+      const compassAngle = document.getElementById('cal-rot-compass-angle');
+      const yawDeg = msg.yaw * 180 / Math.PI;
+      if (arrowSvg) arrowSvg.style.transform = `rotate(${-yawDeg.toFixed(1)}deg)`;
+      if (compassAngle) compassAngle.innerText = `${yawDeg.toFixed(1)}°`;
       if (odomLeftE) odomLeftE.innerText = `${msg.left_dist.toFixed(3)} m`;
       if (odomRightE) odomRightE.innerText = `${msg.right_dist.toFixed(3)} m`;
       if (odomVE) odomVE.innerText = `${msg.v.toFixed(3)} m/s`;
@@ -472,7 +492,7 @@ function handleServerMessage(msg) {
     case 'limits_status':
       const flLabel = document.getElementById('limits-testing-lbl');
       if (flLabel) {
-        flLabel.innerText = msg.floorTesting ? 'FLOOR TESTING (0.08 m/s)' : 'UNCLAMPED (0.15 m/s)';
+        flLabel.innerText = msg.floorTesting ? 'FLOOR TESTING (0.17 m/s)' : 'UNCLAMPED (0.80 m/s)';
         flLabel.style.color = msg.floorTesting ? '#f59e0b' : '#10b981';
       }
       break;
@@ -523,9 +543,20 @@ function handleServerMessage(msg) {
       logSystem(`[Other Telemetry] ${msg.cmd}: ${msg.values.join(',')}`);
       break;
 
-    case 'firmware_info':
-      logSystem(`[Firmware] Name: ${msg.name} | Ver: ${msg.version} | Protocol: ${msg.protocol} | Source: ${msg.commit} | Build: ${msg.build} | Target: ${msg.target}`);
+    case 'cockpit_info': {
+      const elCockpit = document.getElementById('ui-cockpit-deployed');
+      if (elCockpit) elCockpit.innerText = msg.deployed;
       break;
+    }
+
+    case 'firmware_info': {
+      logSystem(`[Firmware] Name: ${msg.name} | Ver: ${msg.version} | Protocol: ${msg.protocol} | Source: ${msg.commit} | Build: ${msg.build} | Target: ${msg.target}`);
+      const elFirmwareVer = document.getElementById('ui-firmware-version');
+      const elFirmwareBuild = document.getElementById('ui-firmware-build');
+      if (elFirmwareVer) elFirmwareVer.innerText = `${msg.version} (${msg.commit})`;
+      if (elFirmwareBuild) elFirmwareBuild.innerText = msg.build;
+      break;
+    }
 
     case 'loop_timing': {
       // Rate-limit console logs for timing stats to every 5 seconds to avoid flooding the log viewer,
@@ -834,6 +865,27 @@ function handleServerMessage(msg) {
       
       break;
     }
+
+    case 'rover_params_sync':
+      currentWheelDiameter = msg.diameter;
+      currentTrackWidth = msg.separation;
+      
+      const elCurDia = document.getElementById('cal-dist-current-diameter');
+      if (elCurDia) elCurDia.innerText = `${(msg.diameter * 1000).toFixed(1)} mm`;
+      
+      const elCurWidth = document.getElementById('cal-rot-current-width');
+      if (elCurWidth) elCurWidth.innerText = `${(msg.separation * 1000).toFixed(1)} mm`;
+      break;
+
+    case 'calibration_db':
+      updateCalibrationDbUI(msg.db);
+      break;
+
+    case 'test_abort':
+      if (activeTest) {
+        abortCalibrationTest(msg.reason);
+      }
+      break;
   }
 }
 
@@ -1686,6 +1738,11 @@ function startGamepadLoop() {
 
     // Deadman button (Right Bumper = 5, Right Trigger = 7)
     const deadmanPressed = gp.buttons[5].pressed || gp.buttons[7].pressed;
+    gpDeadmanPressed = deadmanPressed;
+
+    if (activeTest && (Math.abs(throttle) > 0.05 || Math.abs(turn) > 0.05)) {
+      abortCalibrationTest('Joystick movement override');
+    }
 
     // Update Live Input HUD
     const liveDeadman = document.getElementById('gp-live-deadman');
@@ -2087,5 +2144,706 @@ if (chkFloorTesting) {
       .catch(err => console.error(err));
   });
 }
+
+// ==============================================================================
+// Motion Calibration & Backtrack Test Actions
+// ==============================================================================
+
+function checkSafetyInterlocks() {
+  if (!activeTest) return;
+
+  // 1. Must be armed
+  if (!driveArmed) {
+    abortCalibrationTest('Normal drive disarmed');
+    return;
+  }
+
+  // 2. Deadman must be held and gamepad active
+  if (!gamepadActive || !gpDeadmanPressed) {
+    abortCalibrationTest('Deadman released or gamepad disconnected');
+    return;
+  }
+
+  // 3. Serial / WS connection check
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    abortCalibrationTest('WebSocket connection lost');
+    return;
+  }
+}
+
+function startDistanceTest() {
+  if (activeTest) return;
+  if (!driveArmed) {
+    logSystem('⚠️ Cannot start test: Normal Drive is not ARMED. Click "Arm Normal Drive" on Cockpit first.');
+    return;
+  }
+  if (!gamepadActive || !gpDeadmanPressed) {
+    logSystem('⚠️ Cannot start test: Deadman switch must be held on the controller.');
+    return;
+  }
+  // Stationary check
+  const odomVText = document.getElementById('odom-v-real') ? document.getElementById('odom-v-real').innerText : '0';
+  const odomWText = document.getElementById('odom-w-real') ? document.getElementById('odom-w-real').innerText : '0';
+  if (parseFloat(odomVText) > 0.01 || parseFloat(odomWText) > 0.01) {
+    logSystem('⚠️ Cannot start test: Rover must be completely stationary.');
+    return;
+  }
+
+  logSystem('▶️ Starting 2-Meter Distance Test. Hold Deadman to continue.');
+  activeTest = 'distance';
+  
+  const badge = document.getElementById('cal-dist-status-badge');
+  if (badge) {
+    badge.innerText = 'Running';
+    badge.style.background = '#f59e0b';
+    badge.style.color = '#fff';
+  }
+
+  const odomLeftE = document.getElementById('odom-left-dist');
+  const odomRightE = document.getElementById('odom-right-dist');
+  const startLeft = odomLeftE ? parseFloat(odomLeftE.innerText) : 0.0;
+  const startRight = odomRightE ? parseFloat(odomRightE.innerText) : 0.0;
+  testStartOdom = { left: startLeft, right: startRight };
+
+  testTimer = setInterval(() => {
+    checkSafetyInterlocks();
+    if (activeTest !== 'distance') return;
+
+    const curLeft = odomLeftE ? parseFloat(odomLeftE.innerText) : 0.0;
+    const curRight = odomRightE ? parseFloat(odomRightE.innerText) : 0.0;
+    const dist = ((curLeft - testStartOdom.left) + (curRight - testStartOdom.right)) / 2.0;
+
+    if (dist >= 2.0) {
+      stopTestDrive(true, `Reached 2.00m reported distance (delta left=${(curLeft - testStartOdom.left).toFixed(3)}m, right=${(curRight - testStartOdom.right).toFixed(3)}m)`);
+    } else {
+      sendServerMessage({ type: 'test_drive', v: 0.18, w: 0.0 });
+    }
+  }, 50);
+}
+
+function startRotationTest(clockwise) {
+  if (activeTest) return;
+  if (!driveArmed) {
+    logSystem('⚠️ Cannot start test: Normal Drive is not ARMED.');
+    return;
+  }
+  if (!gamepadActive || !gpDeadmanPressed) {
+    logSystem('⚠️ Cannot start test: Deadman switch must be held.');
+    return;
+  }
+  const odomVText = document.getElementById('odom-v-real') ? document.getElementById('odom-v-real').innerText : '0';
+  const odomWText = document.getElementById('odom-w-real') ? document.getElementById('odom-w-real').innerText : '0';
+  if (parseFloat(odomVText) > 0.01 || parseFloat(odomWText) > 0.01) {
+    logSystem('⚠️ Cannot start test: Rover must be completely stationary.');
+    return;
+  }
+
+  const dirName = clockwise ? 'Clockwise (CW)' : 'Counterclockwise (CCW)';
+  logSystem(`▶️ Starting 360° ${dirName} Rotation Test...`);
+  activeTest = clockwise ? 'rotation_cw' : 'rotation_ccw';
+
+  const badge = document.getElementById('cal-rot-status-badge');
+  if (badge) {
+    badge.innerText = 'Running';
+    badge.style.background = '#f59e0b';
+    badge.style.color = '#fff';
+  }
+
+  // Show real-time visual display
+  const elDisplay = document.getElementById('cal-rot-realtime-display');
+  const elVal = document.getElementById('cal-rot-realtime-value');
+  if (elDisplay) elDisplay.style.display = 'block';
+  if (elVal) elVal.innerText = '0.0°';
+
+  let lastYaw = latestOdomYaw;
+  accumYaw = 0.0; // Reset global accumulator
+
+  testTimer = setInterval(() => {
+    checkSafetyInterlocks();
+    if (activeTest !== 'rotation_cw' && activeTest !== 'rotation_ccw') return;
+
+    const curYaw = latestOdomYaw;
+    let dyaw = curYaw - lastYaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    accumYaw += dyaw;
+    lastYaw = curYaw;
+
+    // Update real-time display
+    const currentAngleDeg = Math.abs(accumYaw * 180 / Math.PI);
+    if (elVal) elVal.innerText = `${currentAngleDeg.toFixed(1)}°`;
+
+    const targetAngleRad = 10.0 * Math.PI; // Run up to 5 full turns (1800 degrees) of odometry to allow manual stop at 360
+    if (Math.abs(accumYaw) >= targetAngleRad) {
+      stopTestDrive(true, `Completed 1800° rotation test limit (accumulated: ${currentAngleDeg.toFixed(1)}°)`);
+    } else {
+      const w = clockwise ? -1.20 : 1.20;
+      sendServerMessage({ type: 'test_drive', v: 0.0, w: w });
+    }
+  }, 50);
+}
+
+function startRotationVerification(clockwise) {
+  if (activeTest) return;
+  if (!driveArmed) {
+    logSystem('⚠️ Cannot start test: Normal Drive is not ARMED.');
+    return;
+  }
+  if (!gamepadActive || !gpDeadmanPressed) {
+    logSystem('⚠️ Cannot start test: Deadman switch must be held.');
+    return;
+  }
+  const odomVText = document.getElementById('odom-v-real') ? document.getElementById('odom-v-real').innerText : '0';
+  const odomWText = document.getElementById('odom-w-real') ? document.getElementById('odom-w-real').innerText : '0';
+  if (parseFloat(odomVText) > 0.01 || parseFloat(odomWText) > 0.01) {
+    logSystem('⚠️ Cannot start test: Rover must be completely stationary.');
+    return;
+  }
+
+  const dirName = clockwise ? 'Clockwise (CW)' : 'Counterclockwise (CCW)';
+  logSystem(`▶️ Starting 360° ${dirName} Verification Test...`);
+  activeTest = clockwise ? 'verify_rot_cw' : 'verify_rot_ccw';
+
+  const badge = document.getElementById('cal-rot-status-badge');
+  if (badge) {
+    badge.innerText = 'Verifying';
+    badge.style.background = '#10b981';
+    badge.style.color = '#fff';
+  }
+
+  let lastYaw = latestOdomYaw;
+  accumYaw = 0.0; // Reset global accumulator
+
+  testTimer = setInterval(() => {
+    checkSafetyInterlocks();
+    if (activeTest !== 'verify_rot_cw' && activeTest !== 'verify_rot_ccw') return;
+
+    const curYaw = latestOdomYaw;
+    let dyaw = curYaw - lastYaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    accumYaw += dyaw;
+    lastYaw = curYaw;
+
+    const targetAngleRad = 2.0 * Math.PI; // 360 degrees
+    if (Math.abs(accumYaw) >= targetAngleRad) {
+      stopTestDrive(true, `Completed 360° verification (accumulated: ${(Math.abs(accumYaw) * 180 / Math.PI).toFixed(1)}°)`);
+    } else {
+      const w = clockwise ? -1.20 : 1.20;
+      sendServerMessage({ type: 'test_drive', v: 0.0, w: w });
+    }
+  }, 50);
+}
+
+let accumYaw = 0.0;
+let latestOdomYaw = 0.0;
+let oabFwdDist = 0.0;
+let oabRevDist = 0.0;
+
+function startOutAndBackTest() {
+  if (activeTest) return;
+  if (!driveArmed) {
+    logSystem('⚠️ Cannot start test: Normal Drive is not ARMED.');
+    return;
+  }
+  if (!gamepadActive || !gpDeadmanPressed) {
+    logSystem('⚠️ Cannot start test: Deadman switch must be held.');
+    return;
+  }
+  const odomVText = document.getElementById('odom-v-real') ? document.getElementById('odom-v-real').innerText : '0';
+  const odomWText = document.getElementById('odom-w-real') ? document.getElementById('odom-w-real').innerText : '0';
+  if (parseFloat(odomVText) > 0.01 || parseFloat(odomWText) > 0.01) {
+    logSystem('⚠️ Cannot start test: Rover must be completely stationary.');
+    return;
+  }
+
+  logSystem('▶️ Starting 2-Meter Out-and-Back Test...');
+  activeTest = 'out_and_back';
+  oabFwdDist = 0.0;
+  oabRevDist = 0.0;
+
+  const badge = document.getElementById('cal-oab-status-badge');
+  if (badge) {
+    badge.innerText = 'Fwd Phase';
+    badge.style.background = '#f59e0b';
+    badge.style.color = '#fff';
+  }
+
+  const odomLeftE = document.getElementById('odom-left-dist');
+  const odomRightE = document.getElementById('odom-right-dist');
+  const startLeft = odomLeftE ? parseFloat(odomLeftE.innerText) : 0.0;
+  const startRight = odomRightE ? parseFloat(odomRightE.innerText) : 0.0;
+  testStartOdom = { left: startLeft, right: startRight };
+
+  let phase = 'forward'; // 'forward', 'waiting', 'reverse'
+  let waitStartTime = 0;
+
+  testTimer = setInterval(() => {
+    checkSafetyInterlocks();
+    if (activeTest !== 'out_and_back') return;
+
+    const curLeft = odomLeftE ? parseFloat(odomLeftE.innerText) : 0.0;
+    const curRight = odomRightE ? parseFloat(odomRightE.innerText) : 0.0;
+    const dist = ((curLeft - testStartOdom.left) + (curRight - testStartOdom.right)) / 2.0;
+
+    if (phase === 'forward') {
+      if (dist >= 2.0) {
+        oabFwdDist = dist;
+        phase = 'waiting';
+        waitStartTime = Date.now();
+        if (badge) badge.innerText = 'Waiting...';
+        sendServerMessage({ type: 'test_drive', v: 0.0, w: 0.0 });
+      } else {
+        sendServerMessage({ type: 'test_drive', v: 0.18, w: 0.0 });
+      }
+    } else if (phase === 'waiting') {
+      if (Date.now() - waitStartTime >= 1000) {
+        phase = 'reverse';
+        if (badge) badge.innerText = 'Rev Phase';
+      } else {
+        sendServerMessage({ type: 'test_drive', v: 0.0, w: 0.0 });
+      }
+    } else if (phase === 'reverse') {
+      if (dist <= 0.01) {
+        oabRevDist = oabFwdDist - dist;
+        stopTestDrive(true, 'Completed Out-and-Back Test.');
+      } else {
+        sendServerMessage({ type: 'test_drive', v: -0.18, w: 0.0 });
+      }
+    }
+  }, 50);
+}
+
+function stopTestDrive(success, message) {
+  if (testTimer) {
+    clearInterval(testTimer);
+    testTimer = null;
+  }
+
+  // Set velocities to 0
+  sendServerMessage({ type: 'test_drive', v: 0.0, w: 0.0 });
+  
+  // Disarm normal drive no longer done automatically after calibration/validation tests
+  // disarmNormalDrive();
+
+  const testName = activeTest;
+  activeTest = null;
+
+  // Hide real-time rotation display
+  const elDisplay = document.getElementById('cal-rot-realtime-display');
+  if (elDisplay) elDisplay.style.display = 'none';
+
+  logSystem(`⏹️ Test Completed/Stopped: ${message}`);
+
+  const badgeDist = document.getElementById('cal-dist-status-badge');
+  if (badgeDist) {
+    badgeDist.innerText = 'Idle';
+    badgeDist.style.background = '';
+    badgeDist.style.color = '';
+  }
+  const badgeRot = document.getElementById('cal-rot-status-badge');
+  if (badgeRot) {
+    badgeRot.innerText = 'Idle';
+    badgeRot.style.background = '';
+    badgeRot.style.color = '';
+  }
+  const badgeOab = document.getElementById('cal-oab-status-badge');
+  if (badgeOab) {
+    badgeOab.innerText = 'Idle';
+    badgeOab.style.background = '';
+    badgeOab.style.color = '';
+  }
+
+  // Handle rotation test completion/stop (e.g. from deadman release)
+  if (testName === 'rotation_cw' || testName === 'rotation_ccw') {
+    const finalAngleDeg = Math.abs(accumYaw * 180 / Math.PI);
+    logSystem(`[Rotation Test] Final system-reported rotation: ${finalAngleDeg.toFixed(1)}°`);
+    if (testName === 'rotation_cw') {
+      const inputEl = document.getElementById('cal-rot-cw-angle');
+      if (inputEl) inputEl.value = finalAngleDeg.toFixed(1);
+    } else {
+      const inputEl = document.getElementById('cal-rot-ccw-angle');
+      if (inputEl) inputEl.value = finalAngleDeg.toFixed(1);
+    }
+    // Recalculate track width automatically based on physical 360° assumption
+    calculateTrackWidth();
+  }
+
+  if (success) {
+    if (testName === 'distance') {
+      logSystem('Distance Calibration Trial completed. Please enter the actual measured distance.');
+      calculateWheelDiameter();
+    } else if (testName === 'out_and_back') {
+      const odomXE = document.getElementById('odom-x-real');
+      const odomYE = document.getElementById('odom-y-real');
+      const odomYawE = document.getElementById('odom-yaw-real');
+      const odomLeftE = document.getElementById('odom-left-dist');
+      const odomRightE = document.getElementById('odom-right-dist');
+      
+      const finalX = odomXE ? parseFloat(odomXE.innerText) : 0.0;
+      const finalY = odomYE ? parseFloat(odomYE.innerText) : 0.0;
+      const distFromStart = Math.hypot(finalX, finalY);
+
+      const m1 = document.getElementById('odom-enc-m1') ? document.getElementById('odom-enc-m1').innerText : '0';
+      const m2 = document.getElementById('odom-enc-m2') ? document.getElementById('odom-enc-m2').innerText : '0';
+      const m3 = document.getElementById('odom-enc-m3') ? document.getElementById('odom-enc-m3').innerText : '0';
+      const m4 = document.getElementById('odom-enc-m4') ? document.getElementById('odom-enc-m4').innerText : '0';
+
+      if (odomXE) document.getElementById('cal-oab-x').innerText = finalX.toFixed(3) + ' m';
+      if (odomYE) document.getElementById('cal-oab-y').innerText = finalY.toFixed(3) + ' m';
+      if (odomYawE) document.getElementById('cal-oab-yaw').innerText = odomYawE.innerText;
+      
+      document.getElementById('cal-oab-fwd-dist').innerText = oabFwdDist.toFixed(3) + ' m';
+      document.getElementById('cal-oab-rev-dist').innerText = oabRevDist.toFixed(3) + ' m';
+      document.getElementById('cal-oab-start-dist').innerText = distFromStart.toFixed(3) + ' m';
+
+      if (odomLeftE) document.getElementById('cal-oab-enc-left').innerText = parseFloat(odomLeftE.innerText).toFixed(3) + ' m';
+      if (odomRightE) document.getElementById('cal-oab-enc-right').innerText = parseFloat(odomRightE.innerText).toFixed(3) + ' m';
+      
+      document.getElementById('cal-oab-enc-four').innerText = `M1:${m1} M2:${m2} M3:${m3} M4:${m4}`;
+    }
+  }
+}
+
+function abortCalibrationTest(reason) {
+  stopTestDrive(false, `Aborted: ${reason}`);
+  logSystem(`🚨 TEST ABORTED: ${reason}`);
+}
+
+function calculateWheelDiameter() {
+  const t1 = parseFloat(document.getElementById('cal-dist-trial1').value);
+  const t2 = parseFloat(document.getElementById('cal-dist-trial2').value);
+  const currentDia = currentWheelDiameter * 1000; // mm
+
+  let prop1 = null;
+  let prop2 = null;
+  let avgProp = null;
+  let diffPct = null;
+
+  if (!isNaN(t1) && t1 > 0) {
+    prop1 = currentDia * t1 / 2.0;
+    document.getElementById('cal-dist-prop1').innerText = `${prop1.toFixed(2)} mm`;
+  } else {
+    document.getElementById('cal-dist-prop1').innerText = '-- mm';
+  }
+
+  if (!isNaN(t2) && t2 > 0) {
+    prop2 = currentDia * t2 / 2.0;
+    document.getElementById('cal-dist-prop2').innerText = `${prop2.toFixed(2)} mm`;
+  } else {
+    document.getElementById('cal-dist-prop2').innerText = '-- mm';
+  }
+
+  // Support single-trial calibration: if one is entered and the other is empty/NaN, duplicate it
+  if (prop1 && !prop2) {
+    prop2 = prop1;
+  } else if (!prop1 && prop2) {
+    prop1 = prop2;
+  }
+
+  if (prop1 && prop2) {
+    avgProp = (prop1 + prop2) / 2.0;
+    diffPct = Math.abs(prop1 - prop2) / avgProp * 100;
+
+    document.getElementById('cal-dist-avg').innerText = `${avgProp.toFixed(2)} mm`;
+    document.getElementById('cal-dist-diff').innerText = `${diffPct.toFixed(2)} %`;
+
+    const warningEl = document.getElementById('cal-dist-warning');
+    const applyBtn = document.getElementById('btn-cal-dist-apply');
+
+    const isSane = avgProp >= 40.0 && avgProp <= 100.0; // 40mm to 100mm
+    if (diffPct <= 3.0 && isSane) {
+      warningEl.style.display = 'none';
+      applyBtn.disabled = false;
+      applyBtn.style.opacity = '1.0';
+      applyBtn.style.cursor = 'pointer';
+
+      sendServerMessage({
+        type: 'save_proposed_config',
+        wheelDiameter: avgProp / 1000.0,
+        effectiveTrackWidth: currentTrackWidth
+      });
+    } else {
+      warningEl.style.display = 'block';
+      if (!isSane) {
+        warningEl.innerText = '⚠️ Proposed Wheel Diameter is unrealistic (must be 40mm to 100mm).';
+      } else {
+        warningEl.innerText = '⚠️ Trial 1 & Trial 2 differ by more than 3.0%. Recalculate or run again.';
+      }
+      applyBtn.disabled = true;
+      applyBtn.style.opacity = '0.6';
+      applyBtn.style.cursor = 'not-allowed';
+    }
+  } else {
+    document.getElementById('cal-dist-avg').innerText = '-- mm';
+    document.getElementById('cal-dist-diff').innerText = '-- %';
+    document.getElementById('cal-dist-warning').style.display = 'none';
+    document.getElementById('btn-cal-dist-apply').disabled = true;
+    document.getElementById('btn-cal-dist-apply').style.opacity = '0.6';
+  }
+}
+
+function calculateTrackWidth() {
+  const cw = parseFloat(document.getElementById('cal-rot-cw-angle').value);
+  const ccw = parseFloat(document.getElementById('cal-rot-ccw-angle').value);
+  const currentTrack = currentTrackWidth * 1000; // mm
+
+  let prop1 = null;
+  let prop2 = null;
+  let avgProp = null;
+  let diffPct = null;
+
+  if (!isNaN(cw) && cw > 0) {
+    prop1 = currentTrack * cw / 360.0;
+    document.getElementById('cal-rot-prop1').innerText = `${prop1.toFixed(2)} mm`;
+  } else {
+    document.getElementById('cal-rot-prop1').innerText = '-- mm';
+  }
+
+  if (!isNaN(ccw) && ccw > 0) {
+    prop2 = currentTrack * ccw / 360.0;
+    document.getElementById('cal-rot-prop2').innerText = `${prop2.toFixed(2)} mm`;
+  } else {
+    document.getElementById('cal-rot-prop2').innerText = '-- mm';
+  }
+
+  // Support single-trial calibration: if one is entered and the other is empty/NaN, duplicate it
+  if (prop1 && !prop2) {
+    prop2 = prop1;
+  } else if (!prop1 && prop2) {
+    prop1 = prop2;
+  }
+
+  if (prop1 && prop2) {
+    avgProp = (prop1 + prop2) / 2.0;
+    diffPct = Math.abs(prop1 - prop2) / avgProp * 100;
+
+    document.getElementById('cal-rot-avg').innerText = `${avgProp.toFixed(2)} mm`;
+    document.getElementById('cal-rot-diff').innerText = `${diffPct.toFixed(2)} %`;
+
+    const warningEl = document.getElementById('cal-rot-warning');
+    const applyBtn = document.getElementById('btn-cal-rot-apply');
+
+    const isSane = avgProp >= 100.0 && avgProp <= 2200.0; // 100mm to 2200mm (2.2m)
+    if (diffPct <= 5.0 && isSane) {
+      warningEl.style.display = 'none';
+      applyBtn.disabled = false;
+      applyBtn.style.opacity = '1.0';
+      applyBtn.style.cursor = 'pointer';
+
+      sendServerMessage({
+        type: 'save_proposed_config',
+        wheelDiameter: currentWheelDiameter,
+        effectiveTrackWidth: avgProp / 1000.0
+      });
+    } else {
+      warningEl.style.display = 'block';
+      if (!isSane) {
+        warningEl.innerText = '⚠️ Proposed Track Width is unrealistic (must be 100mm to 2200mm).';
+      } else {
+        warningEl.innerText = '⚠️ CW & CCW trials differ by more than 5.0%. Recalculate or run again.';
+      }
+      applyBtn.disabled = true;
+      applyBtn.style.opacity = '0.6';
+      applyBtn.style.cursor = 'not-allowed';
+    }
+  } else {
+    document.getElementById('cal-rot-avg').innerText = '-- mm';
+    document.getElementById('cal-rot-diff').innerText = '-- %';
+    document.getElementById('cal-rot-warning').style.display = 'none';
+    document.getElementById('btn-cal-rot-apply').disabled = true;
+    document.getElementById('btn-cal-rot-apply').style.opacity = '0.6';
+  }
+}
+
+function clearDistanceTrials() {
+  document.getElementById('cal-dist-trial1').value = '';
+  document.getElementById('cal-dist-trial2').value = '';
+  calculateWheelDiameter();
+  logSystem('Distance trials cleared.');
+}
+
+function clearRotationTrials() {
+  document.getElementById('cal-rot-cw-angle').value = '';
+  document.getElementById('cal-rot-ccw-angle').value = '';
+  calculateTrackWidth();
+  logSystem('Rotation trials cleared.');
+}
+
+function applyWheelCalibration() {
+  logSystem('Applying proposed Wheel Diameter to NVS...');
+  sendServerMessage({ type: 'apply_calibration' });
+}
+
+function applyTrackWidthCalibration() {
+  logSystem('Applying proposed Effective Track Width to NVS...');
+  sendServerMessage({ type: 'apply_calibration' });
+}
+
+function applyRecommendedCalibration() {
+  logSystem('Applying proposed configuration directly to ESP32 NVS...');
+  sendServerMessage({ type: 'apply_calibration' });
+}
+
+function restorePreviousCalibration() {
+  logSystem('Restoring previous calibration settings from database backup...');
+  sendServerMessage({ type: 'restore_previous' });
+}
+
+function logOutAndBackTrial() {
+  const dist = parseFloat(document.getElementById('cal-oab-phys-dist').value) || 0;
+  const offset = parseFloat(document.getElementById('cal-oab-phys-offset').value) || 0;
+  const yaw = parseFloat(document.getElementById('cal-oab-phys-yaw').value) || 0;
+  
+  const surface = document.getElementById('cal-surface-type').value;
+
+  logSystem('Logging Out-and-Back validation results...');
+  sendServerMessage({
+    type: 'log_test_run',
+    testType: 'Out-and-Back',
+    results: `Phys errors: dist=${dist}mm, offset=${offset}mm, heading=${yaw}deg`,
+    surfaceType: surface,
+    firmwareVersion: '1.3.0-phase4'
+  });
+}
+
+function logBacktrackTrial() {
+  const dist = parseFloat(document.getElementById('cal-backtrack-phys-dist').value) || 0;
+  const yaw = parseFloat(document.getElementById('cal-backtrack-phys-yaw').value) || 0;
+  
+  const surface = document.getElementById('cal-surface-type').value;
+  const waypoints = document.getElementById('backtrack-breadcrumbs-count').innerText;
+
+  logSystem('Logging Backtrack validation results...');
+  sendServerMessage({
+    type: 'log_test_run',
+    testType: 'Backtrack',
+    results: `Phys error: dist=${dist}mm, heading=${yaw}deg | ${waypoints}`,
+    surfaceType: surface,
+    firmwareVersion: '1.3.0-phase4'
+  });
+}
+
+function saveSurfaceType() {
+  const surface = document.getElementById('cal-surface-type').value;
+  logSystem(`Active test surface selected: ${surface}`);
+}
+
+function startPathRecording() {
+  logSystem('Starting path recording...');
+  fetch('/api/path/record/start', { method: 'POST' })
+    .then(r => r.json())
+    .catch(err => console.error(err));
+}
+
+function stopPathRecording() {
+  logSystem('Stopping path recording...');
+  fetch('/api/path/record/stop', { method: 'POST' })
+    .then(r => r.json())
+    .catch(err => console.error(err));
+}
+
+function startBacktrackHome() {
+  logSystem('Initiating backtracking to starting origin...');
+  fetch('/api/path/backtrack/start', { method: 'POST' })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) {
+        logSystem(`⚠️ Backtrack start failed: ${res.error}`);
+      }
+    })
+    .catch(err => console.error(err));
+}
+
+// Attach event listeners for change/input
+document.getElementById('cal-dist-trial1').addEventListener('input', calculateWheelDiameter);
+document.getElementById('cal-dist-trial2').addEventListener('input', calculateWheelDiameter);
+document.getElementById('cal-rot-cw-angle').addEventListener('input', calculateTrackWidth);
+document.getElementById('cal-rot-ccw-angle').addEventListener('input', calculateTrackWidth);
+
+function abortBacktrackHome() {
+  logSystem('Aborting backtracking return...');
+  fetch('/api/path/backtrack/stop', { method: 'POST' })
+    .then(r => r.json())
+    .catch(err => console.error(err));
+}
+
+function updateCalibrationDbUI(db) {
+  if (!db) return;
+
+  // 1. Update Geometry Config Display cards
+  const curDiameterEl = document.getElementById('db-cur-diameter');
+  const curTrackEl = document.getElementById('db-cur-track');
+  const propDiameterEl = document.getElementById('db-prop-diameter');
+  const propTrackEl = document.getElementById('db-prop-track');
+  const prevDiameterEl = document.getElementById('db-prev-diameter');
+  const prevTrackEl = document.getElementById('db-prev-track');
+
+  if (curDiameterEl && db.currentConfig) {
+    curDiameterEl.innerText = db.currentConfig.wheelDiameter ? 
+      (db.currentConfig.wheelDiameter * 1000).toFixed(1) : '--';
+  }
+  if (curTrackEl && db.currentConfig) {
+    curTrackEl.innerText = db.currentConfig.effectiveTrackWidth ? 
+      (db.currentConfig.effectiveTrackWidth * 1000).toFixed(1) : '--';
+  }
+
+  if (propDiameterEl) {
+    propDiameterEl.innerText = db.proposedConfig && db.proposedConfig.wheelDiameter ? 
+      (db.proposedConfig.wheelDiameter * 1000).toFixed(1) : '--';
+  }
+  if (propTrackEl) {
+    propTrackEl.innerText = db.proposedConfig && db.proposedConfig.effectiveTrackWidth ? 
+      (db.proposedConfig.effectiveTrackWidth * 1000).toFixed(1) : '--';
+  }
+
+  if (prevDiameterEl) {
+    prevDiameterEl.innerText = db.previousConfig && db.previousConfig.wheelDiameter ? 
+      (db.previousConfig.wheelDiameter * 1000).toFixed(1) : '--';
+  }
+  if (prevTrackEl) {
+    prevTrackEl.innerText = db.previousConfig && db.previousConfig.effectiveTrackWidth ? 
+      (db.previousConfig.effectiveTrackWidth * 1000).toFixed(1) : '--';
+  }
+
+  // 2. Surface Type dropdown sync
+  const surfaceSelect = document.getElementById('cal-surface-type');
+  if (surfaceSelect && db.surfaceType) {
+    surfaceSelect.value = db.surfaceType;
+  }
+
+  // 3. Render history log table
+  const tableBody = document.getElementById('cal-history-table-body');
+  if (tableBody) {
+    if (!db.testLogs || db.testLogs.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No logs available in database.</td></tr>`;
+    } else {
+      let html = '';
+      // Reverse chronological order
+      const logs = [...db.testLogs].reverse();
+      logs.forEach(log => {
+        const dateStr = new Date(log.timestamp).toLocaleString();
+        let resSummary = '';
+        if (typeof log.results === 'object') {
+          resSummary = Object.entries(log.results)
+            .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toFixed(3) : v}`)
+            .join(', ');
+        } else {
+          resSummary = log.results;
+        }
+
+        html += `
+          <tr style="border-bottom: 1px solid var(--border);">
+            <td style="padding: 8px 10px; color: var(--text-muted); white-space: nowrap;">${dateStr}</td>
+            <td style="padding: 8px 10px; font-weight: bold;">${log.testType}</td>
+            <td style="padding: 8px 10px;">${log.surfaceType}</td>
+            <td style="padding: 8px 10px; font-family: monospace;">${log.firmwareVersion}</td>
+            <td style="padding: 8px 10px; color: var(--cyan-glow);">${resSummary}</td>
+          </tr>
+        `;
+      });
+      tableBody.innerHTML = html;
+    }
+  }
+}
+
 
 
