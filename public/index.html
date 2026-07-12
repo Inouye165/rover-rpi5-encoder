@@ -56,6 +56,7 @@
       <button class="tab-btn active" data-tab="tab-dashboard">🎮 Cockpit Dashboard</button>
       <button class="tab-btn" data-tab="tab-imu">🧭 IMU & Position Tracking</button>
       <button class="tab-btn" data-tab="tab-encoder">🔍 Encoder & Rotate Testing</button>
+      <button class="tab-btn" data-tab="tab-calibrate">🛡️ Calibration & Safety</button>
     </nav>
 
     <!-- Tab Contents -->
@@ -69,6 +70,123 @@
           <h2>🕹️ Driving Control Room</h2>
         </div>
         
+        <!-- PHASE 4 — PLATFORM COORDINATED DRIVE & BACKTRACKING -->
+        <div class="control-group" style="border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: var(--accent);">🕹️ Phase 4 — Normal Platform Drive</h3>
+            <span id="normal-drive-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 4px 10px; border-radius: 12px; font-size: 11px;">Disarmed</span>
+          </div>
+
+          <!-- Floor testing limits toggle -->
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 12px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
+            <label for="limits-floor-testing" style="font-weight: bold; color: var(--text-muted); cursor: pointer;">Floor Testing Limits (Max 0.08 m/s):</label>
+            <input type="checkbox" id="limits-floor-testing" checked style="width: 18px; height: 18px; cursor: pointer;">
+          </div>
+
+          <!-- Gamepad Cheat-Sheet Mapping info -->
+          <div style="background: rgba(0,242,254,0.05); border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; padding: 10px; font-size: 11px; margin-bottom: 15px; line-height: 1.4;">
+            <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">🎮 Game Controller Mapping:</div>
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px 10px; font-family: monospace;">
+              <div>• Left Stick Vert:</div><div>Throt (Fwd/Rev)</div>
+              <div>• Left Stick Horiz:</div><div>Steering (Turn)</div>
+              <div>• Hold RB or RT:</div><div style="color: #f59e0b; font-weight: bold;">DEADMAN SWITCH</div>
+              <div>• Button A or B:</div><div style="color: #ef4444; font-weight: bold;">EMERGENCY STOP</div>
+              <div>• Button Start:</div><div style="color: #10b981;">Arm Drive</div>
+              <div>• Button Select:</div><div style="color: #6b7280;">Disarm Drive</div>
+          </div>
+
+          <!-- Gamepad Live Input Status -->
+          <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px; font-size: 11px; margin-bottom: 15px; line-height: 1.4; font-family: monospace;">
+            <div style="font-weight: bold; color: var(--accent); margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">🎮 Live Controller Inputs:</div>
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px 10px;">
+              <div>Arm State:</div><div id="gp-live-arm" style="font-weight: bold; color: #6b7280;">DISARMED</div>
+              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED</div>
+              <div>Linear Axis Y (Throt):</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Angular Axis X (Turn):</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Stop State:</div><div id="gp-live-stop" style="font-weight: bold; color: #10b981;">STATIONARY</div>
+              <div>Safety ESTOP:</div><div id="gp-live-estop" style="font-weight: bold; color: #10b981;">NOMINAL</div>
+              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent);">None</div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <button id="btn-arm-drive" class="btn btn-primary" style="flex: 1; font-weight: bold; padding: 10px;">Arm Normal Drive</button>
+            <button id="btn-disarm-drive" class="btn btn-secondary" style="flex: 1; font-weight: bold; padding: 10px;">Disarm Normal Drive</button>
+          </div>
+
+          <!-- Normal Drive Live Telemetry HUD -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; font-family: monospace; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 15px;">
+            <div>Drive State:</div><div id="tele-drive-state" style="font-weight: bold; color: #fca5a5;">Disarmed</div>
+            <div>Driver Mode:</div><div id="tele-drive-mode" style="font-weight: bold;">--</div>
+            <div>Physical Lock:</div><div id="tele-drive-phys-lock" style="font-weight: bold; color: var(--accent);">CLAMP ACTIVE</div>
+            <div>Active Source:</div><div id="tele-drive-source" style="font-weight: bold;">--</div>
+            <div>Command Age:</div><div id="tele-drive-age" style="font-weight: bold;">--</div>
+            
+            <div style="grid-column: span 2; border-bottom: 1px dashed var(--border); margin: 4px 0;"></div>
+            
+            <div>Req. Linear:</div><div id="tele-drive-req-lin" style="font-weight: bold; color: var(--cyan-glow);">0.00 m/s</div>
+            <div>Req. Angular:</div><div id="tele-drive-req-ang" style="font-weight: bold; color: var(--cyan-glow);">0.00 rad/s</div>
+            <div>Limited Linear:</div><div id="tele-drive-lim-lin" style="font-weight: bold; color: var(--accent);">0.00 m/s</div>
+            <div>Limited Angular:</div><div id="tele-drive-lim-ang" style="font-weight: bold; color: var(--accent);">0.00 rad/s</div>
+          </div>
+
+          <!-- Skid-Steer Wheel Odometry HUD -->
+          <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 6px 12px; margin-top: 15px;">
+            <div style="grid-column: span 2; font-weight: bold; color: var(--cyan-glow); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+              <span>🌍 Skid-Steer Odometry:</span>
+              <span id="limits-testing-lbl" style="font-size: 9px; color: #f59e0b; font-weight: bold;">FLOOR TESTING (0.08 m/s)</span>
+            </div>
+            
+            <div>Position X:</div><div id="odom-x-real" style="font-weight: bold; color: var(--cyan-glow);">0.000 m</div>
+            <div>Position Y:</div><div id="odom-y-real" style="font-weight: bold; color: var(--cyan-glow);">0.000 m</div>
+            <div>Heading Yaw:</div><div id="odom-yaw-real" style="font-weight: bold; color: var(--cyan-glow);">0.0°</div>
+            <div>Left Side Dist:</div><div id="odom-left-dist" style="font-weight: bold;">0.000 m</div>
+            <div>Right Side Dist:</div><div id="odom-right-dist" style="font-weight: bold;">0.000 m</div>
+            <div>Linear Speed v:</div><div id="odom-v-real" style="font-weight: bold; color: var(--accent);">0.000 m/s</div>
+            <div>Angular Speed w:</div><div id="odom-w-real" style="font-weight: bold; color: var(--accent);">0.000 rad/s</div>
+            
+            <div style="grid-column: span 2; border-bottom: 1px dashed var(--border); margin: 4px 0;"></div>
+            <div style="grid-column: span 2; font-weight: bold; color: var(--text-muted); margin-bottom: 2px;">Four Encoder Ticks:</div>
+            
+            <div>LF / RF (M1 / M2):</div><div style="font-weight: bold;"><span id="odom-enc-m1">0</span> / <span id="odom-enc-m2">0</span></div>
+            <div>LR / RR (M3 / M4):</div><div style="font-weight: bold;"><span id="odom-enc-m3">0</span> / <span id="odom-enc-m4">0</span></div>
+          </div>
+        </div>
+
+        <!-- PATH RECORDING & BACKTRACKING return panel -->
+        <div class="control-group" style="border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 10px 0; color: var(--cyan-glow); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">📂 Path Breadcrumbs & Return Home</h3>
+          
+          <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 8px; font-size: 10px; color: #fca5a5; font-weight: bold; margin-bottom: 12px; text-align: center; line-height: 1.3;">
+            BACKTRACK HOME — ENCODER DEAD RECKONING<br>
+            <span style="font-weight: normal; font-size: 9px; opacity: 0.8;">APPROXIMATE ONLY UNTIL IMU/SLAM IS ADDED</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+            <button id="btn-record-start" class="btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Start Recording</button>
+            <button id="btn-record-stop" class="btn" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Stop Recording</button>
+            <button id="btn-record-clear" class="btn" style="background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.4); color: #e5e7eb; font-size: 11px; font-weight: bold; padding: 8px; grid-column: span 2; cursor: pointer;">Clear Recorded Path</button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+            <button id="btn-start-backtrack" class="btn btn-primary" style="background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%); font-size: 11px; font-weight: bold; padding: 10px; cursor: pointer;">Backtrack Home</button>
+            <button id="btn-abort-backtrack" class="btn btn-secondary" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fff; font-size: 11px; font-weight: bold; padding: 10px; cursor: pointer;">Abort Backtrack</button>
+          </div>
+
+          <!-- Path status indicators -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 6px;">
+            <div>Recording Status:</div><div id="path-recording-lbl" style="font-weight: bold; color: #6b7280;">Idle</div>
+            <div>Recorded Waypoints:</div><div id="path-breadcrumbs-lbl" style="font-weight: bold;">0</div>
+            <div>Backtrack State:</div><div id="backtrack-state-lbl" style="font-weight: bold; color: #6b7280;">IDLE</div>
+            
+            <div style="grid-column: span 2; display: flex; align-items: center; margin-top: 4px;">
+              <div style="flex: 1; height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+                <div id="backtrack-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #a855f7 0%, #3b82f6 100%); transition: width 0.1s ease; font-size: 8px; line-height: 10px; text-align: center; color: white;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Movement Direction Pad -->
         <div class="control-group">
           <h3>Direction Control</h3>
@@ -543,6 +661,260 @@
         </section>
       </main>
     </div> <!-- End Encoder Tab -->
+
+    <!-- Calibration & Safety Tab -->
+    <div id="tab-calibrate" class="tab-content">
+      <main class="dashboard-grid">
+        <section class="panel glass" style="grid-column: span 12;">
+          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+            <h2>🛡️ Breakaway Calibration & Safety Control</h2>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <span id="pi-lock-badge" class="badge alert" style="font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">🔒 Safety Lock: Offline</span>
+              <span id="pi-mode-badge" class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Mode: Simulation Only</span>
+            </div>
+          </div>
+          
+          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
+            <!-- Left Side: Safety Checklist & Actions -->
+            <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 15px;">
+              
+              <!-- Safety Acknowledgements -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📋 Pre-Calibration Safety Checklist</h3>
+                <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-bottom:15px;">
+                  All check-boxes must be acknowledged to enable the simulation interface.
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="pi-safety-chk-elevated" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
+                    <span>Rover is elevated (tracks clear of floor)</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="pi-safety-chk-clear" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
+                    <span>Hands, wires, and tools are clear of wheels</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="pi-safety-chk-estop" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
+                    <span>Emergency stop power removal is ready</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="pi-safety-chk-auto" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
+                    <span>Autonomous motion commands are disabled</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Controls Card -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">Actions</h3>
+                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 10px; margin-bottom: 15px; font-size: 12px; color: #fca5a5; font-weight: bold; text-align: center;">
+                  ⚠️ SIMULATION ONLY — MOTOR OUTPUT IS PHYSICALLY DISABLED
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <button id="btn-start-calibration" class="btn btn-primary" onclick="triggerCalibrateStart()" style="width: 100%; font-weight: bold; background: #4b5563; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; color: #9ca3af;" disabled>⚡ Start Calibration Simulation</button>
+                  <button id="btn-cancel-calibration" class="btn btn-secondary" onclick="triggerCalibrateCancel()" style="width: 100%; font-weight: bold; background: #374151; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;">🛑 Abort Simulation</button>
+                </div>
+              </div>
+
+              <!-- Real Calibration Readiness Gates Check-list -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: #a855f7;">📋 Real Calibration Readiness Gate</h3>
+                <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-bottom:15px;">
+                  All Phase 3 readiness verification tests must be completed and acknowledged.
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px; margin-bottom: 15px;">
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="gate-chk-motor-dir" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
+                    <span>Motor directions verified correct</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="gate-chk-enc-dir" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
+                    <span>Encoder directions verified correct</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="gate-chk-maint-stop" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
+                    <span>Maintenance stop function verified</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="gate-chk-estop" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
+                    <span>Emergency stop function verified</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="gate-chk-deadman" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
+                    <span>Deadman timeout function verified</span>
+                  </label>
+                </div>
+                
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <button id="btn-start-real-calibration" class="btn btn-primary" onclick="triggerRealCalibrateStart()" style="width: 100%; font-weight: bold; background: #4b5563; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; color: #9ca3af;" disabled>⚡ Start Real Calibration</button>
+                </div>
+              </div>
+              
+              <!-- Calibration Progress HUD -->
+              <div id="pi-cal-panel" style="display: none; background: rgba(255, 255, 255, 0.03); border: 1px solid #00f2fe; border-radius: 12px; padding: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <h3 style="margin: 0; color: #00f2fe;">⚡ Calibration Progress</h3>
+                  <span id="pi-session-display" style="font-family: monospace; font-size: 11px; color: var(--text-muted);">Session: --</span>
+                </div>
+                <div style="font-size: 15px; font-weight: bold; margin-bottom: 12px;" id="pi-cal-state">Idle</div>
+                
+                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px; margin-bottom: 15px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Target Motor:</span>
+                    <span id="pi-cal-active-motor-lbl" style="font-weight: bold;">--</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Direction:</span>
+                    <span id="pi-cal-direction-lbl" style="font-weight: bold;">--</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Simulated Output:</span>
+                    <span id="pi-cal-pwm-lbl" style="color: #c084fc; font-weight: bold; font-family: monospace;">0 PWM</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Simulated Encoder Speed Delta:</span>
+                    <span id="pi-cal-delta-lbl" style="color: #38bdf8; font-weight: bold; font-family: monospace;">0 ticks</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted);">Movement Detected:</span>
+                    <span id="pi-cal-movement-lbl" style="font-weight: bold;">--</span>
+                  </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; color: var(--text-muted);">
+                  <span>Ramping simulated PWM...</span>
+                  <span id="pi-cal-pwm-val" style="font-weight: bold; color: #00f2fe;">0 PWM</span>
+                </div>
+                <progress id="pi-cal-progress" value="0" max="210" style="width: 100%; height: 10px; border-radius: 5px; overflow: hidden; background: #1a2230; border: none;"></progress>
+              </div>
+            </div>
+            
+            <!-- Right Side: Live Table -->
+            <div style="flex: 1.5; min-width: 350px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; color: var(--text-muted);">⚙️ Calibration Thresholds (Simulated)</h3>
+                <span id="pi-protocol-display" style="font-family: monospace; font-size: 11px; color: var(--text-muted);">Protocol: v--</span>
+              </div>
+              <div style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 6px; padding: 10px; font-size: 12px; color: #c084fc; line-height: 1.4;">
+                📢 <strong>Note:</strong> These are simulated limits generated by the board state machine for Phase 2 validation and are not persisted to NVS for actual closed-loop compensation.
+              </div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; margin-top: 10px;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px;">
+                    <th style="padding: 8px 0; font-weight: bold;">Motor</th>
+                    <th style="padding: 8px 0; font-weight: bold;">Simulated FWD (Forward)</th>
+                    <th style="padding: 8px 0; font-weight: bold;">Simulated REV (Reverse)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 8px 0; font-weight: 600;">Motor 1 (Left Front)</td>
+                    <td id="pi-val-m1-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                    <td id="pi-val-m1-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 8px 0; font-weight: 600;">Motor 2 (Right Front)</td>
+                    <td id="pi-val-m2-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                    <td id="pi-val-m2-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                  </tr>
+                  <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 8px 0; font-weight: 600;">Motor 3 (Left Rear)</td>
+                    <td id="pi-val-m3-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                    <td id="pi-val-m3-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                  </tr>
+                  <tr style="border-bottom: none;">
+                    <td style="padding: 8px 0; font-weight: 600;">Motor 4 (Right Rear)</td>
+                    <td id="pi-val-m4-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                    <td id="pi-val-m4-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- PHASE 3 — RAISED-WHEEL MAINTENANCE PANEL -->
+        <section class="panel glass" style="grid-column: span 12;">
+          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+            <h2>🛠️ Phase 3 — Raised-Wheel Maintenance Mode</h2>
+            <span id="maint-status-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Locked</span>
+          </div>
+          
+          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
+            <!-- Left Panel: Maintenance Checklist & Session Initiation -->
+            <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📋 Maintenance Safety Verification</h3>
+                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="maint-safety-chk" style="accent-color: var(--primary); cursor: pointer;">
+                    <span>I confirm the rover is safely raised and supported with all 4 wheels completely off the floor.</span>
+                  </label>
+                </div>
+              </div>
+
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">Configuration & Initialization</h3>
+                <div style="display: flex; flex-direction: column; gap: 15px;">
+                  <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label style="font-size: 12px; color: var(--text-muted);">Select Motor Channel (Exactly One):</label>
+                    <select id="maint-motor-select" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 6px;">
+                      <option value="0">Motor 1 (Left Front)</option>
+                      <option value="1">Motor 2 (Right Front)</option>
+                      <option value="2">Motor 3 (Left Rear)</option>
+                      <option value="3">Motor 4 (Right Rear)</option>
+                    </select>
+                  </div>
+                  
+                  <div style="display: flex; gap: 10px;">
+                    <button id="btn-enter-maint" class="btn btn-primary" onclick="enterMaintenanceMode()" style="flex: 1; font-weight: bold; padding: 10px; border-radius: 6px; cursor: not-allowed; color: #9ca3af; background: #4b5563; border: none;" disabled>Enter Maintenance Mode</button>
+                    <button id="btn-exit-maint" class="btn btn-secondary" onclick="exitMaintenanceMode()" style="flex: 1; font-weight: bold; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff; background: #374151; border: none;">Exit Maintenance Mode</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Panel: Bounded Slider Control & Real-time Telemetry -->
+            <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">Interactive Output Controller (Ceiling: 80 PWM)</h3>
+                
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 0;">
+                  <span id="maint-pwm-display" style="font-size: 28px; font-weight: bold; font-family: monospace;">0</span>
+                  <input type="range" id="maint-pwm-slider" min="-80" max="80" value="0" style="width: 100%; accent-color: var(--primary); cursor: pointer;" disabled>
+                  <div style="display: flex; justify-content: space-between; width: 100%; font-size: 11px; color: var(--text-muted);">
+                    <span>-80 (REV)</span>
+                    <span>0 (STOP)</span>
+                    <span>80 (FWD)</span>
+                  </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                  <button id="btn-maint-fwd-step" class="btn" onclick="stepMaintenanceOutput(30)" style="flex: 1; font-weight: bold; padding: 8px; border-radius: 6px; background: #374151; color: #9ca3af; border: none; cursor: not-allowed;" disabled>+30 Step Fwd</button>
+                  <button id="btn-maint-stop" class="btn" onclick="stopMaintenanceOutput()" style="flex: 1; font-weight: bold; padding: 8px; border-radius: 6px; background: #ef4444; color: #fff; border: none; cursor: pointer;">🛑 STOP MOTOR</button>
+                  <button id="btn-maint-rev-step" class="btn" onclick="stepMaintenanceOutput(-30)" style="flex: 1; font-weight: bold; padding: 8px; border-radius: 6px; background: #374151; color: #9ca3af; border: none; cursor: not-allowed;" disabled>-30 Step Rev</button>
+                </div>
+              </div>
+
+              <!-- Maintenance Live Status HUD -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">Live Telemetry Monitor</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-family: monospace;">
+                  <div>Session ID:</div><div id="tele-maint-session" style="font-weight: bold; color: var(--accent);">--</div>
+                  <div>Mode Status:</div><div id="tele-maint-active" style="font-weight: bold;">Inactive</div>
+                  <div>Deadman Status:</div><div id="tele-maint-deadman" style="font-weight: bold;">Offline</div>
+                  <div>Timeout Rem.:</div><div id="tele-maint-timeout" style="font-weight: bold;">--</div>
+                  <div>Target Speed:</div><div id="tele-maint-target" style="font-weight: bold;">0</div>
+                  <div>Actual PWM:</div><div id="tele-maint-actual" style="font-weight: bold;">0</div>
+                  <div>Encoder Delta:</div><div id="tele-maint-enc-delta" style="font-weight: bold;">0</div>
+                  <div>Encoder Total:</div><div id="tele-maint-enc-total" style="font-weight: bold;">0</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
 
     <!-- Bottom: Live Logs and Custom Command Line Terminal -->
     <footer class="panel logs-panel glass">

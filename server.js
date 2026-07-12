@@ -55,14 +55,30 @@ const COMPLEMENT = 257 - DEVICE_ID; // = 1; used in checksum for outgoing cmds
 const FUNC_MOTOR  = 0x10; // Set individual motor speeds (-100..100 each)
 const FUNC_MOTION = 0x12; // Set velocity (vx, vy, vz as int16 * 1000)
 const FUNC_BEEP   = 0x02; // Buzzer
-const FUNC_CAR_TYPE = 0x44; // Car type/motion mode (1 = 4WD/Mecanum on most firmware)
+const FUNC_CAR_TYPE = 0x44; // Car type/motion mode
+const FUNC_START_CALIBRATE = 0x20; // Start calibration command
+const FUNC_CANCEL_CALIBRATE = 0x21; // Cancel calibration command
+const FUNC_CLEAR_FAULTS = 0x22; // Clear safety faults command
+const FUNC_GET_FIRMWARE_INFO = 0x23; // Get firmware identity command
+const FUNC_RESET_TIMING_STATS = 0x24; // Reset control timing statistics
+const FUNC_ENTER_MAINTENANCE = 0x26;
+const FUNC_MAINTENANCE_SET_OUTPUT = 0x27;
+const FUNC_EXIT_MAINTENANCE = 0x28;
+const FUNC_EMERGENCY_STOP = 0x29;
+const FUNC_ARM_NORMAL_DRIVE = 0x2C;
+const FUNC_DISARM_NORMAL_DRIVE = 0x2D;
 
 // Incoming telemetry type codes (Board → Host)
-// Mapping per official Rosmaster_Lib protocol:
 const TYPE_BATTERY  = 0x0A; // Speed/battery packet (data[6] = voltage*10)
-const TYPE_ATTITUDE = 0x0C; // IMU attitude: roll,pitch,yaw int16 LE (rad*10000)
+const TYPE_ATTITUDE = 0x0C; // IMU attitude
 const TYPE_ENCODER  = 0x0D; // Encoder counts: 4x int32 LE (M1..M4)
 const TYPE_IMU      = 0x0E; // 9-axis IMU raw packet (21 bytes total)
+const TYPE_CALIBRATION = 0x30; // Calibration status telemetry
+const TYPE_FIRMWARE_INFO = 0x32; // Firmware identification telemetry
+const TYPE_LOOP_TIMING = 0x33; // Control loop timing statistics telemetry
+const TYPE_FAULT_REPORT = 0x34; // Active safety fault flags telemetry
+const TYPE_MAINTENANCE = 0x35; // Maintenance status telemetry
+const TYPE_NORMAL_DRIVE_STATUS = 0x36;
 
 // NOTE: No COMPLEMENT constant needed – checksum = sum(packet[2..n-2]) & 0xFF
 
@@ -73,6 +89,7 @@ const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 let serialPort        = null;
@@ -94,6 +111,37 @@ const TICKS_PER_REV = 937.2;
 const KP_POSITION = 0.15;
 const MIN_POSITION_SPEED = 20;
 const MAX_POSITION_SPEED = 60;
+
+// Phase 4 Coordinated Normal Drive State
+let latestNormalDriveStatus = null;
+let targetLinear = 0.0;
+let targetAngular = 0.0;
+let driveCommandNeedsFlush = false;
+let driveLoopStarted = false;
+let latestCalibrationStatus = null;
+let latestMaintenanceStatus = null;
+
+// Phase 4 Coordinated Drive Odometry State
+let odomX = 0.0;
+let odomY = 0.0;
+let odomYaw = 0.0;
+let accumLeftDist = 0.0;
+let accumRightDist = 0.0;
+let lastOdomTicks = [null, null, null, null];
+let lastOdomTime = null;
+
+// Limits configuration and active command source
+let floorTesting = true; // default to safe floor testing limits on startup
+let cmdSource = 'NONE';
+let deadmanPressed = false;
+
+// Path Recording State
+let recording = false;
+let recordedPath = [];
+
+// Backtracking Controller State
+let backtracking = false;
+let backtrackIndex = -1;
 
 // ────────────────────────────────────────────────────────────
 // IMU State (for sensor fusion)
@@ -252,6 +300,28 @@ function startMotorKeepaliveLoop() {
   }, MOTOR_COMMAND_INTERVAL_MS);
 }
 
+function startDriveKeepaliveLoop() {
+  if (driveLoopStarted) return;
+  driveLoopStarted = true;
+
+  setInterval(() => {
+    if (!serialPort || !serialPort.isOpen) return;
+
+    const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+    if (!isArmed) return;
+
+    const vx = Math.round(targetLinear * 1000);
+    const vy = 0;
+    const vz = Math.round(targetAngular * 1000);
+    
+    sendBinaryCommand(FUNC_MOTION, [
+      ...int16ToLE(vx),
+      ...int16ToLE(vy),
+      ...int16ToLE(vz)
+    ], { dualChecksum: true });
+  }, 50);
+}
+
 function int16ToLE(value) {
   const v = value < 0 ? (65536 + value) : value;
   return [v & 0xFF, (v >> 8) & 0xFF];
@@ -328,10 +398,32 @@ async function runMotorProofSequence() {
 let rxBuf = Buffer.alloc(0);
 
 function processRxBuffer() {
+  // Extract and print any ASCII debug lines from the serial stream
+  const newlineIdx = rxBuf.indexOf(10); // LF character (0x0A)
+  if (newlineIdx !== -1) {
+    const lineBytes = rxBuf.subarray(0, newlineIdx);
+    if (lineBytes.indexOf(0xFF) === -1) {
+      const txt = lineBytes.toString('utf8').trim();
+      if (txt) {
+        console.log(`[ESP32 Serial Text] ${txt}`);
+        broadcast({ type: 'message', data: `[ESP32] ${txt}` });
+      }
+      rxBuf = rxBuf.subarray(newlineIdx + 1);
+      return processRxBuffer();
+    }
+  }
+
   while (rxBuf.length >= 4) {
     // Search for 0xFF 0xFB header
     const h1 = rxBuf.indexOf(0xFF);
-    if (h1 === -1 || h1 >= rxBuf.length - 1) break;
+    if (h1 === -1) {
+      rxBuf = Buffer.alloc(0);
+      break;
+    }
+    if (h1 > 0) {
+      rxBuf = rxBuf.subarray(h1);
+      continue;
+    }
     if (rxBuf[h1 + 1] !== BOARD_ID) {
       // Not a valid second header byte – skip one byte and try again
       rxBuf = rxBuf.subarray(h1 + 1);
@@ -480,7 +572,145 @@ function parseTelemetryPacket(extType, data) {
       currentTicks[2] = m3;
       currentTicks[3] = m4;
 
-      // Position Control Loop (run every time we get an encoder telemetry update)
+      // ── Skid-Steer Encoder Odometry Integration ──
+      const now = Date.now();
+      let linearVel = 0.0;
+      let angularVel = 0.0;
+      if (lastOdomTicks[0] !== null && lastOdomTime !== null) {
+        const dm1 = m1 - lastOdomTicks[0];
+        const dm2 = m2 - lastOdomTicks[1];
+        const dm3 = m3 - lastOdomTicks[2];
+        const dm4 = m4 - lastOdomTicks[3];
+
+        const dLeftTicks = (dm1 + dm3) / 2.0;
+        const dRightTicks = (dm2 + dm4) / 2.0;
+
+        const WHEEL_RADIUS = 0.0325; // meters (65mm diameter)
+        const TRACK_WIDTH = 0.170;  // meters
+        const TICKS_PER_REV = 937.2;
+        const M_PER_TICK = (2.0 * Math.PI * WHEEL_RADIUS) / TICKS_PER_REV;
+
+        const dLeftDist = dLeftTicks * M_PER_TICK;
+        const dRightDist = dRightTicks * M_PER_TICK;
+        const dCenterDist = (dLeftDist + dRightDist) / 2.0;
+        const dYaw = (dRightDist - dLeftDist) / TRACK_WIDTH;
+
+        accumLeftDist += dLeftDist;
+        accumRightDist += dRightDist;
+
+        const dt = (now - lastOdomTime) / 1000.0;
+        if (dt > 0) {
+          linearVel = dCenterDist / dt;
+          angularVel = dYaw / dt;
+        }
+
+        const yawAvg = odomYaw + dYaw / 2.0;
+        odomX += dCenterDist * Math.cos(yawAvg);
+        odomY += dCenterDist * Math.sin(yawAvg);
+        odomYaw += dYaw;
+
+        // Normalize yaw to [-PI, PI]
+        odomYaw = Math.atan2(Math.sin(odomYaw), Math.cos(odomYaw));
+      }
+
+      lastOdomTicks[0] = m1;
+      lastOdomTicks[1] = m2;
+      lastOdomTicks[2] = m3;
+      lastOdomTicks[3] = m4;
+      lastOdomTime = now;
+
+      // Broadcast odom telemetry
+      broadcast({
+        type: 'odom',
+        timestamp: now,
+        left_dist: parseFloat(accumLeftDist.toFixed(4)),
+        right_dist: parseFloat(accumRightDist.toFixed(4)),
+        x: parseFloat(odomX.toFixed(4)),
+        y: parseFloat(odomY.toFixed(4)),
+        yaw: parseFloat(odomYaw.toFixed(4)),
+        v: parseFloat(linearVel.toFixed(4)),
+        w: parseFloat(angularVel.toFixed(4)),
+        encoders: [m1, m2, m3, m4]
+      });
+
+      // ── Path Recording ──
+      if (recording) {
+        if (recordedPath.length === 0) {
+          recordedPath.push({
+            timestamp: now,
+            x: odomX,
+            y: odomY,
+            yaw: odomYaw,
+            left_dist: accumLeftDist,
+            right_dist: accumRightDist,
+            v: linearVel,
+            w: angularVel
+          });
+        } else {
+          const lastW = recordedPath[recordedPath.length - 1];
+          const dist = Math.hypot(odomX - lastW.x, odomY - lastW.y);
+          const yawDiff = Math.abs(odomYaw - lastW.yaw);
+          const timeDiff = now - lastW.timestamp;
+          if (dist > 0.02 || yawDiff > 0.05 || (timeDiff > 200 && (Math.abs(linearVel) > 0.01 || Math.abs(angularVel) > 0.01))) {
+            recordedPath.push({
+              timestamp: now,
+              x: odomX,
+              y: odomY,
+              yaw: odomYaw,
+              left_dist: accumLeftDist,
+              right_dist: accumRightDist,
+              v: linearVel,
+              w: angularVel
+            });
+          }
+        }
+      }
+
+      // ── Backtracking Control Loop ──
+      if (backtracking) {
+        if (backtrackIndex < 0) {
+          backtracking = false;
+          targetLinear = 0.0;
+          targetAngular = 0.0;
+          cmdSource = 'NONE';
+          console.log('[Backtrack] Completed successfully.');
+          
+          if (serialPort && serialPort.isOpen) {
+            serialPort.write(buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]));
+            broadcast({ type: 'raw_serial_out', data: `[Internal Backtrack Complete] disarm command sent` });
+          }
+          broadcast({ type: 'backtrack_status', status: 'completed' });
+        } else {
+          const target = recordedPath[backtrackIndex];
+          const dx = target.x - odomX;
+          const dy = target.y - odomY;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist > 0.5) {
+            abortBacktrack(`Excessive tracking error: ${dist.toFixed(2)}m`);
+          } else if (dist < 0.06) {
+            backtrackIndex--;
+            broadcast({ type: 'backtrack_status', status: 'progress', index: backtrackIndex, total: recordedPath.length });
+          } else {
+            const targetYaw = Math.atan2(dy, dx);
+            let yawError = targetYaw - odomYaw;
+            yawError = Math.atan2(Math.sin(yawError), Math.cos(yawError));
+
+            if (Math.abs(yawError) > 0.4) {
+              targetLinear = 0.0;
+              targetAngular = Math.sign(yawError) * 0.25; // 0.25 rad/s slow turn
+            } else {
+              targetLinear = Math.min(0.06, dist * 0.5); // Max 0.06 m/s floor speed
+              targetAngular = yawError * 1.5;
+              targetAngular = Math.max(-0.3, Math.min(0.3, targetAngular)); // Max 0.3 rad/s steering
+            }
+            cmdSource = 'BACKTRACK';
+            driveCommandNeedsFlush = true;
+          }
+        }
+      }
+
+      // Position Control Loop (legacy command support)
       let motorSpeeds = [0, 0, 0, 0];
       let anyPositionMode = false;
       
@@ -488,7 +718,7 @@ function parseTelemetryPacket(extType, data) {
         if (positionMode[i]) {
           anyPositionMode = true;
           const error = targetPosition[i] - currentTicks[i];
-          if (Math.abs(error) <= 15) { // Widened from 3 to 15 ticks (~5.7 deg) to stop end-of-move oscillation
+          if (Math.abs(error) <= 15) {
             positionMode[i] = false;
             console.log(`[Position Control] Motor ${i + 1} reached target.`);
           } else {
@@ -506,12 +736,10 @@ function parseTelemetryPacket(extType, data) {
       }
       
       if (anyPositionMode) {
-        // Send motor speeds to serial
         sendMotorSpeeds(motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
       }
 
       encoderPacketCount += 1;
-      const now = Date.now();
       if ((now - lastEncoderActivityBroadcast) > 250) {
         lastEncoderActivityBroadcast = now;
         broadcast({ type: 'encoder_total', m1, m2, m3, m4 });
@@ -522,6 +750,188 @@ function parseTelemetryPacket(extType, data) {
           counts: [m1, m2, m3, m4],
         });
       }
+    }
+
+  } else if (extType === TYPE_CALIBRATION) {
+    if (data.length >= 55) {
+      const protoMajor = data[0];
+      const protoMinor = data[1];
+      const sessionId = data.readUInt32LE(2);
+      const isSimulation = data[6];
+      const cal_state = data[7];
+      const cal_motor = data[8];
+      const cal_motor_num = data[9];
+      const direction = data[10];
+      const cal_pwm = data[11];
+      const encoderDelta = data[12];
+      const movementDetected = data[13];
+      const motorLockStatus = data[14];
+      const cal_fwd = [data[15], data[16], data[17], data[18]];
+      const cal_rev = [data[19], data[20], data[21], data[22]];
+      const failureReason = data.toString('utf8', 23, 55).replace(/\0/g, '').trim();
+      
+      latestCalibrationStatus = {
+        protoMajor,
+        protoMinor,
+        sessionId,
+        isSimulation: isSimulation === 1,
+        cal_state,
+        cal_motor,
+        cal_motor_num,
+        direction,
+        cal_pwm,
+        encoderDelta,
+        movementDetected: movementDetected === 1,
+        motorLockStatus: motorLockStatus === 1,
+        cal_fwd,
+        cal_rev,
+        failureReason
+      };
+      
+      broadcast({
+        type: 'calibration_status',
+        ...latestCalibrationStatus
+      });
+    } else if (data.length >= 11) {
+      const cal_state = data[0];
+      const cal_motor = data[1];
+      const cal_pwm = data[2];
+      const cal_fwd = [data[3], data[4], data[5], data[6]];
+      const cal_rev = [data[7], data[8], data[9], data[10]];
+      
+      latestCalibrationStatus = {
+        protoMajor: 1,
+        protoMinor: 0,
+        sessionId: 0,
+        isSimulation: false,
+        cal_state,
+        cal_motor,
+        cal_motor_num: cal_motor + 1,
+        direction: 0,
+        cal_pwm,
+        encoderDelta: 0,
+        movementDetected: false,
+        motorLockStatus: false,
+        cal_fwd,
+        cal_rev,
+        failureReason: ''
+      };
+      
+      broadcast({
+        type: 'calibration_status',
+        ...latestCalibrationStatus
+      });
+    }
+
+  } else if (extType === TYPE_MAINTENANCE) {
+    if (data.length >= 15) {
+      const protoMajor = data[0];
+      const protoMinor = data[1];
+      const sessionId = data.readUInt32LE(2);
+      const active = data[6];
+      const activeMotor = data[7];
+      const activeMotorNum = data[8];
+      const direction = data[9];
+      const testPwm = data[10];
+      const actualPwm = data[11];
+      const deadmanActive = data[12];
+      const remainingTimeout = data.readUInt16LE(13);
+      
+      latestMaintenanceStatus = {
+        protoMajor,
+        protoMinor,
+        sessionId,
+        active: active === 1,
+        activeMotor,
+        activeMotorNum,
+        direction,
+        testPwm,
+        actualPwm,
+        deadmanActive: deadmanActive === 1,
+        remainingTimeout
+      };
+      
+      broadcast({
+        type: 'maintenance_status',
+        ...latestMaintenanceStatus
+      });
+    }
+
+  } else if (extType === TYPE_FIRMWARE_INFO) {
+    if (data.length >= 112) {
+      const name = data.toString('utf8', 0, 32).replace(/\0/g, '').trim();
+      const version = data.toString('utf8', 32, 48).replace(/\0/g, '').trim();
+      const protocol = data.toString('utf8', 48, 56).replace(/\0/g, '').trim();
+      const commit = data.toString('utf8', 56, 72).replace(/\0/g, '').trim();
+      const build = data.toString('utf8', 72, 96).replace(/\0/g, '').trim();
+      const target = data.toString('utf8', 96, 112).replace(/\0/g, '').trim();
+      
+      console.log(`[Firmware Info] Name: ${name}, Ver: ${version}, Protocol: ${protocol}, Source: ${commit}, Build: ${build}, Target: ${target}`);
+      broadcast({
+        type: 'firmware_info',
+        name,
+        version,
+        protocol,
+        commit,
+        build,
+        target
+      });
+    }
+
+  } else if (extType === TYPE_LOOP_TIMING) {
+    if (data.length >= 24) {
+      const lastDurationUs = data.readUInt32LE(0);
+      const minDurationUs = data.readUInt32LE(4);
+      const avgDurationUs = data.readUInt32LE(8);
+      const maxDurationUs = data.readUInt32LE(12);
+      const missedDeadlines = data.readUInt32LE(16);
+      const totalIterations = data.readUInt32LE(20);
+      
+      broadcast({
+        type: 'loop_timing',
+        lastDurationUs,
+        minDurationUs,
+        avgDurationUs,
+        maxDurationUs,
+        missedDeadlines,
+        totalIterations
+      });
+    }
+
+  } else if (extType === TYPE_FAULT_REPORT) {
+    if (data.length >= 4) {
+      const faultFlags = data.readUInt32LE(0);
+      broadcast({ type: 'fault_report', faultFlags });
+    }
+
+  } else if (extType === TYPE_NORMAL_DRIVE_STATUS) {
+    if (data.length >= 24) {
+      const armed = data[0] === 1;
+      const mode = data[1];
+      const source = data[2];
+      const cmdAge = data.readUInt32LE(3);
+      const reqLinear = data.readFloatLE(7);
+      const reqAngular = data.readFloatLE(11);
+      const limLinear = data.readFloatLE(15);
+      const limAngular = data.readFloatLE(19);
+      const lockStatus = data[23] === 1;
+      
+      latestNormalDriveStatus = {
+        armed,
+        mode,
+        source,
+        cmdAge,
+        reqLinear,
+        reqAngular,
+        limLinear,
+        limAngular,
+        lockStatus
+      };
+      
+      broadcast({
+        type: 'normal_drive_status',
+        ...latestNormalDriveStatus
+      });
     }
 
   } else {
@@ -652,13 +1062,54 @@ wss.on('connection', (ws) => {
           }
           break;
 
+        case 'joystick':
+          if (msg.x !== undefined && msg.y !== undefined) {
+            const x = Math.max(-1.0, Math.min(1.0, parseFloat(msg.x || 0)));
+            const y = Math.max(-1.0, Math.min(1.0, parseFloat(msg.y || 0)));
+            
+            const isGamepad = (msg.deadman !== undefined);
+            if (isGamepad) {
+              deadmanPressed = msg.deadman === true;
+            } else {
+              deadmanPressed = true; // Implicit deadman true for keyboard/browser
+            }
+            
+            let throttle = Math.abs(y) < 0.10 ? 0 : y;
+            let turn = Math.abs(x) < 0.10 ? 0 : x;
+
+            if (backtracking && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
+              abortBacktrack('Joystick override');
+            }
+
+            if (deadmanPressed) {
+              if (!backtracking) {
+                const MAX_LINEAR = floorTesting ? 0.15 : 0.80;
+                const MAX_ANGULAR = floorTesting ? 0.80 : 3.00;
+                
+                targetLinear = throttle * MAX_LINEAR;
+                targetAngular = -turn * MAX_ANGULAR;
+                cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
+                startDriveKeepaliveLoop();
+              }
+            } else {
+              if (backtracking) {
+                abortBacktrack('Deadman released');
+              } else if (cmdSource === 'GAMEPAD') {
+                targetLinear = 0.0;
+                targetAngular = 0.0;
+                cmdSource = 'NONE';
+              }
+            }
+          }
+          break;
+
         case 'change_port':
           if (msg.port) {
             initSerial(msg.port);
           }
           break;
 
-        case 'raw_command':
+        case 'raw_command': {
           // Allow sending pre-built hex string as raw bytes for testing
           // Format: "ff fc 05 02 64 00 6b"
           if (msg.command) {
@@ -670,14 +1121,16 @@ wss.on('connection', (ws) => {
             }
           }
           break;
+        }
 
-        case 'beep':
+        case 'beep': {
           // { type: 'beep', duration: 500 }
           const onTime = msg.duration || 100;
           const lo = onTime & 0xFF;
           const hi = (onTime >> 8) & 0xFF;
           sendBinaryCommand(FUNC_BEEP, [lo, hi]);
           break;
+        }
 
         case 'run_motor_proof':
           runMotorProofSequence();
@@ -739,14 +1192,339 @@ app.get('/api/motor', (req, res) => {
 
 app.get('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
-  const pkt = buildPacket(FUNC_MOTOR, [0, 0, 0, 0]);
-  const hex = Array.from(pkt).map(b => b.toString(16).padStart(2, '0')).join(' ');
   if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_EMERGENCY_STOP, [1]);
     serialPort.write(pkt);
-    broadcast({ type: 'raw_serial_out', data: `[HTTP /api/stop] ${hex}` });
+    const hex = Array.from(pkt).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    broadcast({ type: 'raw_serial_out', data: `[HTTP /api/stop] EMERGENCY_STOP ${hex}` });
     res.json({ ok: true, packet: hex });
   } else {
-    res.status(503).json({ ok: false, error: 'Serial port not open', packet: hex });
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/calibration/simulate/start', (req, res) => {
+  const { safetyAck } = req.body;
+  if (!safetyAck) {
+    return res.status(400).json({ ok: false, error: 'Safety acknowledgement is required to start calibration simulation.' });
+  }
+  
+  if (serialPort && serialPort.isOpen) {
+    const sessId = Math.floor(Math.random() * 1000000) + 1;
+    const payload = [
+      1, // safetyAck = true
+      1, // simFlag = true
+      sessId & 0xFF,
+      (sessId >> 8) & 0xFF,
+      (sessId >> 16) & 0xFF,
+      (sessId >> 24) & 0xFF
+    ];
+    const pkt = buildPacket(FUNC_START_CALIBRATE, payload);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/calibration/simulate/start] session: ${sessId}` });
+    res.json({ ok: true, message: 'Calibration simulation started.', sessionId: sessId });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/calibration/real/start', (req, res) => {
+  const { safetyAck } = req.body;
+  if (!safetyAck) {
+    return res.status(400).json({ ok: false, error: 'Safety acknowledgement is required to start real calibration.' });
+  }
+  
+  if (serialPort && serialPort.isOpen) {
+    const sessId = Math.floor(Math.random() * 1000000) + 1;
+    const payload = [
+      1, // safetyAck = true
+      0, // simFlag = false (Real!)
+      sessId & 0xFF,
+      (sessId >> 8) & 0xFF,
+      (sessId >> 16) & 0xFF,
+      (sessId >> 24) & 0xFF
+    ];
+    const pkt = buildPacket(FUNC_START_CALIBRATE, payload);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/calibration/real/start] session: ${sessId}` });
+    res.json({ ok: true, message: 'Real calibration started.', sessionId: sessId });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/calibration/abort', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_CANCEL_CALIBRATE, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/calibration/abort] cancel command sent` });
+    res.json({ ok: true, message: 'Calibration aborted successfully.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/calibration/status', (req, res) => {
+  if (latestCalibrationStatus) {
+    res.json({ ok: true, status: latestCalibrationStatus });
+  } else {
+    res.json({ ok: true, status: { cal_state: 0, message: 'No calibration run.' } });
+  }
+});
+
+app.post('/api/maintenance/enter', (req, res) => {
+  const { safetyAck, motorIndex, sessionId } = req.body;
+  if (!safetyAck) {
+    return res.status(400).json({ ok: false, error: 'Safety acknowledgement is required to enter maintenance mode.' });
+  }
+  if (motorIndex === undefined || motorIndex < 0 || motorIndex >= 4) {
+    return res.status(400).json({ ok: false, error: 'Invalid motor index (must be 0-3).' });
+  }
+  const sessId = sessionId || (Math.floor(Math.random() * 1000000) + 1);
+  
+  if (serialPort && serialPort.isOpen) {
+    const payload = [
+      safetyAck ? 1 : 0,
+      motorIndex,
+      sessId & 0xFF,
+      (sessId >> 8) & 0xFF,
+      (sessId >> 16) & 0xFF,
+      (sessId >> 24) & 0xFF
+    ];
+    const pkt = buildPacket(FUNC_ENTER_MAINTENANCE, payload);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/maintenance/enter] motor: ${motorIndex}, session: ${sessId}` });
+    res.json({ ok: true, message: 'Maintenance mode enter command sent.', sessionId: sessId });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/maintenance/set_output', (req, res) => {
+  const { sessionId, motorIndex, direction, output, enable } = req.body;
+  if (sessionId === undefined || motorIndex === undefined || direction === undefined || output === undefined) {
+    return res.status(400).json({ ok: false, error: 'Missing required parameters.' });
+  }
+  
+  if (serialPort && serialPort.isOpen) {
+    const payload = [
+      1, // version major
+      0, // sequence number placeholder
+      sessionId & 0xFF,
+      (sessionId >> 8) & 0xFF,
+      (sessionId >> 16) & 0xFF,
+      (sessionId >> 24) & 0xFF,
+      motorIndex,
+      direction,
+      output & 0xFF,
+      enable ? 1 : 0
+    ];
+    const pkt = buildPacket(FUNC_MAINTENANCE_SET_OUTPUT, payload);
+    serialPort.write(pkt);
+    res.json({ ok: true, message: 'Maintenance output updated.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/maintenance/exit', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_EXIT_MAINTENANCE, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/maintenance/exit]` });
+    res.json({ ok: true, message: 'Maintenance mode exit command sent.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/maintenance/status', (req, res) => {
+  if (latestMaintenanceStatus) {
+    res.json({ ok: true, status: latestMaintenanceStatus });
+  } else {
+    res.json({ ok: true, status: { active: false } });
+  }
+});
+
+app.post('/api/calibration/verify_ready', (req, res) => {
+  const { motorDirectionsVerified, encoderDirectionsVerified, maintenanceStopVerified, emergencyStopVerified, deadmanVerified } = req.body;
+  if (serialPort && serialPort.isOpen) {
+    const payload = [
+      motorDirectionsVerified ? 1 : 0,
+      encoderDirectionsVerified ? 1 : 0,
+      maintenanceStopVerified ? 1 : 0,
+      emergencyStopVerified ? 1 : 0,
+      deadmanVerified ? 1 : 0
+    ];
+    const pkt = buildPacket(0x2A, payload);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/calibration/verify_ready]` });
+    res.json({ ok: true, message: 'Readiness verification command sent.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/calibration/results', (req, res) => {
+  if (latestCalibrationStatus) {
+    res.json({
+      ok: true,
+      simulated: latestCalibrationStatus.isSimulation,
+      saved_to_nvs: latestCalibrationStatus.isSimulation ? false : (latestCalibrationStatus.cal_state === 5),
+      forward: latestCalibrationStatus.cal_fwd,
+      reverse: latestCalibrationStatus.cal_rev,
+      sessionId: latestCalibrationStatus.sessionId
+    });
+  } else {
+    res.status(404).json({ ok: false, error: 'No calibration results available.' });
+  }
+});
+
+app.get('/api/faults/clear', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP /api/faults/clear] clear command sent` });
+    res.json({ ok: true, message: 'Faults clear command sent over Serial.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/firmware', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_GET_FIRMWARE_INFO, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP /api/firmware] get info command sent` });
+    res.json({ ok: true, message: 'Firmware info query requested over Serial.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/drive/arm', (req, res) => {
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm] arm command sent` });
+    res.json({ ok: true, message: 'Normal drive arm command sent.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.post('/api/drive/disarm', (req, res) => {
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/disarm] disarm command sent` });
+    res.json({ ok: true, message: 'Normal drive disarm command sent.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/drive/status', (req, res) => {
+  res.json({
+    ok: true,
+    status: latestNormalDriveStatus || { armed: false },
+    floorTesting,
+    backtracking,
+    recording,
+    pathLength: recordedPath.length,
+    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist }
+  });
+});
+
+app.post('/api/drive/limits', (req, res) => {
+  floorTesting = req.body.floorTesting !== false;
+  console.log(`[Drive] Limits configured: floorTesting=${floorTesting}`);
+  broadcast({ type: 'limits_status', floorTesting });
+  res.json({ ok: true, floorTesting });
+});
+
+app.post('/api/path/record/start', (req, res) => {
+  recording = true;
+  console.log('[Path] Path recording started.');
+  broadcast({ type: 'path_status', recording, pathLength: recordedPath.length });
+  res.json({ ok: true, recording });
+});
+
+app.post('/api/path/record/stop', (req, res) => {
+  recording = false;
+  console.log('[Path] Path recording stopped.');
+  broadcast({ type: 'path_status', recording, pathLength: recordedPath.length });
+  res.json({ ok: true, recording });
+});
+
+app.post('/api/path/record/clear', (req, res) => {
+  recording = false;
+  recordedPath = [];
+  console.log('[Path] Recorded path cleared.');
+  broadcast({ type: 'path_status', recording, pathLength: 0 });
+  res.json({ ok: true, recording, pathLength: 0 });
+});
+
+app.post('/api/path/backtrack/start', (req, res) => {
+  if (backtracking) {
+    return res.status(400).json({ ok: false, error: 'Backtracking already in progress' });
+  }
+  if (recordedPath.length === 0) {
+    return res.status(400).json({ ok: false, error: 'No recorded path available' });
+  }
+
+  const limLinear = latestNormalDriveStatus ? latestNormalDriveStatus.limLinear : 0;
+  const limAngular = latestNormalDriveStatus ? latestNormalDriveStatus.limAngular : 0;
+  
+  if (Math.abs(limLinear) > 0.02 || Math.abs(limAngular) > 0.02) {
+    return res.status(400).json({ ok: false, error: 'Rover must be stationary to start backtracking' });
+  }
+
+  if (!deadmanPressed) {
+    return res.status(400).json({ ok: false, error: 'Deadman must be held to start backtracking' });
+  }
+
+  backtracking = true;
+  backtrackIndex = recordedPath.length - 1;
+  cmdSource = 'BACKTRACK';
+  startDriveKeepaliveLoop();
+  
+  console.log(`[Backtrack] Started backtracking with ${recordedPath.length} waypoints.`);
+  broadcast({ type: 'backtrack_status', status: 'started', total: recordedPath.length });
+  res.json({ ok: true, message: 'Backtracking started.' });
+});
+
+app.post('/api/path/backtrack/stop', (req, res) => {
+  if (!backtracking) {
+    return res.status(400).json({ ok: false, error: 'Backtracking not in progress' });
+  }
+  abortBacktrack('Operator stop request');
+  res.json({ ok: true, message: 'Backtracking aborted.' });
+});
+
+function abortBacktrack(reason) {
+  if (!backtracking) return;
+  backtracking = false;
+  backtrackIndex = -1;
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  console.log(`[Backtrack] Aborted: ${reason}`);
+  broadcast({ type: 'backtrack_status', status: 'aborted', reason });
+}
+
+app.get('/api/timing/reset', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_RESET_TIMING_STATS, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP /api/timing/reset] stats reset command sent` });
+    res.json({ ok: true, message: 'Loop timing stats reset request sent over Serial.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
 });
 

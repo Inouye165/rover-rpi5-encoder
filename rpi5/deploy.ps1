@@ -21,7 +21,7 @@ if (-not (Test-Path "rover.tar.gz")) {
 }
 
 Write-Host "=== Transferring archive to RPi5 ($IP) ===" -ForegroundColor Cyan
-Write-Host "Password is: Sanmina-1 (if prompted)" -ForegroundColor Yellow
+Write-Host "Please enter your SSH password if prompted." -ForegroundColor Yellow
 scp rover.tar.gz "${USER}@${IP}:/home/${USER}/"
 
 if ($LASTEXITCODE -ne 0) {
@@ -30,7 +30,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "=== Unpacking and running setup on RPi5 ===" -ForegroundColor Cyan
-Write-Host "Enter 'Sanmina-1' when prompted for SSH password or sudo password." -ForegroundColor Yellow
+Write-Host "Please enter your SSH/sudo password when prompted." -ForegroundColor Yellow
 
 # SSH into RPi5, unpack archive, make setup.sh executable and run it
 ssh -tt "${USER}@${IP}" "mkdir -p ${DEST_DIR} && tar -xzf ~/rover.tar.gz -C ${DEST_DIR} && cd ${DEST_DIR} && chmod +x rpi5/setup.sh && sudo ./rpi5/setup.sh"

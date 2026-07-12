@@ -70,7 +70,7 @@ Open a PowerShell terminal in the project directory on your Windows dev machine 
 ```powershell
 .\rpi5\deploy.ps1
 ```
-*This script will pack the project files (excluding dependencies/cache), transfer them to the Pi at `10.0.0.247`, and execute the remote installation script using the password `Sanmina-1`.*
+*This script will pack the project files (excluding dependencies/cache), transfer them to the Pi at `10.0.0.247`, and execute the remote installation script using your local SSH password.*
 
 ### 3. Remote Setup Details
 The script automatically executes `rpi5/setup.sh` on the RPi5, which:
