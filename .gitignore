@@ -22,3 +22,11 @@ Thumbs.db
 .vscode/
 .idea/
 deploy_yahboom.py
+
+# Private rover documentation and credentials
+private/
+
+# Local databases and archives
+calibration_db.json
+rover.tar.gz
+
