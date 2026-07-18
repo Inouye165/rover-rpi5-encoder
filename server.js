@@ -3,7 +3,6 @@ const http = require('http');
 const WebSocket = require('ws');
 const { SerialPort } = require('serialport');
 const path = require('path');
-const httpGet = require('http');  // used for I2C sidecar polling
 const fs = require('fs');
 const { spawn } = require('child_process');
 
@@ -54,8 +53,8 @@ if (!COM_PORT) {
 const BAUD_RATE = parseInt(process.env.BAUD_RATE) || 115200;
 
 // ────────────────────────────────────────────────────────────
-// Rosmaster Binary Protocol Constants
-// Source: github.com/mattzi/rosmasterx3-golang / Yahboom SDK
+// Expansion Board Binary Protocol Constants
+// Source: Compatible Serial Protocol SDK
 // ────────────────────────────────────────────────────────────
 const HEAD       = 0xFF;         // Frame start byte (both directions)
 const DEVICE_ID  = 0xFC;         // Host → Board device ID
@@ -122,10 +121,10 @@ let autoTestStep = 0; // 0=idle, 1..6 (3 cycles of fwd/bwd)
 let autoTestStartTicks = [0, 0, 0, 0];
 let currentAutoTestSpeedLimit = 25; // Dynamic cycle limits: 25, 45, 65
 let autoTestRunLogs = []; // Array of telemetry logs for data exports
-const TICKS_PER_REV = 1980.0;
+const TICKS_PER_REV = 937.2;
 const KP_POSITION = 0.15;
 const MIN_POSITION_SPEED = 20;
-const MAX_POSITION_SPEED = 35;
+const MAX_POSITION_SPEED = 60;
 
 // Phase 4 Coordinated Normal Drive State
 let latestNormalDriveStatus = null;
@@ -216,13 +215,7 @@ loadCalibrationDb();
 let imuYaw = 0;
 let lastImuTimestamp = null;
 
-// ────────────────────────────────────────────────────────────
-// I2C Sidecar State
-// Polls yahboom_i2c.py running on localhost:3001
-// ────────────────────────────────────────────────────────────
-const I2C_SIDECAR_URL  = process.env.I2C_SIDECAR_URL || 'http://127.0.0.1:3001/data';
-const I2C_POLL_MS      = 250;   // poll every 250 ms
-let   i2cSidecarOnline = false;
+
 
 // ────────────────────────────────────────────────────────────
 // LiDAR Sidecar Configuration
@@ -648,6 +641,38 @@ function parseTelemetryPacket(extType, data) {
       currentTicks[1] = m2;
       currentTicks[2] = m3;
       currentTicks[3] = m4;
+
+      // Position Control Loop (run every time we get an encoder telemetry update)
+      let motorSpeeds = [0, 0, 0, 0];
+      let anyPositionMode = false;
+      
+      for (let i = 0; i < 4; i++) {
+        if (positionMode[i]) {
+          anyPositionMode = true;
+          const error = targetPosition[i] - currentTicks[i];
+          if (Math.abs(error) <= 3) {
+            positionMode[i] = false;
+            console.log(`[Position Control] Motor ${i + 1} reached target.`);
+          } else {
+            let speed = error * KP_POSITION;
+            if (speed > 0) {
+              if (speed < MIN_POSITION_SPEED) speed = MIN_POSITION_SPEED;
+              if (speed > MAX_POSITION_SPEED) speed = MAX_POSITION_SPEED;
+            } else {
+              if (speed > -MIN_POSITION_SPEED) speed = -MIN_POSITION_SPEED;
+              if (speed < -MAX_POSITION_SPEED) speed = -MAX_POSITION_SPEED;
+            }
+            motorSpeeds[i] = Math.round(speed);
+          }
+        }
+      }
+      
+      if (anyPositionMode) {
+        // Send motor speeds to serial
+        sendMotorSpeeds(motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
+      }
+
+      encoderPacketCount += 1;
 
       // ── Skid-Steer Encoder Odometry Integration ──
       const now = Date.now();
@@ -1518,6 +1543,7 @@ app.get('/api/motor', (req, res) => {
 
 app.get('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
+
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_EMERGENCY_STOP, [1]);
     serialPort.write(pkt);
@@ -1528,6 +1554,7 @@ app.get('/api/stop', (req, res) => {
     res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
 });
+
 
 app.post('/api/calibration/simulate/start', (req, res) => {
   const { safetyAck } = req.body;
@@ -1973,6 +2000,7 @@ app.get('/api/autotest/abort', (req, res) => {
   res.json({ ok: true, message: 'Auto-test sequence aborted.' });
 });
 
+
 app.get('/api/turn', (req, res) => {
   if (req.query.stop || req.query.estop) {
     positionMode = [false, false, false, false];
@@ -2007,22 +2035,7 @@ app.get('/api/beep', (req, res) => {
   }
 });
 
-// GET /api/i2c – proxy the latest I2C sidecar reading as JSON
-app.get('/api/i2c', (req, res) => {
-  httpGet.get(I2C_SIDECAR_URL, (sRes) => {
-    let body = '';
-    sRes.on('data', (c) => { body += c; });
-    sRes.on('end', () => {
-      try {
-        res.json(JSON.parse(body));
-      } catch (e) {
-        res.status(502).json({ ok: false, error: 'Bad response from I2C sidecar' });
-      }
-    });
-  }).on('error', (err) => {
-    res.status(503).json({ ok: false, error: `I2C sidecar not reachable: ${err.message}` });
-  });
-});
+
 
 // GET /api/lidar/status - proxy the latest LiDAR status from the python sidecar
 app.get('/api/lidar/status', (req, res) => {
@@ -2251,63 +2264,13 @@ app.get('/api/camera/status', (req, res) => {
 });
 
 
-// ────────────────────────────────────────────────────────────
-// I2C Sidecar Poller
-// Fetches JSON from yahboom_i2c.py and re-broadcasts it to all
-// WebSocket clients so the dashboard gets real I2C sensor data.
-// ────────────────────────────────────────────────────────────
-function startI2CSidecarPoller() {
-  setInterval(() => {
-    httpGet.get(I2C_SIDECAR_URL, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const d = JSON.parse(body);
-          if (!i2cSidecarOnline) {
-            i2cSidecarOnline = true;
-            console.log('[I2C] Sidecar online at', I2C_SIDECAR_URL);
-            broadcast({ type: 'status', key: 'i2c', val: 'connected' });
-          }
-          if (d.ok) {
-            // Broadcast battery update from I2C
-            if (d.battery !== null) {
-              broadcast({ type: 'battery', voltage: d.battery, source: 'i2c' });
-            }
-            // Broadcast IMU update from I2C
-            broadcast({
-              type:  'imu',
-              source: 'i2c',
-              yaw:   d.yaw,
-              pitch: d.pitch,
-              roll:  d.roll,
-              ax: d.ax, ay: d.ay, az: d.az,
-              gx: d.gx, gy: d.gy, gz: d.gz,
-              mx: d.mx, my: d.my, mz: d.mz,
-            });
-          } else {
-            broadcast({ type: 'status', key: 'i2c', val: 'error', error: d.error || 'unknown' });
-          }
-        } catch (e) {
-          // Malformed response – ignore
-        }
-      });
-    }).on('error', (err) => {
-      if (i2cSidecarOnline) {
-        i2cSidecarOnline = false;
-        console.warn('[I2C] Sidecar offline:', err.message);
-        broadcast({ type: 'status', key: 'i2c', val: 'disconnected', error: err.message });
-      }
-    });
-  }, I2C_POLL_MS);
-}
+
 
 // ────────────────────────────────────────────────────────────
 // Startup
 // ────────────────────────────────────────────────────────────
 loadCalibrationDb();
 startMotorKeepaliveLoop();
-startI2CSidecarPoller();
 initSerial(COM_PORT);
 
 server.listen(PORT, () => {

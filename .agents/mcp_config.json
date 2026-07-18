@@ -1,0 +1,19 @@
+{
+    "mcpServers": {
+        "notebooklm-rover-brain": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@google/notebooklm-mcp-server"
+            ],
+            "env": {
+                "NOTEBOOKLM_WORKSPACE_ID": "47cd0e2c-e7b0-4d3f-8181-9fc74c608a53",
+                "NOTEBOOKLM_REQUIRE_DIRECTIVES": "true"
+            }
+        }
+    },
+    "agentSettings": {
+        "contextIsolation": true,
+        "primaryRole": "Embedded Systems Engineer"
+    }
+}

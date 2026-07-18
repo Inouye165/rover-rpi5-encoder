@@ -1,0 +1,30 @@
+ARCHIVED ROVER CONFIGURATIONS
+
+(Do not use these pinouts for current code generation unless explicitly asked)
+
+================================================================================
+RETIRED HARDWARE REVISION: YAHBOOM_STM32_TELEMETRY_V1 (Retired: July 7, 2026)
+================================================================================
+Reason for Archive: Yahboom STM32 board was fried and retired. System was updated to
+use only the Maker ESP32 Pro Board.
+
+Details:
+The secondary IMU & battery telemetry subsystem ran on a Yahboom STM32 ROS Expansion Board,
+communicating with the RPi5 over I2C Bus 1 at address 0x34. A Python sidecar script
+(yahboom_i2c.py) polled this device and served its telemetry locally on port 3001.
+
+Pin Mappings & Interfaces used in this revision:
+- I2C Bus: 1 (RPi5 SDA/SCL pins)
+- Device Address: 0x34
+- Registers read:
+  * 0x00 - Battery voltage (2 bytes LE unsigned, raw / 10.0 = Volts)
+  * 0x08 - Gyroscope X (2 bytes LE int16, /3754.9 = rad/s)
+  * 0x0A - Gyroscope Y (2 bytes LE int16, /3754.9 = rad/s)
+  * 0x0C - Gyroscope Z (2 bytes LE int16, /3754.9 = rad/s)
+  * 0x10 - Accelerometer X (2 bytes LE int16, /1000.0 = g)
+  * 0x12 - Accelerometer Y (2 bytes LE int16, /1000.0 = g)
+  * 0x14 - Accelerometer Z (2 bytes LE int16, /1000.0 = g)
+  * 0x18 - Magnetometer X (2 bytes LE int16, raw LSB)
+  * 0x1A - Magnetometer Y (2 bytes LE int16, raw LSB)
+  * 0x1C - Magnetometer Z (2 bytes LE int16, raw LSB)
+================================================================================

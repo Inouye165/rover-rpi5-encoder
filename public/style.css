@@ -1280,6 +1280,7 @@ body {
   box-shadow: 0 0 10px rgba(255, 0, 85, 0.4);
 }
 
+
 /* RPi Camera Panel Styling */
 .camera-panel {
   margin-top: 5px;
@@ -1518,5 +1519,6 @@ body {
 #lidar-sample-table-body td {
   padding: 8px 15px;
 }
+
 
 

@@ -21,7 +21,7 @@ echo "=== RPi5 Rover Server Setup ==="
 echo "User: $REAL_USER"
 echo "Working directory: $WORKING_DIR"
 
-# 1. Enable I2C interface on Raspberry Pi if not already enabled
+# 1. Enable I2C interface on Raspberry Pi if not already enabled (kept for general hardware support)
 echo "Enabling I2C interface..."
 if command -v raspi-config &> /dev/null; then
   raspi-config nonint do_i2c 0
@@ -44,8 +44,9 @@ apt-get update -y
 echo "Installing required system packages..."
 apt-get install -y python3-smbus python3-pip i2c-tools curl build-essential
 
-echo "Installing python rplidar package..."
-pip3 install --break-system-packages rplidar-roboticia
+# Install python dependencies for LiDAR C1
+echo "Installing python rplidarc1 package..."
+pip3 install --break-system-packages rplidarc1
 
 # Install Node.js if not present
 if ! command -v node &> /dev/null; then
@@ -95,34 +96,43 @@ echo "Installing Node dependencies..."
 # Run npm install as the original user to ensure file ownership is correct
 sudo -u $REAL_USER npm install --prefix "$WORKING_DIR"
 
-# 6. Install Systemd Services and Udev Rules
+# 6. Install Systemd Services and Udev Rules for RPLIDAR
 echo "Installing udev rules for RPLIDAR..."
 cp rpi5/99-rover-lidar.rules /etc/udev/rules.d/99-rover-lidar.rules
 udevadm control --reload-rules
 udevadm trigger
 echo "Udev rules configured successfully."
 
+# Stop and Disable legacy I2C Sidecar if active (following origin/main cleanup)
+echo "Cleaning up any legacy rover-i2c service..."
+if systemctl is-active --quiet rover-i2c.service 2>/dev/null; then
+  echo "Stopping active rover-i2c service..."
+  systemctl stop rover-i2c.service || true
+fi
+if systemctl is-enabled --quiet rover-i2c.service 2>/dev/null; then
+  echo "Disabling rover-i2c service..."
+  systemctl disable rover-i2c.service || true
+fi
+if [ -f /etc/systemd/system/rover-i2c.service ]; then
+  rm -f /etc/systemd/system/rover-i2c.service
+fi
+
+# 7. Install Systemd Services
 echo "Installing systemd services..."
 
 # Replace templates with actual paths
 SED_EXPR="s|{{USER}}|$REAL_USER|g; s|{{WORKING_DIR}}|$WORKING_DIR|g; s|{{NODE_PATH}}|$NODE_PATH|g; s|{{PYTHON_PATH}}|$PYTHON_PATH|g"
 
 sed "$SED_EXPR" rpi5/rover-server.service.template > /etc/systemd/system/rover-server.service
-sed "$SED_EXPR" rpi5/rover-i2c.service.template > /etc/systemd/system/rover-i2c.service
 sed "$SED_EXPR" rpi5/rover-lidar.service.template > /etc/systemd/system/rover-lidar.service
 
 # Set correct permissions
 chmod 644 /etc/systemd/system/rover-server.service
-chmod 644 /etc/systemd/system/rover-i2c.service
 chmod 644 /etc/systemd/system/rover-lidar.service
 
 # Reload systemd and enable/start services
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
-
-echo "Enabling and starting rover-i2c service..."
-systemctl enable rover-i2c.service
-systemctl restart rover-i2c.service
 
 echo "Enabling and starting rover-lidar service..."
 systemctl enable rover-lidar.service
@@ -137,12 +147,9 @@ systemctl restart rover-server.service
 echo "=== Setup Completed Successfully ==="
 echo "Status of rover-server:"
 systemctl status rover-server.service --no-pager || true
-echo "Status of rover-i2c:"
-systemctl status rover-i2c.service --no-pager || true
 echo "Status of rover-lidar:"
 systemctl status rover-lidar.service --no-pager || true
 
 echo "You can view logs using:"
 echo "  journalctl -u rover-server -f"
-echo "  journalctl -u rover-i2c -f"
 echo "  journalctl -u rover-lidar -f"
