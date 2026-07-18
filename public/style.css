@@ -1486,3 +1486,37 @@ body {
   height: 160px;
 }
 
+/* ────────────────────────────────────────────────────────────
+   LiDAR Tab Styles
+   ──────────────────────────────────────────────────────────── */
+#tab-lidar .dashboard-grid {
+  grid-template-columns: repeat(12, 1fr);
+}
+
+@media (max-width: 1000px) {
+  #tab-lidar .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  #tab-lidar .dashboard-grid > section {
+    grid-column: span 1 !important;
+  }
+}
+
+#lidar-polar-canvas {
+  image-rendering: auto;
+}
+
+#lidar-sample-table-body tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s ease;
+}
+
+#lidar-sample-table-body tr:hover {
+  background: rgba(0, 242, 254, 0.05);
+}
+
+#lidar-sample-table-body td {
+  padding: 8px 15px;
+}
+
+

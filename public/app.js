@@ -13,6 +13,22 @@ let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 
 let testTimer = null;
 let testStartOdom = null;
 let calibrationDatabase = null;
+let straightDriveLocked = false;
+let straightTestOffsets = null;
+let autoTestActive = false;
+let autotestStartTicks = [0, 0, 0, 0];
+let autotestInitialized = false;
+let visualX = 0.0;
+let visualY = 0.0;
+let visualYaw = 0.0;
+let prevLeftTicks = 0.0;
+let prevRightTicks = 0.0;
+let clientTestLogs = [];
+let currentVisualStep = 0;
+let lastProcessedStep = 0;
+let currentLegMaxDrift = 0;
+let currentLegMaxMismatch = 0;
+let legResults = {};
 
 // Odom and IMU State variables
 let m1Speed = 0, m2Speed = 0, m3Speed = 0, m4Speed = 0;
@@ -292,6 +308,31 @@ function handleServerMessage(msg) {
         document.getElementById('test-ticks-m4').textContent = msg.m4 - encoderOffsets[3];
       }
 
+      // Initialize straight drive test offsets if not yet set
+      if (straightTestOffsets === null) {
+        straightTestOffsets = [msg.m1, msg.m2, msg.m3, msg.m4];
+      }
+
+      // Calculate relative ticks for straight test area
+      const relM1 = msg.m1 - straightTestOffsets[0];
+      const relM2 = msg.m2 - straightTestOffsets[1];
+      const relM3 = msg.m3 - straightTestOffsets[2];
+      const relM4 = msg.m4 - straightTestOffsets[3];
+
+      // Update straight drive test area ticks
+      const straightTicksM1 = document.getElementById('straight-ticks-m1');
+      if (straightTicksM1) {
+        straightTicksM1.textContent = relM1;
+        document.getElementById('straight-ticks-m2').textContent = relM2;
+        document.getElementById('straight-ticks-m3').textContent = relM3;
+        document.getElementById('straight-ticks-m4').textContent = relM4;
+      }
+
+      // Update symmetry metrics
+      if (typeof updateStraightDriveMetrics === 'function') {
+        updateStraightDriveMetrics(relM1, relM2, relM3, relM4);
+      }
+
       // Calculate RPM and MPH
       const now = Date.now();
       if (prevEncoderTime !== null) {
@@ -331,6 +372,21 @@ function handleServerMessage(msg) {
             document.getElementById('test-rpm-m2').textContent = rpm2.toFixed(1);
             document.getElementById('test-rpm-m3').textContent = rpm3.toFixed(1);
             document.getElementById('test-rpm-m4').textContent = rpm4.toFixed(1);
+          }
+
+          // Update straight test area RPM
+          const straightRpmM1 = document.getElementById('straight-rpm-m1');
+          if (straightRpmM1) {
+            straightRpmM1.textContent = rpm1.toFixed(1);
+            document.getElementById('straight-rpm-m2').textContent = rpm2.toFixed(1);
+            document.getElementById('straight-rpm-m3').textContent = rpm3.toFixed(1);
+            document.getElementById('straight-rpm-m4').textContent = rpm4.toFixed(1);
+          }
+
+          if (autoTestActive && autotestInitialized) {
+            const rpmLeft = (rpm1 + rpm3) / 2.0;
+            const rpmRight = (rpm2 + rpm4) / 2.0;
+            updateAutoTestVisualizer(msg.m1, msg.m2, msg.m3, msg.m4, rpmLeft, rpmRight);
           }
         }
       }
@@ -546,6 +602,115 @@ function handleServerMessage(msg) {
     case 'cockpit_info': {
       const elCockpit = document.getElementById('ui-cockpit-deployed');
       if (elCockpit) elCockpit.innerText = msg.deployed;
+      break;
+    }
+
+    case 'autotest_status': {
+      const btnAutoTest = document.getElementById('btn-auto-test');
+      const modal = document.getElementById('autotest-modal');
+      const stepEl = document.getElementById('autotest-modal-step');
+      const statusEl = document.getElementById('autotest-status-text');
+      const copyBtn = document.getElementById('btn-autotest-modal-copy');
+      const abortBtn = document.getElementById('btn-autotest-modal-abort');
+      const closeBtn = document.getElementById('btn-autotest-modal-close');
+      const panelCopyBtn = document.getElementById('btn-copy-test-data');
+
+      currentVisualStep = msg.step;
+
+      // Track final leg metrics when step changes
+      if (msg.step !== lastProcessedStep) {
+        if (lastProcessedStep > 0) {
+          legResults[lastProcessedStep] = {
+            maxDrift: currentLegMaxDrift,
+            maxMismatch: currentLegMaxMismatch
+          };
+          renderStageResultsTable();
+        }
+        currentLegMaxDrift = 0;
+        currentLegMaxMismatch = 0;
+        lastProcessedStep = msg.step;
+      }
+
+      if (msg.step > 0) {
+        autoTestActive = true;
+        
+        let stageName = "Slow";
+        let repeatNum = 1;
+        if (msg.step <= 6) {
+          stageName = "Slow";
+          repeatNum = Math.ceil(msg.step / 2);
+        } else if (msg.step <= 12) {
+          stageName = "Medium";
+          repeatNum = Math.ceil((msg.step - 6) / 2);
+        } else {
+          stageName = "Fast";
+          repeatNum = Math.ceil((msg.step - 12) / 2);
+        }
+        
+        const legType = (msg.step % 2 === 1) ? 'FWD' : 'BWD';
+        
+        if (btnAutoTest) {
+          btnAutoTest.textContent = `Abort [${stageName} ${legType} ${repeatNum}/3]`;
+          btnAutoTest.style.background = 'linear-gradient(135deg, #ff0055, #ff0000)';
+          btnAutoTest.style.boxShadow = '0 0 10px rgba(255, 0, 85, 0.4)';
+        }
+
+        if (!autotestInitialized) {
+          const rawM1 = parseInt(document.getElementById('telemetry-total-m1').textContent || 0);
+          const rawM2 = parseInt(document.getElementById('telemetry-total-m2').textContent || 0);
+          const rawM3 = parseInt(document.getElementById('telemetry-total-m3').textContent || 0);
+          const rawM4 = parseInt(document.getElementById('telemetry-total-m4').textContent || 0);
+          autotestStartTicks = [rawM1, rawM2, rawM3, rawM4];
+          autotestInitialized = true;
+          
+          // Reset integration trackers and logs
+          visualX = 0.0;
+          visualY = 0.0;
+          visualYaw = 0.0;
+          prevLeftTicks = 0.0;
+          prevRightTicks = 0.0;
+          clientTestLogs = [];
+          
+          // Reset tracking maxes and results table!
+          legResults = {};
+          currentLegMaxDrift = 0;
+          currentLegMaxMismatch = 0;
+          lastProcessedStep = msg.step;
+          renderStageResultsTable();
+        }
+
+        if (copyBtn) copyBtn.style.display = 'none';
+        if (closeBtn) closeBtn.style.display = 'none';
+        if (abortBtn) abortBtn.style.display = 'inline-block';
+        if (panelCopyBtn) panelCopyBtn.style.display = 'none';
+        if (modal) modal.style.display = 'flex';
+        if (stepEl) stepEl.textContent = `${stageName} [${legType} ${repeatNum}/3] (Leg ${msg.step}/18)`;
+        if (statusEl) statusEl.textContent = `Status: ${msg.msg || 'Running test...'}`;
+      } else {
+        autoTestActive = false;
+        autotestInitialized = false;
+
+        if (btnAutoTest) {
+          btnAutoTest.textContent = 'Auto Test (3ft)';
+          btnAutoTest.style.background = 'linear-gradient(135deg, #00f0ff, #0072ff)';
+          btnAutoTest.style.boxShadow = '0 0 10px rgba(0, 240, 255, 0.3)';
+        }
+
+        if (statusEl) statusEl.textContent = `Status: ${msg.msg || 'Test finished.'}`;
+        if (copyBtn) copyBtn.style.display = 'inline-block';
+        if (closeBtn) closeBtn.style.display = 'inline-block';
+        if (abortBtn) abortBtn.style.display = 'none';
+        if (panelCopyBtn && clientTestLogs.length > 0) {
+          panelCopyBtn.style.display = 'inline-block';
+        }
+
+        if (modal && msg.msg && msg.msg.includes('ABORTED')) {
+          modal.style.display = 'none';
+        }
+      }
+      if (msg.msg) {
+        logSystem(`[Auto Test] ${msg.msg}`);
+      }
       break;
     }
 
@@ -877,6 +1042,20 @@ function handleServerMessage(msg) {
       if (elCurWidth) elCurWidth.innerText = `${(msg.separation * 1000).toFixed(1)} mm`;
       break;
 
+    case 'rover_trims_sync': {
+      const inputL = document.getElementById('input-left-trim');
+      const inputR = document.getElementById('input-right-trim');
+      const labelActive = document.getElementById('label-active-trims');
+      
+      if (inputL) inputL.value = msg.leftTrim.toFixed(3);
+      if (inputR) inputR.value = msg.rightTrim.toFixed(3);
+      if (labelActive) {
+        labelActive.textContent = `L: ${msg.leftTrim.toFixed(3)} | R: ${msg.rightTrim.toFixed(3)}`;
+        labelActive.style.color = '#10b981';
+      }
+      break;
+    }
+
     case 'calibration_db':
       updateCalibrationDbUI(msg.db);
       break;
@@ -1004,6 +1183,12 @@ function driveRover(direction) {
     return;
   }
 
+  // Intercept steering command if straight drive mode is locked
+  if (straightDriveLocked && ['left', 'right', 'spin_left', 'spin_right'].includes(direction)) {
+    logSystem("⚠️ Steering command ignored: Straight Drive Lock is active.");
+    return;
+  }
+
   let x = 0.0;
   let y = 0.0;
 
@@ -1055,6 +1240,11 @@ document.addEventListener('keydown', (e) => {
   }
 
   if (document.activeElement.tagName === 'INPUT') return; // Skip if user typing
+
+  // Ignore steering keys when straight drive is locked
+  if (straightDriveLocked && ['a', 'arrowleft', 'd', 'arrowright', 'q', 'e'].includes(e.key.toLowerCase())) {
+    return;
+  }
 
   switch (e.key.toLowerCase()) {
     case 'w':
@@ -1497,6 +1687,126 @@ if (btnResetEncodersUI) {
   });
 }
 
+// Straight Drive Test Event Listeners & Logic
+const btnResetStraight = document.getElementById('btn-reset-straight-test');
+if (btnResetStraight) {
+  btnResetStraight.addEventListener('click', () => {
+    const rawM1 = parseInt(document.getElementById('telemetry-total-m1').textContent || 0);
+    const rawM2 = parseInt(document.getElementById('telemetry-total-m2').textContent || 0);
+    const rawM3 = parseInt(document.getElementById('telemetry-total-m3').textContent || 0);
+    const rawM4 = parseInt(document.getElementById('telemetry-total-m4').textContent || 0);
+
+    straightTestOffsets = [rawM1, rawM2, rawM3, rawM4];
+
+    document.getElementById('straight-ticks-m1').textContent = 0;
+    document.getElementById('straight-ticks-m2').textContent = 0;
+    document.getElementById('straight-ticks-m3').textContent = 0;
+    document.getElementById('straight-ticks-m4').textContent = 0;
+
+    updateStraightDriveMetrics(0, 0, 0, 0);
+    logSystem("Zeroed out straight-drive test encoder reference offsets.");
+  });
+}
+
+const btnAutoTest = document.getElementById('btn-auto-test');
+if (btnAutoTest) {
+  btnAutoTest.addEventListener('click', () => {
+    const url = autoTestActive ? '/api/autotest/abort' : '/api/autotest/start';
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        if (data.ok) {
+          logSystem(`Auto-test command successfully sent: ${url}`);
+        } else {
+          logSystem(`Error sending auto-test command: ${data.error || 'unknown error'}`);
+        }
+      })
+      .catch(err => {
+        logSystem(`Network error sending auto-test command: ${err.message}`);
+      });
+  });
+}
+
+const straightToggle = document.getElementById('straight-drive-lock-toggle');
+const straightBadge = document.getElementById('straight-lock-badge');
+if (straightToggle) {
+  straightToggle.addEventListener('change', function() {
+    straightDriveLocked = this.checked;
+    if (straightBadge) {
+      if (straightDriveLocked) {
+        straightBadge.textContent = 'Steering Locked';
+        straightBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+        straightBadge.style.color = '#fca5a5';
+        straightBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        logSystem("🔒 Straight Drive Lock ENABLED. Steering controls are now disabled.");
+      } else {
+        straightBadge.textContent = 'Steering Unlocked';
+        straightBadge.style.background = 'rgba(107, 114, 128, 0.2)';
+        straightBadge.style.color = '#9ca3af';
+        straightBadge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
+        logSystem("🔓 Straight Drive Lock DISABLED. Steering controls are active.");
+      }
+    }
+  });
+}
+
+function updateStraightDriveMetrics(relM1, relM2, relM3, relM4) {
+  const avgLeft = Math.round((relM1 + relM3) / 2);
+  const avgRight = Math.round((relM2 + relM4) / 2);
+  const delta = avgLeft - avgRight;
+
+  const avgLeftEl = document.getElementById('straight-avg-left');
+  const avgRightEl = document.getElementById('straight-avg-right');
+  const deltaEl = document.getElementById('straight-mismatch-delta');
+  const statusEl = document.getElementById('straight-symmetry-status');
+  const barEl = document.getElementById('straight-balance-bar');
+  const cursorEl = document.getElementById('straight-balance-cursor');
+
+  if (avgLeftEl) avgLeftEl.textContent = avgLeft;
+  if (avgRightEl) avgRightEl.textContent = avgRight;
+  if (deltaEl) {
+    deltaEl.textContent = (delta >= 0 ? '+' : '') + delta;
+    deltaEl.style.color = Math.abs(delta) === 0 ? '#39ff14' : (Math.abs(delta) < 15 ? '#ffb700' : '#ff0055');
+  }
+
+  if (statusEl) {
+    if (avgLeft === 0 && avgRight === 0) {
+      statusEl.textContent = 'READY (0 ticks)';
+      statusEl.style.color = 'var(--text-muted)';
+    } else {
+      const absDelta = Math.abs(delta);
+      if (absDelta <= 4) {
+        statusEl.textContent = 'PERFECTLY BALANCED';
+        statusEl.style.color = '#39ff14';
+      } else if (absDelta <= 15) {
+        statusEl.textContent = 'OK (MINOR DRIFT)';
+        statusEl.style.color = '#ffb700';
+      } else {
+        statusEl.textContent = 'MISMATCH DETECTED';
+        statusEl.style.color = '#ff0055';
+      }
+    }
+  }
+
+  if (cursorEl && barEl) {
+    const maxBarDelta = 100;
+    const rawPct = (delta / maxBarDelta) * 50;
+    const clampedPct = Math.max(-50, Math.min(50, rawPct));
+
+    cursorEl.style.left = (50 + clampedPct) + '%';
+
+    if (clampedPct >= 0) {
+      barEl.style.left = '50%';
+      barEl.style.width = clampedPct + '%';
+      barEl.style.background = 'linear-gradient(90deg, var(--cyan-glow), var(--green-glow))';
+    } else {
+      barEl.style.left = (50 + clampedPct) + '%';
+      barEl.style.width = Math.abs(clampedPct) + '%';
+      barEl.style.background = 'linear-gradient(90deg, var(--red-glow), var(--cyan-glow))';
+    }
+  }
+}
+
 // Position turning triggers
 document.querySelectorAll('.btn-turn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -1736,6 +2046,11 @@ function startGamepadLoop() {
     if (Math.abs(throttle) < 0.10) throttle = 0;
     if (Math.abs(turn) < 0.10) turn = 0;
 
+    // Override steering if straight drive lock is active
+    if (straightDriveLocked) {
+      turn = 0;
+    }
+
     // Deadman button (Right Bumper = 5, Right Trigger = 7)
     const deadmanPressed = gp.buttons[5].pressed || gp.buttons[7].pressed;
     gpDeadmanPressed = deadmanPressed;
@@ -1756,7 +2071,8 @@ function startGamepadLoop() {
     }
     const liveAngular = document.getElementById('gp-live-angular');
     if (liveAngular) {
-      liveAngular.innerText = turn.toFixed(2);
+      liveAngular.innerText = straightDriveLocked ? `${turn.toFixed(2)} (LOCKED)` : turn.toFixed(2);
+      liveAngular.style.color = straightDriveLocked ? '#ef4444' : '';
     }
     const liveStop = document.getElementById('gp-live-stop');
     if (liveStop) {
@@ -2844,6 +3160,735 @@ function updateCalibrationDbUI(db) {
     }
   }
 }
+
+// Auto Test Live Tracker Visualizer Functions
+function updateAutoTestVisualizer(m1, m2, m3, m4, rpmLeft, rpmRight) {
+  if (!autotestInitialized) return;
+  
+  const relM1 = m1 - autotestStartTicks[0];
+  const relM2 = m2 - autotestStartTicks[1];
+  const relM3 = m3 - autotestStartTicks[2];
+  const relM4 = m4 - autotestStartTicks[3];
+  
+  const leftTicks = (relM1 + relM3) / 2.0;
+  const rightTicks = (relM2 + relM4) / 2.0;
+  
+  // Calculate delta since last frame (guarding first frame jumps)
+  let dLeftTicks = 0.0;
+  let dRightTicks = 0.0;
+  if (prevLeftTicks !== 0.0 || prevRightTicks !== 0.0) {
+    dLeftTicks = leftTicks - prevLeftTicks;
+    dRightTicks = rightTicks - prevRightTicks;
+  }
+  prevLeftTicks = leftTicks;
+  prevRightTicks = rightTicks;
+  
+  const TICKS_PER_REV = 1980.0;
+  const WHEEL_RADIUS = 0.0325; // 32.5mm
+  const TRACK_WIDTH = 0.160; // 160mm
+  
+  const dLeftM = (dLeftTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS);
+  const dRightM = (dRightTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS);
+  const dCenterM = (dLeftM + dRightM) / 2.0;
+  const dYaw = (dRightM - dLeftM) / TRACK_WIDTH;
+  
+  // Integrate position
+  visualYaw += dYaw;
+  visualX += dCenterM * Math.sin(visualYaw);
+  visualY += dCenterM * Math.cos(visualYaw);
+  
+  // Calculate feet and mismatch
+  const feet = visualY * 3.28084;
+  const mismatchValue = leftTicks - rightTicks;
+  const pct = leftTicks !== 0 ? ((mismatchValue / leftTicks) * 100).toFixed(1) : '0.0';
+  
+  const driftMm = visualX * 1000.0;
+  const driftIn = driftMm / 25.4;
+  
+  // Track maximum values for this leg
+  const driftAbs = Math.abs(driftMm);
+  const mismatchAbs = Math.abs(parseFloat(pct));
+  if (driftAbs > currentLegMaxDrift) currentLegMaxDrift = driftAbs;
+  if (mismatchAbs > currentLegMaxMismatch) currentLegMaxMismatch = mismatchAbs;
+  
+  // Log telemetry entry (including forward distance in feet for 2D path tracking)
+  clientTestLogs.push({
+    timestamp: Date.now(),
+    step: currentVisualStep,
+    m1,
+    m2,
+    m3,
+    m4,
+    distanceFt: feet,
+    driftMm,
+    mismatchPct: pct
+  });
+  
+  const distEl = document.getElementById('autotest-metrics-dist');
+  if (distEl) distEl.textContent = `${feet.toFixed(2)} ft`;
+  
+  const mismatchEl = document.getElementById('autotest-metrics-mismatch');
+  if (mismatchEl) {
+    mismatchEl.textContent = `${pct}%`;
+    const pctNum = parseFloat(pct);
+    if (Math.abs(leftTicks) > 200 && Math.abs(pctNum) > 5.0) {
+      mismatchEl.style.color = '#ef4444'; // Red Fail
+    } else if (Math.abs(leftTicks) > 200 && Math.abs(pctNum) > 2.0) {
+      mismatchEl.style.color = '#f59e0b'; // Yellow Warning
+    } else {
+      mismatchEl.style.color = '#10b981'; // Green Pass
+    }
+  }
+  
+  const driftEl = document.getElementById('autotest-metrics-drift');
+  if (driftEl) {
+    driftEl.textContent = `${Math.round(driftMm)} mm (${driftIn.toFixed(1)}")`;
+    const absDrift = Math.abs(driftMm);
+    if (absDrift <= 25.0) {
+      driftEl.style.color = '#10b981'; // Green Pass
+    } else if (absDrift <= 75.0) {
+      driftEl.style.color = '#f59e0b'; // Yellow Warning
+    } else {
+      driftEl.style.color = '#ef4444'; // Red Fail
+    }
+  }
+  
+  const speedsEl = document.getElementById('autotest-metrics-speeds');
+  if (speedsEl) {
+    speedsEl.textContent = `L: ${Math.round(rpmLeft)} | R: ${Math.round(rpmRight)} RPM`;
+  }
+  
+  const roverSprite = document.getElementById('autotest-rover-sprite');
+  if (roverSprite) {
+    const maxFeet = 3.0;
+    const verticalRange = 247.0;
+    
+    const clampedFeet = Math.max(0.0, Math.min(maxFeet, feet));
+    const bottomPx = 30 + (clampedFeet / maxFeet) * verticalRange;
+    roverSprite.style.bottom = `${bottomPx}px`;
+    
+    // Scale visual drift representation: a physical drift of 457.2mm (1.5 feet)
+    // corresponds exactly to the 15% visual track width offset from center line.
+    const visualShiftPercent = (driftMm / 457.2) * 15.0;
+    const clampedShiftPercent = Math.max(-25.0, Math.min(25.0, visualShiftPercent));
+    roverSprite.style.left = `calc(50% + ${clampedShiftPercent.toFixed(2)}%)`;
+    
+    const yawDeg = visualYaw * (180.0 / Math.PI);
+    roverSprite.style.transform = `translate(-50%, 0px) rotate(${yawDeg.toFixed(1)}deg)`;
+  }
+}
+
+const btnModalAbort = document.getElementById('btn-autotest-modal-abort');
+if (btnModalAbort) {
+  btnModalAbort.addEventListener('click', () => {
+    fetch('/api/autotest/abort')
+      .then(res => res.json())
+      .then(data => {
+        if (data.ok) {
+          logSystem("Auto-test aborted via visual tracker.");
+        }
+      });
+  });
+}
+
+const btnModalCopy = document.getElementById('btn-autotest-modal-copy');
+if (btnModalCopy) {
+  btnModalCopy.addEventListener('click', () => {
+    if (clientTestLogs.length === 0) {
+      alert("No data recorded to copy.");
+      return;
+    }
+    
+    let text = "Timestamp\tStep\tM1\tM2\tM3\tM4\tDrift_mm\tMismatch_%\n";
+    clientTestLogs.forEach(entry => {
+      const timeStr = new Date(entry.timestamp).toISOString().split('T')[1].slice(0, -1); // e.g. "15:10:32.450"
+      text += `${timeStr}\t${entry.step}\t${entry.m1}\t${entry.m2}\t${entry.m3}\t${entry.m4}\t${entry.driftMm.toFixed(1)}\t${entry.mismatchPct}%\n`;
+    });
+    
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        const statusEl = document.getElementById('autotest-status-text');
+        if (statusEl) {
+          const orig = statusEl.textContent;
+          statusEl.textContent = "Data copied to clipboard successfully!";
+          btnModalCopy.textContent = "Copied!";
+          btnModalCopy.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+          setTimeout(() => { 
+            statusEl.textContent = orig; 
+            btnModalCopy.textContent = "Copy Data";
+          }, 3000);
+        }
+      })
+      .catch(err => {
+        alert("Failed to copy data: " + err.message);
+      });
+  });
+}
+
+const btnModalClose = document.getElementById('btn-autotest-modal-close');
+if (btnModalClose) {
+  btnModalClose.addEventListener('click', () => {
+    const modal = document.getElementById('autotest-modal');
+    if (modal) modal.style.display = 'none';
+  });
+}
+
+const btnPanelCopy = document.getElementById('btn-copy-test-data');
+if (btnPanelCopy) {
+  btnPanelCopy.addEventListener('click', () => {
+    if (clientTestLogs.length === 0) {
+      alert("No data recorded to copy.");
+      return;
+    }
+    
+    let text = "Timestamp\tStep\tM1\tM2\tM3\tM4\tDistance_ft\tDrift_mm\tMismatch_%\n";
+    clientTestLogs.forEach(entry => {
+      const timeStr = new Date(entry.timestamp).toISOString().split('T')[1].slice(0, -1);
+      const distVal = entry.distanceFt !== undefined ? entry.distanceFt.toFixed(2) : '0.00';
+      text += `${timeStr}\t${entry.step}\t${entry.m1}\t${entry.m2}\t${entry.m3}\t${entry.m4}\t${distVal}\t${entry.driftMm.toFixed(1)}\t${entry.mismatchPct}%\n`;
+    });
+    
+    copyToClipboard(text)
+      .then(() => {
+        btnPanelCopy.textContent = "Copied!";
+        btnPanelCopy.style.background = 'rgba(16, 185, 129, 0.3)';
+        setTimeout(() => {
+          btnPanelCopy.textContent = "Copy Last Test Data";
+          btnPanelCopy.style.background = 'rgba(16, 185, 129, 0.15)';
+        }, 3000);
+      })
+      .catch(err => {
+        alert("Failed to copy data: " + err.message);
+      });
+  });
+}
+
+// Wire up the Save Trim button
+const btnSaveTrims = document.getElementById('btn-save-trims');
+if (btnSaveTrims) {
+  btnSaveTrims.addEventListener('click', () => {
+    const leftTrim = parseFloat(document.getElementById('input-left-trim').value || 1.0);
+    const rightTrim = parseFloat(document.getElementById('input-right-trim').value || 1.0);
+    
+    if (isNaN(leftTrim) || isNaN(rightTrim)) {
+      alert("Please enter valid numeric trim values.");
+      return;
+    }
+    
+    // Send save command to server
+    wsSend({
+      type: 'save_trims',
+      leftTrim,
+      rightTrim
+    });
+    
+    const labelActive = document.getElementById('label-active-trims');
+    if (labelActive) {
+      labelActive.textContent = "Saving to ESP32...";
+      labelActive.style.color = '#f59e0b';
+    }
+  });
+}
+
+// Copy button in the visualizer modal using copyToClipboard
+const btnModalCopyOverride = document.getElementById('btn-autotest-modal-copy');
+if (btnModalCopyOverride) {
+  btnModalCopyOverride.onclick = () => {
+    if (clientTestLogs.length === 0) {
+      alert("No data recorded to copy.");
+      return;
+    }
+    
+    let text = "Timestamp\tStep\tM1\tM2\tM3\tM4\tDistance_ft\tDrift_mm\tMismatch_%\n";
+    clientTestLogs.forEach(entry => {
+      const timeStr = new Date(entry.timestamp).toISOString().split('T')[1].slice(0, -1);
+      const distVal = entry.distanceFt !== undefined ? entry.distanceFt.toFixed(2) : '0.00';
+      text += `${timeStr}\t${entry.step}\t${entry.m1}\t${entry.m2}\t${entry.m3}\t${entry.m4}\t${distVal}\t${entry.driftMm.toFixed(1)}\t${entry.mismatchPct}%\n`;
+    });
+    
+    copyToClipboard(text)
+      .then(() => {
+        const statusEl = document.getElementById('autotest-status-text');
+        if (statusEl) {
+          const orig = statusEl.textContent;
+          statusEl.textContent = "Data copied to clipboard successfully!";
+          btnModalCopyOverride.textContent = "Copied!";
+          btnModalCopyOverride.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+          setTimeout(() => { 
+            statusEl.textContent = orig; 
+            btnModalCopyOverride.textContent = "Copy Data";
+          }, 3000);
+        }
+      })
+      .catch(err => {
+        alert("Failed to copy data: " + err.message);
+      });
+  };
+}
+
+// Render stage results table inside modal
+function renderStageResultsTable() {
+  const container = document.getElementById('autotest-stage-results-list');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  const stages = [
+    { name: "Slow (25% speed)", minStep: 1, maxStep: 6 },
+    { name: "Medium (45% speed)", minStep: 7, maxStep: 12 },
+    { name: "Fast (65% speed)", minStep: 13, maxStep: 18 }
+  ];
+  
+  stages.forEach(stage => {
+    let maxDrift = 0;
+    let maxMismatch = 0;
+    let runsCount = 0;
+    
+    for (let s = stage.minStep; s <= stage.maxStep; s++) {
+      if (legResults[s]) {
+        runsCount++;
+        if (legResults[s].maxDrift > maxDrift) maxDrift = legResults[s].maxDrift;
+        if (legResults[s].maxMismatch > maxMismatch) maxMismatch = legResults[s].maxMismatch;
+      }
+    }
+    
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.justifyContent = 'space-between';
+    row.style.padding = '4px 0';
+    row.style.borderBottom = '1px solid rgba(255,255,255,0.02)';
+    
+    let driftText = "Waiting...";
+    let mismatchText = "Waiting...";
+    
+    if (runsCount > 0) {
+      driftText = `${Math.round(maxDrift)} mm`;
+      mismatchText = `${maxMismatch.toFixed(1)}%`;
+      
+      const driftColor = maxDrift <= 25.0 ? '#10b981' : (maxDrift <= 75.0 ? '#f59e0b' : '#ef4444');
+      const mismatchColor = maxMismatch <= 5.0 ? '#10b981' : '#ef4444';
+      
+      row.innerHTML = `
+        <span style="font-weight: bold; color: rgba(255,255,255,0.8);">${stage.name} (${runsCount}/6 legs)</span>
+        <span style="text-align: right; width: 100px; color: ${driftColor}; font-weight: bold;">${driftText}</span>
+        <span style="text-align: right; width: 120px; color: ${mismatchColor}; font-weight: bold;">${mismatchText}</span>
+      `;
+    } else {
+      row.innerHTML = `
+        <span style="color: rgba(255,255,255,0.3);">${stage.name}</span>
+        <span style="text-align: right; width: 100px; color: rgba(255,255,255,0.3);">${driftText}</span>
+        <span style="text-align: right; width: 120px; color: rgba(255,255,255,0.3);">${mismatchText}</span>
+      `;
+    }
+    container.appendChild(row);
+  });
+}
+
+// Fallback clipboard function that works in non-secure HTTP contexts
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  } else {
+    return new Promise((resolve, reject) => {
+      try {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.top = "0";
+        textArea.style.left = "0";
+        textArea.style.position = "fixed";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const successful = document.execCommand("copy");
+        document.body.removeChild(textArea);
+        if (successful) resolve();
+        else reject(new Error("document.execCommand copy failed"));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// LiDAR Monitor Controller
+// ────────────────────────────────────────────────────────────
+let lidarPollTimer = null;
+let lastScanTime = 0;
+let lidarActiveTab = 'tab-dashboard';
+
+function startLidarPolling() {
+  if (lidarPollTimer) return;
+  pollLidar();
+  lidarPollTimer = setInterval(pollLidar, 150); // poll at ~6.6Hz
+  console.log('[LiDAR UI] Polling started.');
+}
+
+function stopLidarPolling() {
+  if (lidarPollTimer) {
+    clearInterval(lidarPollTimer);
+    lidarPollTimer = null;
+    console.log('[LiDAR UI] Polling stopped.');
+  }
+}
+
+async function pollLidar() {
+  try {
+    const [statusRes, scanRes] = await Promise.all([
+      fetch('/api/lidar/status').then(r => r.json()),
+      fetch('/api/lidar/scan').then(r => {
+        if (r.status === 200) return r.json();
+        return null;
+      }).catch(() => null)
+    ]);
+    
+    updateLidarStatus(statusRes);
+    if (scanRes) {
+      updateLidarScan(scanRes);
+    }
+  } catch (err) {
+    console.error('Error polling LiDAR:', err);
+    const stateEl = document.getElementById('lidar-val-state');
+    if (stateEl) {
+      stateEl.textContent = 'ERROR';
+      stateEl.style.color = '#ef4444';
+    }
+  }
+}
+
+function updateLidarStatus(status) {
+  if (!status) return;
+  
+  const stateEl = document.getElementById('lidar-val-state');
+  const deviceEl = document.getElementById('lidar-val-device');
+  const modelEl = document.getElementById('lidar-val-model');
+  const healthEl = document.getElementById('lidar-val-health');
+  const fwEl = document.getElementById('lidar-val-firmware');
+  const hwEl = document.getElementById('lidar-val-hardware');
+  const hzEl = document.getElementById('lidar-val-scanHz');
+  const ppsEl = document.getElementById('lidar-val-pps');
+  const countEl = document.getElementById('lidar-val-pointCount');
+  const uptimeEl = document.getElementById('lidar-val-uptime');
+  const reconnectsEl = document.getElementById('lidar-val-reconnects');
+  
+  const errCard = document.getElementById('lidar-error-card');
+  const errEl = document.getElementById('lidar-val-error');
+  
+  if (stateEl) {
+    stateEl.textContent = status.state ? status.state.toUpperCase() : 'DISCONNECTED';
+    if (status.state === 'scanning') {
+      stateEl.style.color = '#10b981'; // Green
+    } else if (status.state === 'connecting' || status.state === 'initializing') {
+      stateEl.style.color = '#f59e0b'; // Amber
+    } else {
+      stateEl.style.color = '#ef4444'; // Red
+    }
+  }
+  
+  if (deviceEl) deviceEl.textContent = status.device || '--';
+  if (modelEl) modelEl.textContent = status.model || '--';
+  
+  if (healthEl) {
+    healthEl.textContent = status.health || '--';
+    if (status.health === 'OK' || status.health === '0') {
+      healthEl.style.color = '#10b981';
+    } else if (status.health !== 'unknown') {
+      healthEl.style.color = '#ef4444';
+    }
+  }
+  
+  if (fwEl) fwEl.textContent = status.firmwareVersion || '--';
+  if (hwEl) hwEl.textContent = status.hardwareVersion || '--';
+  if (hzEl) hzEl.textContent = status.scanHz !== undefined && status.scanHz !== null ? `${status.scanHz.toFixed(1)} Hz` : '-- Hz';
+  if (ppsEl) ppsEl.textContent = status.pointsPerSecond !== undefined && status.pointsPerSecond !== null ? `${status.pointsPerSecond} pts/s` : '-- pts/s';
+  if (countEl) countEl.textContent = status.latestScanPointCount !== undefined && status.latestScanPointCount !== null ? status.latestScanPointCount : '--';
+  
+  if (uptimeEl) {
+    if (status.serviceUptimeSeconds !== undefined && status.serviceUptimeSeconds !== null) {
+      const s = status.serviceUptimeSeconds;
+      const hrs = Math.floor(s / 3600);
+      const mins = Math.floor((s % 3600) / 60);
+      const secs = s % 60;
+      uptimeEl.textContent = `${hrs}h ${mins}m ${secs}s`;
+    } else {
+      uptimeEl.textContent = '--';
+    }
+  }
+  
+  if (reconnectsEl) reconnectsEl.textContent = status.reconnectCount !== undefined && status.reconnectCount !== null ? status.reconnectCount : '--';
+  
+  if (errCard && errEl) {
+    if (status.lastError) {
+      errCard.style.display = 'block';
+      errEl.textContent = status.lastError;
+    } else {
+      errCard.style.display = 'none';
+    }
+  }
+}
+
+function updateLidarScan(scan) {
+  if (!scan || !scan.timestamp) return;
+  lastScanTime = Date.now();
+  
+  const overlay = document.getElementById('lidar-stale-overlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+  
+  // Render Canvas Polar Display
+  drawPolarScan(scan);
+  
+  // Render Table Samples
+  renderSampleTable(scan);
+}
+
+function drawPolarScan(scan) {
+  const canvas = document.getElementById('lidar-polar-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  
+  // Set dimensions correctly (support responsive canvas scaling)
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  
+  const width = rect.width;
+  const height = rect.height;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(centerX, centerY) - 30; // padding for labels
+  
+  // Get selected range (in mm)
+  const rangeSelect = document.getElementById('lidar-range-select');
+  const maxRangeMm = rangeSelect ? parseFloat(rangeSelect.value) : 3000.0;
+  
+  const scale = radius / maxRangeMm; // pixels per mm
+  
+  // Clear background
+  ctx.fillStyle = '#0b0f19';
+  ctx.fillRect(0, 0, width, height);
+  
+  // Draw concentric rings and grid inside the clip circle
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+  ctx.clip();
+  
+  // Draw concentric rings
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.08)';
+  ctx.lineWidth = 1;
+  
+  const ringStep = maxRangeMm / 3;
+  for (let rMm = ringStep; rMm <= maxRangeMm; rMm += ringStep) {
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, rMm * scale, 0, 2 * Math.PI);
+    ctx.stroke();
+    
+    // Draw label
+    ctx.fillStyle = 'rgba(0, 242, 254, 0.4)';
+    ctx.font = '9px "JetBrains Mono", monospace';
+    ctx.fillText(`${(rMm / 1000.0).toFixed(1)}m`, centerX + 5, centerY - rMm * scale - 2);
+  }
+  
+  // Draw crosshair axes
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.15)';
+  ctx.beginPath();
+  // Vertical line
+  ctx.moveTo(centerX, centerY - radius);
+  ctx.lineTo(centerX, centerY + radius);
+  // Horizontal line
+  ctx.moveTo(centerX - radius, centerY);
+  ctx.lineTo(centerX + radius, centerY);
+  ctx.stroke();
+  
+  ctx.restore();
+  
+  // Draw outer degree circle border
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+  ctx.stroke();
+  
+  // Draw orientation labels
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.font = 'bold 10px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  ctx.fillText('0° FRONT', centerX, centerY - radius - 15);
+  ctx.fillText('180° REAR', centerX, centerY + radius + 15);
+  
+  ctx.textAlign = 'left';
+  ctx.fillText('90° RIGHT', centerX + radius + 8, centerY);
+  
+  ctx.textAlign = 'right';
+  ctx.fillText('270° LEFT', centerX - radius - 8, centerY);
+  
+  // Draw the points
+  if (scan.points && scan.points.length > 0) {
+    let closestPt = null;
+    let minDistance = Infinity;
+    
+    for (const pt of scan.points) {
+      if (pt.distanceMm < minDistance) {
+        minDistance = pt.distanceMm;
+        closestPt = pt;
+      }
+      
+      // Calculate coordinates (0° is vertical-up, clockwise angles)
+      const angleRad = (pt.angleDeg - 90) * Math.PI / 180;
+      const x = centerX + pt.distanceMm * scale * Math.cos(angleRad);
+      const y = centerY + pt.distanceMm * scale * Math.sin(angleRad);
+      
+      // Only draw if point lies within the visual range circle
+      const distFromCenter = pt.distanceMm * scale;
+      if (distFromCenter <= radius) {
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+        ctx.shadowBlur = 4;
+        
+        if (pt.distanceMm < 500) {
+          ctx.fillStyle = '#ff0055'; // Danger red
+          ctx.shadowColor = 'rgba(255,0,85,0.6)';
+        } else {
+          ctx.fillStyle = '#00f2fe'; // Cyan glow
+          ctx.shadowColor = 'rgba(0,242,254,0.6)';
+        }
+        ctx.fill();
+      }
+    }
+    
+    // Draw HUD text on canvas (top left and bottom left)
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Scan Hz: ${scan.scanHz.toFixed(1)} Hz`, 15, 20);
+    ctx.fillText(`Points: ${scan.pointCount}`, 15, 35);
+    
+    if (closestPt) {
+      ctx.fillStyle = closestPt.distanceMm < 500 ? '#ff0055' : '#00f2fe';
+      ctx.fillText(`Closest: ${closestPt.distanceMm}mm @ ${closestPt.angleDeg.toFixed(1)}°`, 15, height - 20);
+    }
+  } else {
+    // No points
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.font = '12px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('NO DATA', centerX, centerY + 30);
+  }
+  
+  // Draw a top-down rover icon in the center
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  
+  // Draw wheels
+  ctx.fillStyle = '#1e293b';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.lineWidth = 1;
+  const wheelW = 5;
+  const wheelH = 10;
+  // LF
+  ctx.fillRect(-12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
+  ctx.strokeRect(-12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
+  // RF
+  ctx.fillRect(12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
+  ctx.strokeRect(12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
+  // LR
+  ctx.fillRect(-12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  ctx.strokeRect(-12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  // RR
+  ctx.fillRect(12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  ctx.strokeRect(12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  
+  // Draw body
+  ctx.fillStyle = '#0f172a';
+  ctx.strokeStyle = '#00f2fe';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(-10, -12, 20, 24, 3);
+  ctx.fill();
+  ctx.stroke();
+  
+  // Draw front red nose indicator
+  ctx.fillStyle = '#ff0055';
+  ctx.beginPath();
+  ctx.moveTo(-4, -12);
+  ctx.lineTo(4, -12);
+  ctx.lineTo(0, -17);
+  ctx.closePath();
+  ctx.fill();
+  
+  ctx.restore();
+}
+
+function renderSampleTable(scan) {
+  const tbody = document.getElementById('lidar-sample-table-body');
+  if (!tbody) return;
+  
+  if (!scan.points || scan.points.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No valid points available.</td></tr>`;
+    return;
+  }
+  
+  const numSamples = 15;
+  const step = Math.max(1, Math.floor(scan.points.length / numSamples));
+  let html = '';
+  
+  for (let i = 0; i < scan.points.length; i += step) {
+    const pt = scan.points[i];
+    const distM = (pt.distanceMm / 1000.0).toFixed(3);
+    
+    // Warn if close
+    const distColor = pt.distanceMm < 500 ? '#ff0055' : 'inherit';
+    const distWeight = pt.distanceMm < 500 ? 'bold' : 'normal';
+    
+    html += `
+      <tr style="color: ${distColor}; font-weight: ${distWeight};">
+        <td style="padding: 8px 15px;">#${i + 1}</td>
+        <td style="padding: 8px 15px;">${pt.angleDeg.toFixed(2)}°</td>
+        <td style="padding: 8px 15px;">${pt.distanceMm} mm</td>
+        <td style="padding: 8px 15px;">${distM} m</td>
+        <td style="padding: 8px 15px;">${pt.quality}</td>
+      </tr>
+    `;
+  }
+  tbody.innerHTML = html;
+}
+
+// Watch tab switching for LiDAR polling triggers
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    lidarActiveTab = btn.dataset.tab;
+    if (lidarActiveTab === 'tab-lidar') {
+      startLidarPolling();
+    } else {
+      stopLidarPolling();
+    }
+  });
+});
+
+// Watch visibility changes
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopLidarPolling();
+  } else if (lidarActiveTab === 'tab-lidar') {
+    startLidarPolling();
+  }
+});
+
+// Periodic stale data check
+setInterval(() => {
+  const overlay = document.getElementById('lidar-stale-overlay');
+  if (overlay && lidarActiveTab === 'tab-lidar' && lastScanTime > 0 && Date.now() - lastScanTime > 1000) {
+    overlay.style.display = 'flex';
+  }
+}, 500);
+
 
 
 

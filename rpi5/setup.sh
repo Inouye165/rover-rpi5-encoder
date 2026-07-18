@@ -44,6 +44,9 @@ apt-get update -y
 echo "Installing required system packages..."
 apt-get install -y python3-smbus python3-pip i2c-tools curl build-essential
 
+echo "Installing python rplidar package..."
+pip3 install --break-system-packages rplidar-roboticia
+
 # Install Node.js if not present
 if ! command -v node &> /dev/null; then
   echo "Node.js not found. Installing Node.js LTS (v20)..."
@@ -92,7 +95,13 @@ echo "Installing Node dependencies..."
 # Run npm install as the original user to ensure file ownership is correct
 sudo -u $REAL_USER npm install --prefix "$WORKING_DIR"
 
-# 6. Install Systemd Services
+# 6. Install Systemd Services and Udev Rules
+echo "Installing udev rules for RPLIDAR..."
+cp rpi5/99-rover-lidar.rules /etc/udev/rules.d/99-rover-lidar.rules
+udevadm control --reload-rules
+udevadm trigger
+echo "Udev rules configured successfully."
+
 echo "Installing systemd services..."
 
 # Replace templates with actual paths
@@ -100,10 +109,12 @@ SED_EXPR="s|{{USER}}|$REAL_USER|g; s|{{WORKING_DIR}}|$WORKING_DIR|g; s|{{NODE_PA
 
 sed "$SED_EXPR" rpi5/rover-server.service.template > /etc/systemd/system/rover-server.service
 sed "$SED_EXPR" rpi5/rover-i2c.service.template > /etc/systemd/system/rover-i2c.service
+sed "$SED_EXPR" rpi5/rover-lidar.service.template > /etc/systemd/system/rover-lidar.service
 
 # Set correct permissions
 chmod 644 /etc/systemd/system/rover-server.service
 chmod 644 /etc/systemd/system/rover-i2c.service
+chmod 644 /etc/systemd/system/rover-lidar.service
 
 # Reload systemd and enable/start services
 echo "Reloading systemd daemon..."
@@ -112,6 +123,10 @@ systemctl daemon-reload
 echo "Enabling and starting rover-i2c service..."
 systemctl enable rover-i2c.service
 systemctl restart rover-i2c.service
+
+echo "Enabling and starting rover-lidar service..."
+systemctl enable rover-lidar.service
+systemctl restart rover-lidar.service
 
 echo "Enabling and starting rover-server service..."
 systemctl enable rover-server.service
@@ -124,7 +139,10 @@ echo "Status of rover-server:"
 systemctl status rover-server.service --no-pager || true
 echo "Status of rover-i2c:"
 systemctl status rover-i2c.service --no-pager || true
+echo "Status of rover-lidar:"
+systemctl status rover-lidar.service --no-pager || true
 
 echo "You can view logs using:"
 echo "  journalctl -u rover-server -f"
 echo "  journalctl -u rover-i2c -f"
+echo "  journalctl -u rover-lidar -f"

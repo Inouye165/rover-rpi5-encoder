@@ -1,0 +1,14 @@
+[Unit]
+Description=Rover RPLIDAR Python Sidecar
+After=network.target
+
+[Service]
+Type=simple
+User={{USER}}
+WorkingDirectory={{WORKING_DIR}}
+ExecStart={{PYTHON_PATH}} rplidar_sidecar.py --dev /dev/rover-lidar --baud 460800 --port 3002
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

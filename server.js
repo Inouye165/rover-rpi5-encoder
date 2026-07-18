@@ -118,10 +118,14 @@ let lastEncoderActivityBroadcast = 0;
 let positionMode = [false, false, false, false];
 let targetPosition = [0, 0, 0, 0];
 let currentTicks = [0, 0, 0, 0];
-const TICKS_PER_REV = 937.2;
+let autoTestStep = 0; // 0=idle, 1..6 (3 cycles of fwd/bwd)
+let autoTestStartTicks = [0, 0, 0, 0];
+let currentAutoTestSpeedLimit = 25; // Dynamic cycle limits: 25, 45, 65
+let autoTestRunLogs = []; // Array of telemetry logs for data exports
+const TICKS_PER_REV = 1980.0;
 const KP_POSITION = 0.15;
 const MIN_POSITION_SPEED = 20;
-const MAX_POSITION_SPEED = 60;
+const MAX_POSITION_SPEED = 35;
 
 // Phase 4 Coordinated Normal Drive State
 let latestNormalDriveStatus = null;
@@ -219,6 +223,12 @@ let lastImuTimestamp = null;
 const I2C_SIDECAR_URL  = process.env.I2C_SIDECAR_URL || 'http://127.0.0.1:3001/data';
 const I2C_POLL_MS      = 250;   // poll every 250 ms
 let   i2cSidecarOnline = false;
+
+// ────────────────────────────────────────────────────────────
+// LiDAR Sidecar Configuration
+// ────────────────────────────────────────────────────────────
+const LIDAR_STATUS_URL = process.env.LIDAR_STATUS_URL || 'http://127.0.0.1:3002/status';
+const LIDAR_SCAN_URL   = process.env.LIDAR_SCAN_URL   || 'http://127.0.0.1:3002/scan';
 
 // ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
@@ -369,6 +379,10 @@ function startDriveKeepaliveLoop() {
 
   setInterval(() => {
     if (!serialPort || !serialPort.isOpen) return;
+
+    // Guard: Do not send conflicting background velocity commands during position/autotests
+    const isPositionActive = positionMode.some(m => m === true) || (autoTestStep > 0);
+    if (isPositionActive) return;
 
     const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
     if (!isArmed) return;
@@ -775,28 +789,107 @@ function parseTelemetryPacket(extType, data) {
       let motorSpeeds = [0, 0, 0, 0];
       let anyPositionMode = false;
       
-      for (let i = 0; i < 4; i++) {
-        if (positionMode[i]) {
+      if (autoTestStep > 0) {
+        let active = positionMode.some(m => m === true);
+        if (active) {
           anyPositionMode = true;
-          const error = targetPosition[i] - currentTicks[i];
-          if (Math.abs(error) <= 15) {
-            positionMode[i] = false;
-            console.log(`[Position Control] Motor ${i + 1} reached target.`);
+          let sumError = 0;
+          for (let i = 0; i < 4; i++) {
+            sumError += (targetPosition[i] - currentTicks[i]);
+          }
+          let avgError = sumError / 4.0;
+          
+          // Log telemetry data
+          let relM1 = currentTicks[0] - autoTestStartTicks[0];
+          let relM2 = currentTicks[1] - autoTestStartTicks[1];
+          let relM3 = currentTicks[2] - autoTestStartTicks[2];
+          let relM4 = currentTicks[3] - autoTestStartTicks[3];
+          let leftTicks = (relM1 + relM3) / 2.0;
+          let rightTicks = (relM2 + relM4) / 2.0;
+          const WHEEL_RADIUS_LOC = 0.0325;
+          const TRACK_WIDTH_LOC = 0.160;
+          let leftDist = (leftTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS_LOC);
+          let rightDist = (rightTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS_LOC);
+          let centerDist = (leftDist + rightDist) / 2.0;
+          let yaw = (rightDist - leftDist) / TRACK_WIDTH_LOC;
+          let driftMm = Math.round(centerDist * Math.sin(yaw) * 1000.0);
+          let mismatchPct = leftTicks !== 0 ? (((leftTicks - rightTicks) / leftTicks) * 100).toFixed(2) : '0.00';
+          
+          autoTestRunLogs.push({
+            timestamp: Date.now(),
+            step: autoTestStep,
+            m1: currentTicks[0],
+            m2: currentTicks[1],
+            m3: currentTicks[2],
+            m4: currentTicks[3],
+            speedLimit: currentAutoTestSpeedLimit,
+            driftMm,
+            mismatchPct
+          });
+
+          // One-directional completion logic (no back-and-forth correction at targets)
+          let isFwdLeg = (autoTestStep % 2 === 1);
+          let completed = false;
+          if (isFwdLeg) {
+            if (avgError <= 45) completed = true;
           } else {
-            let speed = error * KP_POSITION;
+            if (avgError >= -45) completed = true;
+          }
+          
+          if (completed) {
+            positionMode = [false, false, false, false];
+          } else {
+            let speed = avgError * KP_POSITION;
             if (speed > 0) {
-              if (speed < MIN_POSITION_SPEED) speed = MIN_POSITION_SPEED;
-              if (speed > MAX_POSITION_SPEED) speed = MAX_POSITION_SPEED;
+              if (speed > currentAutoTestSpeedLimit) speed = currentAutoTestSpeedLimit;
+              if (speed < 5) speed = 5;
             } else {
-              if (speed > -MIN_POSITION_SPEED) speed = -MIN_POSITION_SPEED;
-              if (speed < -MAX_POSITION_SPEED) speed = -MAX_POSITION_SPEED;
+              if (speed < -currentAutoTestSpeedLimit) speed = -currentAutoTestSpeedLimit;
+              if (speed > -5) speed = -5;
             }
-            motorSpeeds[i] = Math.round(speed);
+            let targetSpeed = Math.round(speed);
+            motorSpeeds = [targetSpeed, targetSpeed, targetSpeed, targetSpeed];
+          }
+        }
+      } else {
+        // Legacy independent wheel position control (e.g. from /api/turn)
+        for (let i = 0; i < 4; i++) {
+          if (positionMode[i]) {
+            anyPositionMode = true;
+            const error = targetPosition[i] - currentTicks[i];
+            if (Math.abs(error) <= 15) {
+              positionMode[i] = false;
+              console.log(`[Position Control] Motor ${i + 1} reached target.`);
+            } else {
+              let speed = error * KP_POSITION;
+              if (speed > 0) {
+                if (speed < MIN_POSITION_SPEED) speed = MIN_POSITION_SPEED;
+                if (speed > MAX_POSITION_SPEED) speed = MAX_POSITION_SPEED;
+              } else {
+                if (speed > -MIN_POSITION_SPEED) speed = -MIN_POSITION_SPEED;
+                if (speed < -MAX_POSITION_SPEED) speed = -MAX_POSITION_SPEED;
+              }
+              motorSpeeds[i] = Math.round(speed);
+            }
           }
         }
       }
       
-      if (anyPositionMode) {
+      let stillPositionMode = positionMode.some(m => m === true);
+      if (anyPositionMode && !stillPositionMode) {
+        console.log('[Position Control] All motors reached target.');
+        sendMotorSpeeds(0, 0, 0, 0); // Stop them
+        if (autoTestStep > 0) {
+          console.log(`[Auto Test] Leg ${autoTestStep}/6 complete. Settle pause...`);
+          broadcast({ type: 'autotest_status', step: autoTestStep, msg: `Leg ${autoTestStep}/6 complete. Pausing for 1.5s...` });
+          setTimeout(() => {
+            if (autoTestStep > 0) {
+              autoTestStep += 1;
+              handleAutoTestNextStep();
+            }
+          }, 1500);
+        }
+      } else if (anyPositionMode) {
         sendMotorSpeeds(motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
       }
 
@@ -1005,6 +1098,14 @@ function parseTelemetryPacket(extType, data) {
       broadcast({ type: 'rover_params_sync', diameter, separation });
     }
 
+  } else if (extType === 0x38) { // TYPE_ROVER_TRIMS
+    if (data.length >= 8) {
+      const leftTrim = data.readFloatLE(0);
+      const rightTrim = data.readFloatLE(4);
+      console.log(`[Config Sync] ESP32 reported left trim = ${leftTrim.toFixed(4)}, right trim = ${rightTrim.toFixed(4)}`);
+      broadcast({ type: 'rover_trims_sync', leftTrim, rightTrim });
+    }
+
   } else {
     // Unknown telemetry packet – log once per type to avoid flooding
     const hex = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
@@ -1069,6 +1170,10 @@ function initSerial(portName = COM_PORT) {
         sendBinaryCommand(0x37, [], { dualChecksum: true });
       }
     }, 600);
+    setTimeout(() => {
+      // Query straight drive trims from ESP32 NVS
+      sendBinaryCommand(0x38, [], { dualChecksum: true });
+    }, 1000);
     setTimeout(() => {
       const beepLo = 100 & 0xFF;
       const beepHi = (100 >> 8) & 0xFF;
@@ -1140,6 +1245,10 @@ wss.on('connection', (ws) => {
 
       switch (msg.type) {
         case 'set_speed':
+          if (autoTestStep > 0) {
+            autoTestStep = 0;
+            broadcast({ type: 'autotest_status', step: 0, msg: 'Auto-test aborted by manual override.' });
+          }
           // Frontend sends { type:'set_speed', speeds:[m1,m2,m3,m4] } in range -1000..1000
           if (Array.isArray(msg.speeds) && msg.speeds.length === 4) {
             positionMode = [false, false, false, false];
@@ -1148,6 +1257,10 @@ wss.on('connection', (ws) => {
           break;
 
         case 'set_pwm':
+          if (autoTestStep > 0) {
+            autoTestStep = 0;
+            broadcast({ type: 'autotest_status', step: 0, msg: 'Auto-test aborted by manual override.' });
+          }
           // Alias for set_speed (frontend uses both)
           if (Array.isArray(msg.pwms) && msg.pwms.length === 4) {
             positionMode = [false, false, false, false];
@@ -1159,6 +1272,11 @@ wss.on('connection', (ws) => {
           if (msg.x !== undefined && msg.y !== undefined) {
             const x = Math.max(-1.0, Math.min(1.0, parseFloat(msg.x || 0)));
             const y = Math.max(-1.0, Math.min(1.0, parseFloat(msg.y || 0)));
+            
+            if (autoTestStep > 0 && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
+              autoTestStep = 0;
+              broadcast({ type: 'autotest_status', step: 0, msg: 'Auto-test aborted by manual override.' });
+            }
             
             const isGamepad = (msg.deadman !== undefined);
             if (isGamepad) {
@@ -1312,6 +1430,21 @@ wss.on('connection', (ws) => {
               broadcast({ type: 'message', data: `[Config] Restored previous calibration: diameter=${calibrationDb.currentConfig.wheelDiameter}m, track=${calibrationDb.currentConfig.effectiveTrackWidth}m` });
             }
             broadcast({ type: 'calibration_db', db: calibrationDb });
+          }
+          break;
+
+        case 'save_trims':
+          if (msg.leftTrim !== undefined && msg.rightTrim !== undefined && serialPort && serialPort.isOpen) {
+            const leftBytes = floatToLEBytes(msg.leftTrim);
+            const rightBytes = floatToLEBytes(msg.rightTrim);
+            sendBinaryCommand(0x38, [...leftBytes, ...rightBytes], { dualChecksum: true });
+            console.log(`[Config Sync] Sent trims to ESP32: Left=${msg.leftTrim}, Right=${msg.rightTrim}`);
+          }
+          break;
+
+        case 'get_trims':
+          if (serialPort && serialPort.isOpen) {
+            sendBinaryCommand(0x38, [], { dualChecksum: true });
           }
           break;
 
@@ -1727,6 +1860,119 @@ app.get('/api/timing/reset', (req, res) => {
   }
 });
 
+function handleAutoTestNextStep() {
+  if (autoTestStep < 1 || autoTestStep > 18) {
+    autoTestStep = 0;
+    
+    // Save completed run logs
+    try {
+      fs.writeFileSync('public/autotest_data.json', JSON.stringify(autoTestRunLogs, null, 2));
+      let csv = 'Timestamp,Step,M1_Ticks,M2_Ticks,M3_Ticks,M4_Ticks,SpeedLimit,Drift_mm,Mismatch_pct\n';
+      autoTestRunLogs.forEach(row => {
+        csv += `${row.timestamp},${row.step},${row.m1},${row.m2},${row.m3},${row.m4},${row.speedLimit},${row.driftMm},${row.mismatchPct}\n`;
+      });
+      fs.writeFileSync('public/autotest_data.csv', csv);
+      console.log('[Auto Test] Data logs saved successfully (JSON & CSV).');
+    } catch (err) {
+      console.error('[Auto Test] Failed to write logs:', err.message);
+    }
+    
+    broadcast({ type: 'autotest_status', step: 0, msg: 'Auto-test sequence completed successfully.' });
+    if (serialPort && serialPort.isOpen) {
+      const pkt = buildPacket(FUNC_BEEP, [200 & 0xFF, (200 >> 8) & 0xFF]);
+      serialPort.write(pkt);
+    }
+    return;
+  }
+
+  // Set speed limit based on cycle
+  let speedLimit = 25;
+  let stageName = "Slow";
+  let cycle = Math.ceil(autoTestStep / 2);
+  let repeatNum = 1;
+  
+  if (autoTestStep <= 6) {
+    speedLimit = 25;
+    stageName = "Slow";
+    repeatNum = Math.ceil(autoTestStep / 2);
+  } else if (autoTestStep <= 12) {
+    speedLimit = 45;
+    stageName = "Medium";
+    repeatNum = Math.ceil((autoTestStep - 6) / 2);
+  } else {
+    speedLimit = 65;
+    stageName = "Fast";
+    repeatNum = Math.ceil((autoTestStep - 12) / 2);
+  }
+  currentAutoTestSpeedLimit = speedLimit;
+
+  const targetDistanceMeters = 3.0 * 0.3048; // 0.9144 m
+  const ticksPerMeter = TICKS_PER_REV / (2.0 * Math.PI * WHEEL_RADIUS);
+  const targetTicksOffset = Math.round(targetDistanceMeters * ticksPerMeter);
+
+  const isForward = (autoTestStep % 2 === 1);
+  for (let i = 0; i < 4; i++) {
+    if (isForward) {
+      targetPosition[i] = autoTestStartTicks[i] + targetTicksOffset;
+    } else {
+      targetPosition[i] = autoTestStartTicks[i];
+    }
+    positionMode[i] = true;
+  }
+
+  const legType = isForward ? 'Forward' : 'Backward';
+  const infoMsg = `Driving ${legType} (${stageName} Repeat ${repeatNum}/3, Leg ${autoTestStep}/18) - Speed Limit: ${currentAutoTestSpeedLimit}% - Target Ticks: ${isForward ? '+' : ''}${isForward ? targetTicksOffset : 0}`;
+  console.log(`[Auto Test] ${infoMsg}`);
+  broadcast({ type: 'autotest_status', step: autoTestStep, msg: infoMsg });
+}
+
+app.get('/api/autotest/start', (req, res) => {
+  if (autoTestStep > 0) {
+    return res.json({ ok: false, error: 'Auto-test is already running.' });
+  }
+  console.log('[Auto Test] Launching 3ft forward/backward auto-test sequence (3 loops)...');
+  
+  // Clear any existing logs for the new run
+  autoTestRunLogs = [];
+  
+  // Automatically clear faults and arm normal drive to ensure the wheels can receive commands
+  if (serialPort && serialPort.isOpen) {
+    const clearPkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+    serialPort.write(clearPkt);
+    const armPkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+    serialPort.write(armPkt);
+    console.log('[Auto Test] Cleared safety faults and sent arming command to ESP32.');
+  }
+
+  autoTestStartTicks = [...currentTicks];
+  autoTestStep = 1;
+  handleAutoTestNextStep();
+  res.json({ ok: true, message: 'Auto-test sequence started.' });
+});
+
+app.get('/api/autotest/abort', (req, res) => {
+  autoTestStep = 0;
+  positionMode = [false, false, false, false];
+  sendMotorSpeeds(0, 0, 0, 0);
+  
+  // Save whatever logs we collected before the abort
+  try {
+    fs.writeFileSync('public/autotest_data.json', JSON.stringify(autoTestRunLogs, null, 2));
+    let csv = 'Timestamp,Step,M1_Ticks,M2_Ticks,M3_Ticks,M4_Ticks,SpeedLimit,Drift_mm,Mismatch_pct\n';
+    autoTestRunLogs.forEach(row => {
+      csv += `${row.timestamp},${row.step},${row.m1},${row.m2},${row.m3},${row.m4},${row.speedLimit},${row.driftMm},${row.mismatchPct}\n`;
+    });
+    fs.writeFileSync('public/autotest_data.csv', csv);
+    console.log('[Auto Test] Aborted run logs saved.');
+  } catch (err) {
+    console.error('[Auto Test] Failed to write logs on abort:', err.message);
+  }
+  
+  console.log('[Auto Test] Sequence ABORTED - all wheels stopped.');
+  broadcast({ type: 'autotest_status', step: 0, msg: 'Auto-test sequence ABORTED.' });
+  res.json({ ok: true, message: 'Auto-test sequence aborted.' });
+});
+
 app.get('/api/turn', (req, res) => {
   if (req.query.stop || req.query.estop) {
     positionMode = [false, false, false, false];
@@ -1775,6 +2021,40 @@ app.get('/api/i2c', (req, res) => {
     });
   }).on('error', (err) => {
     res.status(503).json({ ok: false, error: `I2C sidecar not reachable: ${err.message}` });
+  });
+});
+
+// GET /api/lidar/status - proxy the latest LiDAR status from the python sidecar
+app.get('/api/lidar/status', (req, res) => {
+  httpGet.get(LIDAR_STATUS_URL, (sRes) => {
+    let body = '';
+    sRes.on('data', (c) => { body += c; });
+    sRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch (e) {
+        res.status(502).json({ connected: false, state: 'error', lastError: 'Bad response from LiDAR sidecar' });
+      }
+    });
+  }).on('error', (err) => {
+    res.status(503).json({ connected: false, state: 'disconnected', lastError: `LiDAR sidecar not reachable: ${err.message}` });
+  });
+});
+
+// GET /api/lidar/scan - proxy the latest complete LiDAR scan rotation from the python sidecar
+app.get('/api/lidar/scan', (req, res) => {
+  httpGet.get(LIDAR_SCAN_URL, (sRes) => {
+    let body = '';
+    sRes.on('data', (c) => { body += c; });
+    sRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch (e) {
+        res.status(502).json({ error: 'Bad response from LiDAR sidecar' });
+      }
+    });
+  }).on('error', (err) => {
+    res.status(503).json({ error: `LiDAR sidecar not reachable: ${err.message}` });
   });
 });
 
