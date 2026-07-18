@@ -109,9 +109,41 @@ journalctl -u rover-server.service -f
 ## 📂 Project Structure
 
 * `server.js` - Primary Express & WebSocket telemetry + control server.
+* `rplidar_sidecar.py` - Python async service for RPLIDAR C1.
 * `public/` - Dashboard web frontend (HTML/CSS/JS).
 * `maker_esp32_pro/` - Firmware project directory for the ESP32 microcontroller.
 * `rpi5/` - Deployment artifacts:
   * `deploy.ps1` - Windows packaging & SSH/SFTP deployment automation.
   * `setup.sh` - System configuration, dependencies, and service installation.
+  * `99-rover-lidar.rules` - udev rule mapping CP2102N to `/dev/rover-lidar`.
   * `rover-server.service.template` - Service unit configuration template.
+  * `rover-lidar.service.template` - LiDAR service unit configuration template.
+
+---
+
+## 📡 RPLIDAR C1 Integration
+
+The rover integrates a USB RPLIDAR C1 scanning telemetry sensor connected directly to the Raspberry Pi 5.
+
+### 1. Hardware Connection & Symlink
+* The RPLIDAR C1 CP2102N USB converter registers dynamically on the Pi.
+* A custom udev rule `/etc/udev/rules.d/99-rover-lidar.rules` creates a stable `/dev/rover-lidar` symlink with `0666` permissions on boot.
+
+### 2. Python Async Sidecar Service (`rover-lidar.service`)
+* The `rplidar_sidecar.py` service runs on port `3002`.
+* It utilizes the `rplidarc1` asynchronous library to connect to `/dev/rover-lidar` at `460800` baud.
+* It downsamples scan data to a maximum of 360 points (1-degree increments) and exposes them on:
+  - `GET /status`: telemetry performance, scan Hz, health, errors.
+  - `GET /scan`: latest complete 360-degree polar coordinate measurements.
+* The Node Express server proxies these routes under `/api/lidar/status` and `/api/lidar/scan`.
+
+### 3. Monitoring LiDAR
+To monitor the LiDAR background service on the Pi, run:
+```bash
+# Check service status
+systemctl status rover-lidar.service
+
+# View real-time output logs
+journalctl -u rover-lidar.service -f
+```
+

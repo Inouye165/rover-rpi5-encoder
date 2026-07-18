@@ -1,0 +1,24 @@
+RPLIDAR C1 First Physical Readings Diagnostics
+==============================================
+Timestamp: 2026-07-18T21:31:52Z
+Sequence: 723
+Scan Rate: 6.4 Hz
+Point Count: 360 points
+
+Sample points (15 representative points across 360 degrees):
+------------------------------------------------------------------
+Sample #01: Angle:   0.00°    Distance:  711 mm   ( 0.711 m)   Quality: 31
+Sample #02: Angle:  21.33°    Distance: 1108 mm   ( 1.108 m)   Quality: 31
+Sample #03: Angle:  48.67°    Distance:  466 mm   ( 0.466 m)   Quality: 31
+Sample #04: Angle:  71.33°    Distance: 1034 mm   ( 1.034 m)   Quality: 31
+Sample #05: Angle:  92.67°    Distance:  819 mm   ( 0.819 m)   Quality: 31
+Sample #06: Angle: 113.00°    Distance:  874 mm   ( 0.874 m)   Quality: 31
+Sample #07: Angle: 140.33°    Distance: 3487 mm   ( 3.487 m)   Quality: 31
+Sample #08: Angle: 178.00°    Distance: 2856 mm   ( 2.856 m)   Quality: 31
+Sample #09: Angle: 199.33°    Distance: 2756 mm   ( 2.756 m)   Quality: 31
+Sample #10: Angle: 222.00°    Distance:  216 mm   ( 0.216 m)   Quality: 31
+Sample #11: Angle: 244.67°    Distance:  386 mm   ( 0.386 m)   Quality: 31
+Sample #12: Angle: 274.67°    Distance:  185 mm   ( 0.185 m)   Quality: 31
+Sample #13: Angle: 299.67°    Distance:  639 mm   ( 0.639 m)   Quality: 31
+Sample #14: Angle: 319.67°    Distance:  578 mm   ( 0.578 m)   Quality: 31
+Sample #15: Angle: 340.00°    Distance:  594 mm   ( 0.594 m)   Quality: 31
