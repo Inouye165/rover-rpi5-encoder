@@ -1,0 +1,6 @@
+# Enforce LF line endings for Linux shell scripts, service templates, udev rules, and python files
+rpi5/*.sh text eol=lf
+rpi5/*.template text eol=lf
+rpi5/*.rules text eol=lf
+*.py text eol=lf
+*.js text eol=lf

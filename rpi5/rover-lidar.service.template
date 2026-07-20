@@ -1,14 +1,20 @@
 [Unit]
 Description=Rover RPLIDAR Python Sidecar
 After=network.target
+StartLimitIntervalSec=100
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User={{USER}}
+SupplementaryGroups=dialout
 WorkingDirectory={{WORKING_DIR}}
-ExecStart={{PYTHON_PATH}} rplidar_sidecar.py --dev /dev/rover-lidar --baud 460800 --port 3002
+EnvironmentFile={{WORKING_DIR}}/.env
+ExecStart={{PYTHON_PATH}} {{WORKING_DIR}}/rplidar_sidecar.py --dev {{ROVER_LIDAR_DEVICE}} --baud 460800 --port 3002
 Restart=always
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

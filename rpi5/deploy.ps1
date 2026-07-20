@@ -4,7 +4,7 @@
 # ==============================================================================
 
 # Target configuration variables (will be loaded from .env)
-$IP = "10.0.0.247"
+$IP = "rover"
 $USER = "ron"
 $PASSWORD = ""
 

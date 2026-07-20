@@ -33,18 +33,17 @@ try {
 }
 
 const PORT = process.env.PORT || 3000;
-let COM_PORT = process.env.SERIAL_PORT;
+let COM_PORT = process.env.ROVER_ESP32_DEVICE || process.env.SERIAL_PORT;
 if (process.platform === 'win32' && COM_PORT && COM_PORT.startsWith('/dev/')) {
   COM_PORT = null;
 }
 if (!COM_PORT) {
   if (process.platform === 'linux') {
-    if (fs.existsSync('/dev/ttyUSB0')) {
-      COM_PORT = '/dev/ttyUSB0';
-    } else if (fs.existsSync('/dev/ttyACM0')) {
-      COM_PORT = '/dev/ttyACM0';
+    if (fs.existsSync('/dev/rover-esp32')) {
+      COM_PORT = '/dev/rover-esp32';
     } else {
-      COM_PORT = '/dev/ttyAMA0';
+      console.error("ERROR: /dev/rover-esp32 is absent and no serial port is configured. Remaining disconnected.");
+      COM_PORT = null;
     }
   } else {
     COM_PORT = 'COM18';
@@ -112,6 +111,7 @@ const MOTOR_COMMAND_INTERVAL_MS = 120;
 let motorProofRunning = false;
 let encoderPacketCount = 0;
 let lastEncoderActivityBroadcast = 0;
+let lastTelemetryReceivedTime = 0;
 
 // Position Control State
 let positionMode = [false, false, false, false];
@@ -640,6 +640,7 @@ function processRxBuffer() {
 // Telemetry Packet Interpreter
 // ────────────────────────────────────────────────────────────
 function parseTelemetryPacket(extType, data) {
+  lastTelemetryReceivedTime = Date.now();
   if (extType === TYPE_BATTERY) {
     // Observed packet: ff fb 0a 0a 00 00 00 00 00 00 VV CS
     // data[] = 7 bytes payload.  data[6] = voltage * 10
@@ -1235,6 +1236,13 @@ function initSerial(portName = COM_PORT) {
   }
 
   COM_PORT = portName;
+  if (!COM_PORT) {
+    console.error("ERROR: No valid serial port configured. Skipping serial initialization.");
+    broadcast({ type: 'status', key: 'serial', val: 'disconnected', error: 'No valid serial port configured' });
+    isSerialConnecting = false;
+    scheduleReconnect();
+    return;
+  }
   rxBuf = Buffer.alloc(0);
   lastImuTimestamp = null;
   isSerialConnecting = true;
@@ -1259,6 +1267,14 @@ function initSerial(portName = COM_PORT) {
 
     console.log(`Serial port ${COM_PORT} opened successfully (binary mode).`);
     broadcast({ type: 'status', key: 'serial', val: 'connected', port: COM_PORT });
+
+    serialPort.set({ dtr: false, rts: false }, (setErr) => {
+      if (setErr) {
+        console.warn(`[Serial] Warning: Failed to set DTR/RTS: ${setErr.message}`);
+      } else {
+        console.log('[Serial] DTR/RTS set to false (releasing ESP32 reset).');
+      }
+    });
 
     // The board auto-streams telemetry. No explicit command needed to start it.
     // Set a default car type and send a short beep to confirm two-way communication.
@@ -2056,6 +2072,16 @@ app.post('/api/drive/disarm', (req, res) => {
   } else {
     res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({
+    ok: true,
+    serialConnected: (serialPort && serialPort.isOpen) === true,
+    port: COM_PORT,
+    lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
+    armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false
+  });
 });
 
 app.get('/api/drive/status', (req, res) => {

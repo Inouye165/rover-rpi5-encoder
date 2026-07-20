@@ -7,7 +7,8 @@
 const { SerialPort } = require('serialport');
 
 const HEAD = 0xFF, DEVICE_ID = 0xFC, BOARD_ID = 0xFB;
-const FUNC_BEEP = 0x02, FUNC_VERSION = 0x51;
+const FUNC_BEEP = 0x02, FUNC_VERSION = 0x23;
+const TYPE_FIRMWARE_INFO = 0x32;
 
 function build(funcId, payload) {
   const cmd = [HEAD, DEVICE_ID, 0x00, funcId, ...payload];
@@ -31,7 +32,7 @@ const states = [
   let winner = null;
 
   for (const st of states) {
-    const port = new SerialPort({ path: 'COM18', baudRate: 115200 });
+    const port = new SerialPort({ path: process.env.SERIAL_PORT || process.env.ROVER_ESP32_DEVICE || '/dev/rover-esp32', baudRate: 115200 });
     let rx = Buffer.alloc(0);
     let versionReply = null;
 
@@ -46,7 +47,7 @@ const states = [
         const total = h + 2 + extLen;
         if (rx.length < total) break;
         const extType = rx[h + 3];
-        if (extType === FUNC_VERSION) {
+        if (extType === TYPE_FIRMWARE_INFO) {
           versionReply = Array.from(rx.subarray(h, total)).map(b => b.toString(16).padStart(2, '0')).join(' ');
         }
         rx = rx.subarray(total);

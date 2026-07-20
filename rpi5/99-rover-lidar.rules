@@ -1,1 +1,7 @@
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rover-lidar", MODE="0666"
+# QinHeng Electronics CH340 (Maker ESP32 Pro)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="rover-esp32", GROUP="dialout", MODE="0660"
+
+# Silicon Labs CP2102N (RPLIDAR C1)
+# Match specific serial first; fallback to generic CP2102N only if serial is empty/not present.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="18d8e8843f70f0118d6590301045c30f", SYMLINK+="rover-lidar", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="", SYMLINK+="rover-lidar", GROUP="dialout", MODE="0660"

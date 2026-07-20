@@ -633,6 +633,8 @@ async def async_scan_loop(device_path):
                 handle_new_scan(full_resolution_points, latest_scan["timestamp"])
                     
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             errmsg = f"Error during scanning: {e}"
             print(f"[LiDAR Sidecar] {errmsg}", file=sys.stderr)
             with state_lock:
