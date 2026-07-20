@@ -1,0 +1,32 @@
+services:
+  rover-ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rover-ros2:jazzy
+    container_name: rover-ros2
+    network_mode: host
+    restart: "no"
+    user: "1000:1000"
+    environment:
+      - ROS_DISTRO=${ROS_DISTRO:-jazzy}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - ROVER_SERVER_URL=${ROVER_SERVER_URL:-http://127.0.0.1:3000}
+      - ROVER_LIDAR_URL=${ROVER_LIDAR_URL:-http://127.0.0.1:3002}
+    volumes:
+      - ./ros2_ws:/ros2_ws
+      - ./volumes/maps:/ros2_ws/maps
+      - ./volumes/logs:/ros2_ws/logs
+      - ./volumes/rosbag:/ros2_ws/rosbag
+      - ./compose.yaml:/ros2_ws/compose.yaml:ro
+      - ./Dockerfile:/ros2_ws/Dockerfile:ro
+    command: |
+      bash -c '
+      if [ ! -f /ros2_ws/install/setup.bash ]; then
+        echo "ERROR: ROS 2 workspace has not been built! Please run scripts/build.sh first." >&2
+        exit 1
+      fi
+      source /opt/ros/jazzy/setup.bash
+      source /ros2_ws/install/setup.bash
+      exec ros2 launch rover_bringup foundation.launch.py
+      '
