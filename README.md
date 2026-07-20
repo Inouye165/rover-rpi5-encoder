@@ -147,3 +147,21 @@ systemctl status rover-lidar.service
 journalctl -u rover-lidar.service -f
 ```
 
+### 4. Physical Dimensions & SLAM Configuration
+To configure SLAM (e.g., Cartographer, Gmapping, or RTAB-Map) and the robot TF tree, use the following physical dimensions and sensor mounting offsets:
+
+* **Rover Physical Dimensions:**
+  - **Length ($L$):** $9.0\text{ inches}$ ($228.6\text{ mm}$ or $0.2286\text{ m}$)
+  - **Width ($W$):** $8.75\text{ inches}$ ($222.25\text{ mm}$ or $0.22225\text{ m}$)
+
+* **LiDAR Mounting Position:**
+  - **Front Offset:** Mounted $4.0\text{ inches}$ ($101.6\text{ mm}$ or $0.1016\text{ m}$) behind the front-most edge of the rover.
+  - **Left Offset:** Mounted $3.0\text{ inches}$ ($76.2\text{ mm}$ or $0.0762\text{ m}$) inside from the left-most edge of the rover.
+
+* **SLAM TF Transform (`base_link` to `laser` / `laser_frame`):**
+  If defining `base_link` as the physical center of the rover body ($X$ pointing forward, $Y$ pointing left, $Z$ pointing up):
+  - **$x$ translation (forward):** $+0.5\text{ inches} = +12.7\text{ mm} = +0.0127\text{ m}$ (calculated as $L/2 - \text{Front Offset} = 4.5" - 4"$)
+  - **$y$ translation (left):** $+1.375\text{ inches} = +34.925\text{ mm} = +0.034925\text{ m}$ (calculated as $W/2 - \text{Left Offset} = 4.375" - 3"$)
+  - **$z$ translation (height):** Adjust based on vertical mount height.
+  - **Yaw rotation:** $0.0\text{ rad}$ (LiDAR is aligned facing forward).
+

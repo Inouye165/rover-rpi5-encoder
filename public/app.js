@@ -30,6 +30,59 @@ let currentLegMaxDrift = 0;
 let currentLegMaxMismatch = 0;
 let legResults = {};
 
+// LiDAR straight-line test globals
+let lidarOdomPath = [];
+let lidarPosePath = [];
+let calibPathHistory = []; // array of { tier: 'SLOW'|'MED'|'FAST', odom: [...], lidar: [...] }
+let lastTelemetrySpeedTier = 'SLOW';
+let testScanPollInterval = null;
+let lastLidarScanForTest = null;
+
+function startTestScanPolling() {
+  if (testScanPollInterval) return;
+  testScanPollInterval = setInterval(() => {
+    fetch('/api/lidar/scan')
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.points) {
+          lastLidarScanForTest = data;
+          drawLidarTestCanvas();
+        }
+      })
+      .catch(err => console.error('Failed to poll test scan:', err));
+  }, 200);
+}
+
+function stopTestScanPolling() {
+  if (testScanPollInterval) {
+    clearInterval(testScanPollInterval);
+    testScanPollInterval = null;
+  }
+  lastLidarScanForTest = null;
+  drawLidarTestCanvas();
+}
+
+function saveCurrentPathToHistory(tier) {
+  if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
+    calibPathHistory.push({
+      tier: tier || 'SLOW',
+      odom: [...lidarOdomPath],
+      lidar: [...lidarPosePath]
+    });
+  }
+}
+let orientationStep = 1;
+let orientationVerified = localStorage.getItem('lidar_orientation_verified') === 'true';
+let wizardPollInterval = null;
+
+// Track Interference global variables for drawing & UI
+let closestFrontObstacle = null; // { x, y, dist }
+let closestLeftObstacle = null;  // { x, y, dist }
+let closestRightObstacle = null; // { x, y, dist }
+let monitoredTrackWidth = 0.60;  // default track width in meters
+let lidarTestState = 'IDLE';     // local copy of current calibration state
+
+
 // Odom and IMU State variables
 let m1Speed = 0, m2Speed = 0, m3Speed = 0, m4Speed = 0;
 let odomX = 0, odomY = 0, odomTheta = 0; // x, y (mm), theta (rad)
@@ -550,6 +603,10 @@ function handleServerMessage(msg) {
         flLabel.innerText = msg.floorTesting ? 'FLOOR TESTING (0.17 m/s)' : 'UNCLAMPED (0.80 m/s)';
         flLabel.style.color = msg.floorTesting ? '#f59e0b' : '#10b981';
       }
+      const flChk = document.getElementById('limits-floor-testing');
+      if (flChk) {
+        flChk.checked = msg.floorTesting;
+      }
       break;
 
     case 'imu':
@@ -1052,12 +1109,203 @@ function handleServerMessage(msg) {
         labelActive.textContent = `L: ${msg.leftTrim.toFixed(3)} | R: ${msg.rightTrim.toFixed(3)}`;
         labelActive.style.color = '#10b981';
       }
+
+      const activeFwdText = document.getElementById('active-fwd-trims');
+      if (activeFwdText) {
+        activeFwdText.textContent = `${msg.leftTrim.toFixed(4)} / ${msg.rightTrim.toFixed(4)}`;
+      }
       break;
     }
 
     case 'calibration_db':
       updateCalibrationDbUI(msg.db);
       break;
+
+    case 'rover_trims_rev_sync': {
+      const activeRevText = document.getElementById('active-rev-trims');
+      if (activeRevText) {
+        activeRevText.textContent = `${msg.leftTrimRev.toFixed(4)} / ${msg.rightTrimRev.toFixed(4)}`;
+      }
+      logSystem(`[Config Sync] Synced active Reverse Trims: ${msg.leftTrimRev.toFixed(4)} / ${msg.rightTrimRev.toFixed(4)}`);
+      break;
+    }
+
+    case 'lidar_test_status': {
+      lidarTestState = msg.state;
+      const badge = document.getElementById('lidar-test-state-badge');
+      if (badge) {
+        // Build progress label
+        let progressLabel = msg.state;
+        if (msg.speedTier && msg.totalPass) {
+          progressLabel = `${msg.speedTier} Pass ${msg.totalPass}/${msg.totalPasses}`;
+        }
+        badge.textContent = progressLabel;
+        badge.style.background = '';
+        badge.style.color = '';
+        badge.style.borderColor = '';
+        
+        if (msg.state === 'IDLE') {
+          stopTestScanPolling();
+          badge.style.background = 'rgba(107, 114, 128, 0.2)';
+          badge.style.color = '#9ca3af';
+          badge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
+          badge.textContent = 'IDLE';
+          document.getElementById('btn-start-lidar-test').style.display = 'block';
+          document.getElementById('btn-stop-lidar-test').style.display = 'none';
+          
+          if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
+            saveCurrentPathToHistory(lastTelemetrySpeedTier);
+            lidarOdomPath = [];
+            lidarPosePath = [];
+            drawLidarTestCanvas();
+          }
+        } else if (msg.state === 'ZEROING' || msg.state === 'RETURNING_HOME_WAIT') {
+          badge.style.background = 'rgba(245, 158, 11, 0.2)';
+          badge.style.color = '#f59e0b';
+          badge.style.border = '1px solid rgba(245, 158, 11, 0.4)';
+          document.getElementById('btn-start-lidar-test').style.display = 'none';
+          document.getElementById('btn-stop-lidar-test').style.display = 'block';
+        } else if (msg.state === 'FORWARD_RUNNING' || msg.state === 'RETURNING_HOME') {
+          badge.style.background = 'rgba(6, 182, 212, 0.2)';
+          badge.style.color = '#06b6d4';
+          badge.style.border = '1px solid rgba(6, 182, 212, 0.4)';
+          document.getElementById('btn-start-lidar-test').style.display = 'none';
+          document.getElementById('btn-stop-lidar-test').style.display = 'block';
+        } else if (msg.state === 'COMPLETE') {
+          stopTestScanPolling();
+          badge.style.background = 'rgba(16, 185, 129, 0.2)';
+          badge.style.color = '#10b981';
+          badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          badge.textContent = 'COMPLETE ✓';
+          document.getElementById('btn-start-lidar-test').style.display = 'block';
+          document.getElementById('btn-stop-lidar-test').style.display = 'none';
+          
+          if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
+            saveCurrentPathToHistory(lastTelemetrySpeedTier);
+            lidarOdomPath = [];
+            lidarPosePath = [];
+            drawLidarTestCanvas();
+          }
+        }
+      }
+      logSystem(`[Auto Calib] ${msg.msg || msg.state}`);
+      break;
+    }
+ 
+    case 'lidar_test_telemetry': {
+      lidarTestState = msg.state;
+      lastTelemetrySpeedTier = msg.speedTier || 'SLOW';
+      if (msg.state === 'ZEROING' || msg.state === 'FORWARD_READY') {
+        if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
+          saveCurrentPathToHistory(lastTelemetrySpeedTier);
+        }
+        lidarOdomPath = [];
+        lidarPosePath = [];
+      }
+
+      
+      const xSpan = document.getElementById('stat-lidar-x');
+      const ySpan = document.getElementById('stat-lidar-y');
+      const yawSpan = document.getElementById('stat-lidar-yaw');
+      const confSpan = document.getElementById('stat-lidar-conf');
+      
+      if (xSpan) xSpan.textContent = msg.lidarPose.x.toFixed(3) + 'm';
+      if (ySpan) ySpan.textContent = msg.lidarPose.y.toFixed(3) + 'm';
+      if (yawSpan) yawSpan.textContent = (msg.lidarPose.yaw * 180 / Math.PI).toFixed(2) + '°';
+      if (confSpan) {
+        confSpan.textContent = (msg.metrics.confidence * 100).toFixed(1) + '%';
+        const confDiv = confSpan.parentNode;
+        if (msg.metrics.rejectionReason) {
+          confDiv.style.borderColor = '#ef4444';
+          confDiv.title = msg.metrics.rejectionReason;
+        } else {
+          confDiv.style.borderColor = '';
+          confDiv.title = '';
+        }
+      }
+      
+      if (msg.state === 'FORWARD_RUNNING' || msg.state === 'REVERSE_RUNNING' || msg.state === 'RETURNING_HOME') {
+        lidarOdomPath.push({ x: msg.odomPose.x, y: msg.odomPose.y });
+        lidarPosePath.push({ x: msg.lidarPose.x, y: msg.lidarPose.y, yaw: msg.lidarPose.yaw });
+        drawLidarTestCanvas();
+      }
+
+      // Update Live Motor Power UI
+      const lblLeft = document.getElementById('lbl-power-left');
+      const lblRight = document.getElementById('lbl-power-right');
+      const barLeft = document.getElementById('bar-power-left');
+      const barRight = document.getElementById('bar-power-right');
+      const powerTier = document.getElementById('power-active-tier');
+      
+      if (powerTier) powerTier.textContent = `Tier: ${msg.speedTier || 'SLOW'}`;
+      
+      const isMoving = msg.state === 'FORWARD_RUNNING' || msg.state === 'REVERSE_RUNNING' || msg.state === 'RETURNING_HOME';
+      const dirText = !isMoving ? 'IDLE' : (msg.direction === 'FORWARD' ? 'FWD' : 'REV');
+      
+      if (lblLeft && barLeft) {
+        const leftPower = isMoving ? (msg.leftPowerPct || 0) : 0;
+        lblLeft.textContent = `${leftPower}% (${dirText})`;
+        barLeft.style.width = `${leftPower}%`;
+        lblLeft.style.color = leftPower > 70 ? '#ff0055' : (leftPower > 40 ? '#f59e0b' : '#10b981');
+      }
+      
+      if (lblRight && barRight) {
+        const rightPower = isMoving ? (msg.rightPowerPct || 0) : 0;
+        lblRight.textContent = `${rightPower}% (${dirText})`;
+        barRight.style.width = `${rightPower}%`;
+        lblRight.style.color = rightPower > 70 ? '#ff0055' : (rightPower > 40 ? '#f59e0b' : '#10b981');
+      }
+
+      // Update Live Control Effort UI
+      const lblEffort = document.getElementById('lbl-control-effort');
+      const barEffort = document.getElementById('bar-control-effort');
+      if (lblEffort && barEffort) {
+        const effort = isMoving ? (msg.appliedCorrection || 0.0) : 0.0;
+        const maxEffort = 0.35; // maxAngularCorr
+        
+        let effortPct = (effort / maxEffort) * 50; // map to -50% to 50%
+        effortPct = Math.max(-50, Math.min(50, effortPct));
+        
+        if (effortPct >= 0) {
+          barEffort.style.left = '50%';
+          barEffort.style.width = `${effortPct}%`;
+          barEffort.style.background = 'linear-gradient(90deg, #a855f7, #00f0ff)';
+        } else {
+          barEffort.style.left = `${50 + effortPct}%`;
+          barEffort.style.width = `${Math.abs(effortPct)}%`;
+          barEffort.style.background = 'linear-gradient(90deg, #ff0055, #a855f7)';
+        }
+        
+        const effortDir = effort > 0.005 ? 'STEER LEFT' : (effort < -0.005 ? 'STEER RIGHT' : 'CENTER');
+        lblEffort.textContent = isMoving ? `${effort.toFixed(3)} rad/s (${effortDir})` : '0.000 rad/s (CENTER)';
+        lblEffort.style.color = isMoving ? (Math.abs(effort) > 0.2 ? '#ff0055' : (Math.abs(effort) > 0.08 ? '#f59e0b' : '#00f0ff')) : '#00f0ff';
+      }
+      break;
+    }
+
+    case 'lidar_test_results': {
+      const passLabel = document.getElementById('pass-count-label');
+      const proposedFwd = document.getElementById('proposed-fwd-trims');
+      const proposedRev = document.getElementById('proposed-rev-trims');
+      
+      if (passLabel) passLabel.textContent = `Completed Passes: ${msg.acceptedPasses}/1`;
+      if (proposedFwd) proposedFwd.textContent = `${msg.proposedFwdTrim.left.toFixed(4)} / ${msg.proposedFwdTrim.right.toFixed(4)}`;
+      if (proposedRev) proposedRev.textContent = `${msg.proposedRevTrim.left.toFixed(4)} / ${msg.proposedRevTrim.right.toFixed(4)}`;
+      
+      const applyBtn = document.getElementById('btn-apply-proposed');
+      if (applyBtn) {
+        if (msg.acceptedPasses >= 1) {
+          applyBtn.disabled = false;
+          applyBtn.style.opacity = '1';
+          applyBtn.style.cursor = 'pointer';
+        } else {
+          applyBtn.disabled = true;
+          applyBtn.style.opacity = '0.6';
+          applyBtn.style.cursor = 'not-allowed';
+        }
+      }
+      break;
+    }
 
     case 'test_abort':
       if (activeTest) {
@@ -1870,12 +2118,26 @@ function startCameraStream() {
   cameraStream.onload = () => {
     updateCameraStatus('connected', 'ACTIVE', 'ok');
     logSystem("Camera stream connected successfully.");
+    if (cameraStream) cameraStream.style.display = 'block';
+    if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+    if (btnToggleCamera) {
+      btnToggleCamera.textContent = 'Stop Feed';
+      btnToggleCamera.className = 'btn btn-secondary btn-block';
+    }
+    if (btnFullscreenCamera) btnFullscreenCamera.disabled = false;
   };
   
   cameraStream.onerror = () => {
     if (isCameraStreaming) {
       updateCameraStatus('error', 'STREAM ERROR', 'alert');
       logSystem("Camera stream encountered an error.");
+      if (cameraStream) cameraStream.style.display = 'none';
+      if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
+      if (btnToggleCamera) {
+        btnToggleCamera.textContent = 'Start Feed';
+        btnToggleCamera.className = 'btn btn-primary btn-block';
+      }
+      if (btnFullscreenCamera) btnFullscreenCamera.disabled = true;
     }
   };
 }
@@ -1884,6 +2146,17 @@ function stopCameraStream() {
   isCameraStreaming = false;
   if (cameraStream) {
     cameraStream.removeAttribute('src'); // Stop browser from fetching stream
+    cameraStream.style.display = 'none';
+  }
+  if (cameraPlaceholder) {
+    cameraPlaceholder.style.display = 'flex';
+  }
+  if (btnToggleCamera) {
+    btnToggleCamera.textContent = 'Start Feed';
+    btnToggleCamera.className = 'btn btn-primary btn-block';
+  }
+  if (btnFullscreenCamera) {
+    btnFullscreenCamera.disabled = true;
   }
   updateCameraStatus('disconnected', 'STANDBY', 'off');
   logSystem("Camera stream stopped.");
@@ -1895,6 +2168,17 @@ if (btnToggleCamera) {
       stopCameraStream();
     } else {
       startCameraStream();
+    }
+  });
+}
+
+if (btnFullscreenCamera) {
+  btnFullscreenCamera.addEventListener('click', () => {
+    if (!cameraViewport) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(err => console.error(err));
+    } else {
+      cameraViewport.requestFullscreen().catch(err => console.error(err));
     }
   });
 }
@@ -1999,6 +2283,20 @@ drawCompass(0);
 let lidarPollTimer = null;
 let lastScanTime = 0;
 let lidarActiveTab = 'tab-dashboard';
+let latestLidarScan = null;
+let hoverPoint = null;
+let activeTouch = false;
+
+function formatFeetInches(mm) {
+  if (mm === undefined || mm === null || isNaN(mm) || mm === Infinity) return '--';
+  const totalInches = mm / 25.4;
+  const feet = Math.floor(totalInches / 12);
+  const inches = (totalInches % 12).toFixed(1);
+  if (feet > 0) {
+    return `${feet}' ${inches}"`;
+  }
+  return `${inches}"`;
+}
 
 function startLidarPolling() {
   if (lidarPollTimer) return;
@@ -2113,6 +2411,7 @@ function updateLidarStatus(status) {
 function updateLidarScan(scan) {
   if (!scan || !scan.timestamp) return;
   lastScanTime = Date.now();
+  latestLidarScan = scan; // Keep track of the latest scan for hover/touch redraws
   
   const overlay = document.getElementById('lidar-stale-overlay');
   if (overlay) {
@@ -2124,7 +2423,160 @@ function updateLidarScan(scan) {
   
   // Render Table Samples
   renderSampleTable(scan);
+
+  // Calculate and update track interference
+  updateTrackInterference(scan);
 }
+
+function updateTrackInterference(scan) {
+  if (!scan || !scan.points) return;
+  
+  const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset')?.value || 0);
+  const lx = parseFloat(document.getElementById('cfg-lidar-x')?.value || 0.0127);
+  const ly = parseFloat(document.getElementById('cfg-lidar-y')?.value || 0.034925);
+  const maxRangeCfg = parseFloat(document.getElementById('cfg-max-range')?.value || 4.0);
+  
+  const selectTrackWidth = document.getElementById('monitored-track-width');
+  monitoredTrackWidth = selectTrackWidth ? parseFloat(selectTrackWidth.value) : 0.60;
+  const W_track = monitoredTrackWidth;
+  const L_track = 0.9144; // 3 feet target distance
+  
+  const pose = lidarPosePath.length > 0 ? lidarPosePath[lidarPosePath.length - 1] : { x: 0, y: 0, yaw: 0 };
+  const x_est = pose.x;
+  const y_est = pose.y;
+  const yaw_est = pose.yaw;
+  
+  const rover_half_l = 0.2286 / 2.0 + 0.02; // chassis length/2 + margin
+  const rover_half_w = 0.22225 / 2.0 + 0.02; // chassis width/2 + margin
+  const rover_front_x = 0.2286 / 2.0 - lx;
+  
+  let minDFront = Infinity;
+  let minDLeft = Infinity;
+  let minDRight = Infinity;
+  
+  closestFrontObstacle = null;
+  closestLeftObstacle = null;
+  closestRightObstacle = null;
+  
+  const cos_yaw = Math.cos(yaw_est);
+  const sin_yaw = Math.sin(yaw_est);
+  
+  scan.points.forEach(pt => {
+    let angle = (pt.angleDeg - frontAngleOffset) % 360.0;
+    if (angle < 0) angle += 360.0;
+    
+    const dist_m = pt.distanceMm / 1000.0;
+    if (dist_m < 0.15 || dist_m > maxRangeCfg) return;
+    
+    const x_l = dist_m * Math.cos(angle * Math.PI / 180);
+    const y_l = -dist_m * Math.sin(angle * Math.PI / 180);
+    
+    // Chassis self-mask
+    const x_r = x_l + lx;
+    const y_r = y_l + ly;
+    if (x_r >= -rover_half_l && x_r <= rover_half_l && y_r >= -rover_half_w && y_r <= rover_half_w) {
+      return;
+    }
+    
+    // Transform to track frame
+    const x_ref = x_l * cos_yaw - y_l * sin_yaw + x_est;
+    const y_ref = x_l * sin_yaw + y_l * cos_yaw + y_est;
+    
+    // Categorize
+    // A. Front path corridor
+    if (y_ref >= -W_track / 2 && y_ref <= W_track / 2 && x_ref > x_est + rover_front_x && x_ref <= L_track + 1.0) {
+      const d = x_ref - (x_est + rover_front_x);
+      if (d < minDFront) {
+        minDFront = d;
+        closestFrontObstacle = { x: x_ref, y: y_ref, dist: d };
+      }
+    }
+    
+    // Side corridors along track length (rear of rover to target distance)
+    if (x_ref >= x_est - rover_half_l && x_ref <= L_track) {
+      if (y_ref > 0) {
+        const d = y_ref - W_track / 2;
+        if (d < minDLeft) {
+          minDLeft = d;
+          closestLeftObstacle = { x: x_ref, y: y_ref, dist: d };
+        }
+      } else {
+        const d = -y_ref - W_track / 2;
+        if (d < minDRight) {
+          minDRight = d;
+          closestRightObstacle = { x: x_ref, y: y_ref, dist: d };
+        }
+      }
+    }
+  });
+  
+  updateTrackInterferenceUI(minDFront, minDLeft, minDRight);
+  
+  // Redraw canvas if test is IDLE to show the track and obstacles in real-time
+  if (lidarTestState === 'IDLE') {
+    drawLidarTestCanvas();
+  }
+}
+
+function updateTrackInterferenceUI(dFront, dLeft, dRight) {
+  const elBadge = document.getElementById('interference-warning-badge');
+  const elFront = document.getElementById('val-interfere-front');
+  const elLeft = document.getElementById('val-interfere-left');
+  const elRight = document.getElementById('val-interfere-right');
+  
+  const boxFront = document.getElementById('box-interfere-front');
+  const boxLeft = document.getElementById('box-interfere-left');
+  const boxRight = document.getElementById('box-interfere-right');
+  
+  function formatValAndStyle(el, box, d) {
+    if (!el || !box) return;
+    if (d === Infinity || d === -Infinity || d === undefined || d === null) {
+      el.textContent = 'None';
+      el.style.color = '#10b981';
+      box.style.borderColor = 'rgba(255,255,255,0.05)';
+      return;
+    }
+    
+    const ftIn = formatFeetInches(Math.abs(d) * 1000);
+    if (d < 0) {
+      el.textContent = `Inside ${Math.abs(d).toFixed(2)}m (${ftIn})`;
+      el.style.color = '#ff0055';
+      box.style.borderColor = 'rgba(255, 0, 85, 0.4)';
+    } else if (d < 0.15) {
+      el.textContent = `Close: ${d.toFixed(2)}m (${ftIn})`;
+      el.style.color = '#f59e0b';
+      box.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+    } else {
+      el.textContent = `${d.toFixed(2)}m (${ftIn})`;
+      el.style.color = '#10b981';
+      box.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+    }
+  }
+  
+  formatValAndStyle(elFront, boxFront, dFront);
+  formatValAndStyle(elLeft, boxLeft, dLeft);
+  formatValAndStyle(elRight, boxRight, dRight);
+  
+  if (elBadge) {
+    if (dFront < 0 || dLeft < 0 || dRight < 0) {
+      elBadge.textContent = '⚠️ Interference';
+      elBadge.style.background = 'rgba(255, 0, 85, 0.15)';
+      elBadge.style.color = '#ff0055';
+      elBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
+    } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
+      elBadge.textContent = '⚠️ Caution';
+      elBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+      elBadge.style.color = '#f59e0b';
+      elBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+    } else {
+      elBadge.textContent = '✓ Clear';
+      elBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+      elBadge.style.color = '#10b981';
+      elBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+    }
+  }
+}
+
 
 function drawPolarScan(scan) {
   const canvas = document.getElementById('lidar-polar-canvas');
@@ -2143,6 +2595,8 @@ function drawPolarScan(scan) {
   const centerX = width / 2;
   const centerY = height / 2;
   const radius = Math.min(centerX, centerY) - 30; // padding for labels
+  if (radius <= 0) return;
+
   
   // Get selected range (in mm)
   const rangeSelect = document.getElementById('lidar-range-select');
@@ -2255,7 +2709,130 @@ function drawPolarScan(scan) {
     
     if (closestPt) {
       ctx.fillStyle = closestPt.distanceMm < 500 ? '#ff0055' : '#00f2fe';
-      ctx.fillText(`Closest: ${closestPt.distanceMm}mm @ ${closestPt.angleDeg.toFixed(1)}°`, 15, height - 20);
+      const closestFtIn = formatFeetInches(closestPt.distanceMm);
+      ctx.fillText(`Closest: ${closestFtIn} (${closestPt.distanceMm}mm) @ ${closestPt.angleDeg.toFixed(1)}°`, 15, height - 20);
+    }
+    
+    // Handle user touch/hover interaction on the LiDAR canvas
+    if (hoverPoint) {
+      // Calculate cursor vector from sensor (centerX, centerY)
+      const dx = hoverPoint.x - centerX;
+      const dy = hoverPoint.y - centerY;
+      const distPx = Math.sqrt(dx * dx + dy * dy);
+      
+      // Calculate angle in degrees (0° front, clockwise)
+      let angleRad = Math.atan2(dy, dx);
+      let angleDeg = angleRad * 180 / Math.PI + 90;
+      if (angleDeg < 0) angleDeg += 360;
+      angleDeg = angleDeg % 360;
+      
+      // Snap to closest scan point within 15px radius in screen space
+      let closestHoverPt = null;
+      let minHoverDistPx = 15;
+      
+      for (const pt of scan.points) {
+        const ptAngleRad = (pt.angleDeg - 90) * Math.PI / 180;
+        const ptX = centerX + pt.distanceMm * scale * Math.cos(ptAngleRad);
+        const ptY = centerY + pt.distanceMm * scale * Math.sin(ptAngleRad);
+        
+        const pdx = hoverPoint.x - ptX;
+        const pdy = hoverPoint.y - ptY;
+        const pDistPx = Math.sqrt(pdx * pdx + pdy * pdy);
+        
+        if (pDistPx < minHoverDistPx) {
+          minHoverDistPx = pDistPx;
+          closestHoverPt = pt;
+        }
+      }
+      
+      if (closestHoverPt) {
+        // Highlight the snapped scan point
+        const targetAngleRad = (closestHoverPt.angleDeg - 90) * Math.PI / 180;
+        const targetX = centerX + closestHoverPt.distanceMm * scale * Math.cos(targetAngleRad);
+        const targetY = centerY + closestHoverPt.distanceMm * scale * Math.sin(targetAngleRad);
+        
+        // Target pulse ring
+        ctx.strokeStyle = '#ff0055';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, 8, 0, 2 * Math.PI);
+        ctx.stroke();
+        
+        // Dotted line to target
+        ctx.strokeStyle = 'rgba(255, 0, 85, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(targetX, targetY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Tooltip label
+        const ftInStr = formatFeetInches(closestHoverPt.distanceMm);
+        const labelText = `${ftInStr} (${closestHoverPt.distanceMm}mm) @ ${closestHoverPt.angleDeg.toFixed(1)}°`;
+        
+        ctx.font = 'bold 11px "JetBrains Mono", monospace';
+        const textWidth = ctx.measureText(labelText).width;
+        
+        // Determine placement direction so it doesn't clip off-screen
+        const tooltipX = targetX + 10 + textWidth + 15 > width ? targetX - textWidth - 25 : targetX + 10;
+        const tooltipY = targetY - 13;
+        
+        ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
+        ctx.strokeStyle = 'rgba(255, 0, 85, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(tooltipX - 5, tooltipY - 9, textWidth + 10, 18, 4);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelText, tooltipX, tooltipY);
+        
+      } else if (distPx <= radius) {
+        // Freeform hover within the radius
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(hoverPoint.x, hoverPoint.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Small pointer dot
+        ctx.fillStyle = '#00f2fe';
+        ctx.beginPath();
+        ctx.arc(hoverPoint.x, hoverPoint.y, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Tooltip label at pointer
+        const hoverMm = distPx / scale;
+        const ftInStr = formatFeetInches(hoverMm);
+        const labelText = `${ftInStr} (${Math.round(hoverMm)}mm) @ ${angleDeg.toFixed(1)}°`;
+        
+        ctx.font = 'bold 11px "JetBrains Mono", monospace';
+        const textWidth = ctx.measureText(labelText).width;
+        
+        const tooltipX = hoverPoint.x + 10 + textWidth + 15 > width ? hoverPoint.x - textWidth - 25 : hoverPoint.x + 10;
+        const tooltipY = hoverPoint.y - 13;
+        
+        ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(tooltipX - 5, tooltipY - 9, textWidth + 10, 18, 4);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelText, tooltipX, tooltipY);
+      }
     }
   } else {
     // No points
@@ -2269,41 +2846,90 @@ function drawPolarScan(scan) {
   ctx.save();
   ctx.translate(centerX, centerY);
   
-  // Draw wheels
+  // Rover physical dimensions: 9" long (228.6mm) by 8.75" wide (222.25mm)
+  // LiDAR is 4" (101.6mm) from front, 3" (76.2mm) from left
+  // Scale factor (pixels/mm) is calculated above as `scale`.
+  // To avoid the icon disappearing or getting too small at longer range views,
+  // we clamp the drawing scale at a minimum of 0.08 (~2.75m range equivalent).
+  const drawScale = Math.max(scale, 0.08);
+  
+  const roverW_mm = 8.75 * 25.4; // 222.25 mm
+  const roverL_mm = 9.0 * 25.4;  // 228.6 mm
+  const lidarOffsetFromFront_mm = 4.0 * 25.4; // 101.6 mm
+  const lidarOffsetFromLeft_mm = 3.0 * 25.4;  // 76.2 mm
+  
+  // Calculate relative bounds where the LiDAR is at (0, 0)
+  // Since 0 degrees is facing front (which is -Y in canvas space):
+  // front boundary is along -Y
+  const frontY = -lidarOffsetFromFront_mm * drawScale;
+  const rearY = (roverL_mm - lidarOffsetFromFront_mm) * drawScale;
+  // left boundary is along -X
+  const leftX = -lidarOffsetFromLeft_mm * drawScale;
+  const rightX = (roverW_mm - lidarOffsetFromLeft_mm) * drawScale;
+  
+  const bodyW = roverW_mm * drawScale;
+  const bodyH = roverL_mm * drawScale;
+  const bodyCenterX = leftX + bodyW / 2;
+  
+  // Draw tracks/wheels
+  // Assume each track/wheel is 1.25" wide (31.75mm) and 2.5" long (63.5mm)
   ctx.fillStyle = '#1e293b';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
   ctx.lineWidth = 1;
-  const wheelW = 5;
-  const wheelH = 10;
+  const wheelW = 1.25 * 25.4 * drawScale;
+  const wheelH = 2.5 * 25.4 * drawScale;
+  
+  // Left side wheels (LF and LR)
   // LF
-  ctx.fillRect(-12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
-  ctx.strokeRect(-12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
-  // RF
-  ctx.fillRect(12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
-  ctx.strokeRect(12 - wheelW/2, -10 - wheelH/2, wheelW, wheelH);
+  ctx.fillRect(leftX - wheelW, frontY + 0.1 * bodyH, wheelW, wheelH);
+  ctx.strokeRect(leftX - wheelW, frontY + 0.1 * bodyH, wheelW, wheelH);
   // LR
-  ctx.fillRect(-12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
-  ctx.strokeRect(-12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  ctx.fillRect(leftX - wheelW, rearY - 0.1 * bodyH - wheelH, wheelW, wheelH);
+  ctx.strokeRect(leftX - wheelW, rearY - 0.1 * bodyH - wheelH, wheelW, wheelH);
+  
+  // Right side wheels (RF and RR)
+  // RF
+  ctx.fillRect(rightX, frontY + 0.1 * bodyH, wheelW, wheelH);
+  ctx.strokeRect(rightX, frontY + 0.1 * bodyH, wheelW, wheelH);
   // RR
-  ctx.fillRect(12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
-  ctx.strokeRect(12 - wheelW/2, 10 - wheelH/2, wheelW, wheelH);
+  ctx.fillRect(rightX, rearY - 0.1 * bodyH - wheelH, wheelW, wheelH);
+  ctx.strokeRect(rightX, rearY - 0.1 * bodyH - wheelH, wheelW, wheelH);
   
   // Draw body
   ctx.fillStyle = '#0f172a';
   ctx.strokeStyle = '#00f2fe';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.roundRect(-10, -12, 20, 24, 3);
+  ctx.roundRect(leftX, frontY, bodyW, bodyH, 3 * drawScale);
   ctx.fill();
   ctx.stroke();
   
-  // Draw front red nose indicator
+  // Draw front red nose indicator (centered on the body width)
   ctx.fillStyle = '#ff0055';
   ctx.beginPath();
-  ctx.moveTo(-4, -12);
-  ctx.lineTo(4, -12);
-  ctx.lineTo(0, -17);
+  const noseW = 3.0 * 25.4 * drawScale; // 3 inches wide base
+  const noseH = 4.0 * 25.4 * drawScale; // 4 inches long nose
+  ctx.moveTo(bodyCenterX - noseW / 2, frontY);
+  ctx.lineTo(bodyCenterX + noseW / 2, frontY);
+  ctx.lineTo(bodyCenterX, frontY - noseH);
   ctx.closePath();
+  ctx.fill();
+  
+  // Draw LiDAR physical mounting sensor outline at (0, 0)
+  // RPLIDAR C1 has a physical diameter of roughly 55.6mm (2.2 inches)
+  const lidarRadius = (2.2 / 2) * 25.4 * drawScale;
+  ctx.fillStyle = '#1e293b';
+  ctx.strokeStyle = '#ff3366'; // bright pink/red for physical lidar housing
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, lidarRadius, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.stroke();
+  
+  // Small center dot for the LiDAR optical origin
+  ctx.fillStyle = '#ff3366';
+  ctx.beginPath();
+  ctx.arc(0, 0, 1.5, 0, 2 * Math.PI);
   ctx.fill();
   
   ctx.restore();
@@ -2324,7 +2950,7 @@ function renderSampleTable(scan) {
   
   for (let i = 0; i < scan.points.length; i += step) {
     const pt = scan.points[i];
-    const distM = (pt.distanceMm / 1000.0).toFixed(3);
+    const distFtIn = formatFeetInches(pt.distanceMm);
     
     // Warn if close
     const distColor = pt.distanceMm < 500 ? '#ff0055' : 'inherit';
@@ -2335,7 +2961,7 @@ function renderSampleTable(scan) {
         <td style="padding: 8px 15px;">#${i + 1}</td>
         <td style="padding: 8px 15px;">${pt.angleDeg.toFixed(2)}°</td>
         <td style="padding: 8px 15px;">${pt.distanceMm} mm</td>
-        <td style="padding: 8px 15px;">${distM} m</td>
+        <td style="padding: 8px 15px;">${distFtIn}</td>
         <td style="padding: 8px 15px;">${pt.quality}</td>
       </tr>
     `;
@@ -2347,7 +2973,7 @@ function renderSampleTable(scan) {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     lidarActiveTab = btn.dataset.tab;
-    if (lidarActiveTab === 'tab-lidar') {
+    if (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') {
       startLidarPolling();
     } else {
       stopLidarPolling();
@@ -2359,7 +2985,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopLidarPolling();
-  } else if (lidarActiveTab === 'tab-lidar') {
+  } else if (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') {
     startLidarPolling();
   }
 });
@@ -2367,8 +2993,1269 @@ document.addEventListener('visibilitychange', () => {
 // Periodic stale data check
 setInterval(() => {
   const overlay = document.getElementById('lidar-stale-overlay');
-  if (overlay && lidarActiveTab === 'tab-lidar' && lastScanTime > 0 && Date.now() - lastScanTime > 1000) {
-    overlay.style.display = 'flex';
+  if (overlay && (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') && lastScanTime > 0 && Date.now() - lastScanTime > 1000) {
+    if (lidarActiveTab === 'tab-lidar') {
+      overlay.style.display = 'flex';
+    }
   }
 }, 500);
+
+
+// Setup mouse/touch event listeners on the LiDAR polar canvas for distance measurement
+(function initLidarCanvasInteraction() {
+  const canvas = document.getElementById('lidar-polar-canvas');
+  if (!canvas) {
+    // If not loaded yet, try again on DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', initLidarCanvasInteraction);
+    return;
+  }
+  
+  const updatePointer = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    let clientX, clientY;
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+      activeTouch = true;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+      activeTouch = false;
+    }
+    
+    // Scale coords to handle CSS scaling vs canvas internal dimensions
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    
+    hoverPoint = { x: px, y: py };
+    
+    // Redraw immediately when user moves pointer
+    if (latestLidarScan) {
+      drawPolarScan(latestLidarScan);
+    }
+  };
+  
+  const clearPointer = () => {
+    hoverPoint = null;
+    activeTouch = false;
+    if (latestLidarScan) {
+      drawPolarScan(latestLidarScan);
+    }
+  };
+  
+  canvas.addEventListener('mousemove', updatePointer);
+  canvas.addEventListener('touchmove', updatePointer, { passive: true });
+  canvas.addEventListener('touchstart', (e) => {
+    // Prevent scrolling when tapping/dragging on the canvas
+    e.preventDefault();
+    updatePointer(e);
+  }, { passive: false });
+  
+  canvas.addEventListener('mouseleave', clearPointer);
+  canvas.addEventListener('mouseup', clearPointer);
+  canvas.addEventListener('touchend', clearPointer);
+  canvas.addEventListener('touchcancel', clearPointer);
+})();
+
+// ────────────────────────────────────────────────────────────
+// Calibration Database UI & Management Handlers
+// ────────────────────────────────────────────────────────────
+function updateCalibrationDbUI(db) {
+  if (!db) return;
+  calibrationDatabase = db; // sync it locally
+  
+  // 1. Current Configuration
+  const curDiameter = document.getElementById('db-cur-diameter');
+  const curTrack = document.getElementById('db-cur-track');
+  if (db.currentConfig) {
+    if (db.currentConfig.wheelDiameter) {
+      currentWheelDiameter = db.currentConfig.wheelDiameter;
+      if (curDiameter) curDiameter.textContent = (db.currentConfig.wheelDiameter * 1000).toFixed(1);
+    }
+    if (db.currentConfig.effectiveTrackWidth) {
+      currentTrackWidth = db.currentConfig.effectiveTrackWidth;
+      if (curTrack) curTrack.textContent = (db.currentConfig.effectiveTrackWidth * 1000).toFixed(1);
+    }
+  }
+  
+  // Update labels in calibration cards
+  const lblCurDia = document.getElementById('cal-dist-current-diameter');
+  if (lblCurDia) lblCurDia.textContent = `${(currentWheelDiameter * 1000).toFixed(1)} mm`;
+  
+  const lblCurTrack = document.getElementById('cal-rot-current-width');
+  if (lblCurTrack) lblCurTrack.textContent = `${(currentTrackWidth * 1000).toFixed(1)} mm`;
+  
+  // 2. Proposed Configuration
+  const propDiameter = document.getElementById('db-prop-diameter');
+  const propTrack = document.getElementById('db-prop-track');
+  if (db.proposedConfig) {
+    if (propDiameter) propDiameter.textContent = db.proposedConfig.wheelDiameter ? (db.proposedConfig.wheelDiameter * 1000).toFixed(1) : '--';
+    if (propTrack) propTrack.textContent = db.proposedConfig.effectiveTrackWidth ? (db.proposedConfig.effectiveTrackWidth * 1000).toFixed(1) : '--';
+  } else {
+    if (propDiameter) propDiameter.textContent = '--';
+    if (propTrack) propTrack.textContent = '--';
+  }
+  
+  // 3. Previous Configuration
+  const prevDiameter = document.getElementById('db-prev-diameter');
+  const prevTrack = document.getElementById('db-prev-track');
+  if (db.previousConfig) {
+    if (prevDiameter) prevDiameter.textContent = db.previousConfig.wheelDiameter ? (db.previousConfig.wheelDiameter * 1000).toFixed(1) : '--';
+    if (prevTrack) prevTrack.textContent = db.previousConfig.effectiveTrackWidth ? (db.previousConfig.effectiveTrackWidth * 1000).toFixed(1) : '--';
+  } else {
+    if (prevDiameter) prevDiameter.textContent = '--';
+    if (prevTrack) prevTrack.textContent = '--';
+  }
+  
+  // 4. History Logs Table
+  const tbody = document.getElementById('cal-history-table-body');
+  if (tbody) {
+    const logs = db.testLogs || [];
+    if (logs.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No logs available in database.</td></tr>`;
+    } else {
+      const sortedLogs = [...logs].sort((a, b) => b.timestamp - a.timestamp);
+      tbody.innerHTML = sortedLogs.map(log => {
+        const dateStr = new Date(log.timestamp).toLocaleString();
+        let summary = '';
+        if (typeof log.results === 'string') {
+          summary = log.results;
+        } else if (log.results && typeof log.results === 'object') {
+          summary = Object.entries(log.results)
+            .map(([key, val]) => `${key}: ${typeof val === 'number' ? val.toFixed(4) : val}`)
+            .join(', ');
+        }
+        return `
+          <tr style="border-bottom: 1px solid var(--border);">
+            <td style="padding: 8px 10px; font-family: monospace; white-space: nowrap;">${dateStr}</td>
+            <td style="padding: 8px 10px; font-weight: bold; color: var(--cyan-glow);">${log.testType}</td>
+            <td style="padding: 8px 10px;">${log.surfaceType}</td>
+            <td style="padding: 8px 10px; font-family: monospace;">${log.firmwareVersion}</td>
+            <td style="padding: 8px 10px; color: var(--text-muted); font-size: 11px;">${summary}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+}
+
+function applyRecommendedCalibration() {
+  sendServerMessage({ type: 'apply_calibration' });
+  logSystem('[Calibration] Requested applying proposed configuration.');
+}
+
+function restorePreviousCalibration() {
+  sendServerMessage({ type: 'restore_previous' });
+  logSystem('[Calibration] Requested restoring previous configuration.');
+}
+
+function saveSurfaceType() {
+  const select = document.getElementById('cal-surface-type');
+  if (select) {
+    localStorage.setItem('cal_surface_type', select.value);
+    logSystem(`[Calibration] Saved surface preference: ${select.value}`);
+  }
+}
+
+// ── Distance & Wheel Calibration ──
+function startDistanceTest() {
+  const circum = Math.PI * currentWheelDiameter;
+  const turns = 2.0 / circum;
+  logSystem(`[Calibration Test] Starting 2m distance test (${turns.toFixed(3)} turns)...`);
+  fetch(`/api/turn?m1=${turns}&m2=${turns}&m3=${turns}&m4=${turns}`)
+    .then(res => res.json())
+    .then(data => logSystem(`[Calibration Test] Distance test response: ${JSON.stringify(data)}`))
+    .catch(err => console.error('Failed to run distance test:', err));
+}
+
+function onDistanceTrialChange() {
+  const t1 = parseFloat(document.getElementById('cal-dist-trial1').value);
+  const t2 = parseFloat(document.getElementById('cal-dist-trial2').value);
+  const currentDiaMm = currentWheelDiameter * 1000;
+  
+  let prop1 = null;
+  let prop2 = null;
+  
+  if (!isNaN(t1) && t1 > 0) {
+    prop1 = currentDiaMm * (t1 / 2.0);
+    document.getElementById('cal-dist-prop1').textContent = `${prop1.toFixed(1)} mm`;
+  } else {
+    document.getElementById('cal-dist-prop1').textContent = '-- mm';
+  }
+  
+  if (!isNaN(t2) && t2 > 0) {
+    prop2 = currentDiaMm * (t2 / 2.0);
+    document.getElementById('cal-dist-prop2').textContent = `${prop2.toFixed(1)} mm`;
+  } else {
+    document.getElementById('cal-dist-prop2').textContent = '-- mm';
+  }
+  
+  if (prop1 && prop2) {
+    const avg = (prop1 + prop2) / 2;
+    const diff = (Math.abs(prop1 - prop2) / avg) * 100;
+    document.getElementById('cal-dist-avg').textContent = `${avg.toFixed(1)} mm`;
+    document.getElementById('cal-dist-diff').textContent = `${diff.toFixed(2)} %`;
+    
+    if (diff > 3.0) {
+      document.getElementById('cal-dist-warning').style.display = 'block';
+      document.getElementById('btn-cal-dist-apply').disabled = true;
+      document.getElementById('btn-cal-dist-apply').style.opacity = 0.6;
+      document.getElementById('btn-cal-dist-apply').style.cursor = 'not-allowed';
+    } else {
+      document.getElementById('cal-dist-warning').style.display = 'none';
+      document.getElementById('btn-cal-dist-apply').disabled = false;
+      document.getElementById('btn-cal-dist-apply').style.opacity = 1.0;
+      document.getElementById('btn-cal-dist-apply').style.cursor = 'pointer';
+    }
+  } else {
+    document.getElementById('cal-dist-avg').textContent = '-- mm';
+    document.getElementById('cal-dist-diff').textContent = '-- %';
+    document.getElementById('cal-dist-warning').style.display = 'none';
+    document.getElementById('btn-cal-dist-apply').disabled = true;
+    document.getElementById('btn-cal-dist-apply').style.opacity = 0.6;
+    document.getElementById('btn-cal-dist-apply').style.cursor = 'not-allowed';
+  }
+}
+
+function applyWheelCalibration() {
+  const avgText = document.getElementById('cal-dist-avg').textContent;
+  const avgMm = parseFloat(avgText);
+  if (!isNaN(avgMm)) {
+    const diaM = avgMm / 1000.0;
+    sendServerMessage({
+      type: 'save_proposed_config',
+      wheelDiameter: diaM,
+      effectiveTrackWidth: currentTrackWidth
+    });
+    sendServerMessage({ type: 'apply_calibration' });
+    logSystem(`[Calibration] Applied new wheel diameter: ${avgMm.toFixed(1)} mm`);
+    
+    const surfaceSelect = document.getElementById('cal-surface-type');
+    const surface = surfaceSelect ? surfaceSelect.value : 'unknown';
+    sendServerMessage({
+      type: 'log_test_run',
+      testType: 'Wheel Diameter',
+      results: `Calibrated wheel diameter to ${avgMm.toFixed(1)} mm`,
+      surfaceType: surface
+    });
+  }
+}
+
+function clearDistanceTrials() {
+  document.getElementById('cal-dist-trial1').value = '';
+  document.getElementById('cal-dist-trial2').value = '';
+  onDistanceTrialChange();
+}
+
+// ── Rotation & Track Width Calibration ──
+function startRotationTest(isCw) {
+  const turns = currentTrackWidth / currentWheelDiameter;
+  logSystem(`[Calibration Test] Starting 360° ${isCw ? 'CW' : 'CCW'} test (${turns.toFixed(3)} turns)...`);
+  const m1 = isCw ? turns : -turns;
+  const m2 = isCw ? -turns : turns;
+  const m3 = isCw ? turns : -turns;
+  const m4 = isCw ? -turns : turns;
+  fetch(`/api/turn?m1=${m1}&m2=${m2}&m3=${m3}&m4=${m4}`)
+    .then(res => res.json())
+    .then(data => logSystem(`[Calibration Test] Rotation test response: ${JSON.stringify(data)}`))
+    .catch(err => console.error('Failed to run rotation test:', err));
+}
+
+function startRotationVerification(isCw) {
+  startRotationTest(isCw);
+}
+
+function onRotationTrialChange() {
+  const cw = parseFloat(document.getElementById('cal-rot-cw-angle').value);
+  const ccw = parseFloat(document.getElementById('cal-rot-ccw-angle').value);
+  const currentWidthMm = currentTrackWidth * 1000;
+  
+  let prop1 = null;
+  let prop2 = null;
+  
+  if (!isNaN(cw) && cw > 0) {
+    prop1 = currentWidthMm * (360.0 / cw);
+    document.getElementById('cal-rot-prop1').textContent = `${prop1.toFixed(1)} mm`;
+  } else {
+    document.getElementById('cal-rot-prop1').textContent = '-- mm';
+  }
+  
+  if (!isNaN(ccw) && ccw > 0) {
+    prop2 = currentWidthMm * (360.0 / ccw);
+    document.getElementById('cal-rot-prop2').textContent = `${prop2.toFixed(1)} mm`;
+  } else {
+    document.getElementById('cal-rot-prop2').textContent = '-- mm';
+  }
+  
+  if (prop1 && prop2) {
+    const avg = (prop1 + prop2) / 2;
+    const diff = (Math.abs(prop1 - prop2) / avg) * 100;
+    document.getElementById('cal-rot-avg').textContent = `${avg.toFixed(1)} mm`;
+    document.getElementById('cal-rot-diff').textContent = `${diff.toFixed(2)} %`;
+    
+    if (diff > 5.0) {
+      document.getElementById('cal-rot-warning').style.display = 'block';
+      document.getElementById('btn-cal-rot-apply').disabled = true;
+      document.getElementById('btn-cal-rot-apply').style.opacity = 0.6;
+      document.getElementById('btn-cal-rot-apply').style.cursor = 'not-allowed';
+    } else {
+      document.getElementById('cal-rot-warning').style.display = 'none';
+      document.getElementById('btn-cal-rot-apply').disabled = false;
+      document.getElementById('btn-cal-rot-apply').style.opacity = 1.0;
+      document.getElementById('btn-cal-rot-apply').style.cursor = 'pointer';
+    }
+  } else {
+    document.getElementById('cal-rot-avg').textContent = '-- mm';
+    document.getElementById('cal-rot-diff').textContent = '-- %';
+    document.getElementById('cal-rot-warning').style.display = 'none';
+    document.getElementById('btn-cal-rot-apply').disabled = true;
+    document.getElementById('btn-cal-rot-apply').style.opacity = 0.6;
+    document.getElementById('btn-cal-rot-apply').style.cursor = 'not-allowed';
+  }
+}
+
+function applyTrackWidthCalibration() {
+  const avgText = document.getElementById('cal-rot-avg').textContent;
+  const avgMm = parseFloat(avgText);
+  if (!isNaN(avgMm)) {
+    const widthM = avgMm / 1000.0;
+    sendServerMessage({
+      type: 'save_proposed_config',
+      wheelDiameter: currentWheelDiameter,
+      effectiveTrackWidth: widthM
+    });
+    sendServerMessage({ type: 'apply_calibration' });
+    logSystem(`[Calibration] Applied new track width: ${avgMm.toFixed(1)} mm`);
+    
+    const surfaceSelect = document.getElementById('cal-surface-type');
+    const surface = surfaceSelect ? surfaceSelect.value : 'unknown';
+    sendServerMessage({
+      type: 'log_test_run',
+      testType: 'Track Width',
+      results: `Calibrated effective track width to ${avgMm.toFixed(1)} mm`,
+      surfaceType: surface
+    });
+  }
+}
+
+function clearRotationTrials() {
+  document.getElementById('cal-rot-cw-angle').value = '';
+  document.getElementById('cal-rot-ccw-angle').value = '';
+  onRotationTrialChange();
+}
+
+// ── Out-and-Back Validation ──
+function startOutAndBackTest() {
+  logSystem('[Calibration Test] Starting Out-and-Back (autotest) sequence...');
+  fetch('/api/autotest/start')
+    .then(res => res.json())
+    .then(data => logSystem(`[Calibration Test] Out-and-Back status: ${JSON.stringify(data)}`))
+    .catch(err => console.error('Failed to start Out-and-Back test:', err));
+}
+
+function logOutAndBackTrial() {
+  const surfaceSelect = document.getElementById('cal-surface-type');
+  const surface = surfaceSelect ? surfaceSelect.value : 'unknown';
+  sendServerMessage({
+    type: 'log_test_run',
+    testType: 'Out-and-Back Validation',
+    results: 'Out-and-back validation test logged by user',
+    surfaceType: surface
+  });
+}
+
+// ── Backtracking Recording & Return ──
+async function startPathRecording() {
+  try {
+    const res = await fetch('/api/path/record/start', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Path] Recording started: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to start path recording:', err);
+  }
+}
+
+async function stopPathRecording() {
+  try {
+    const res = await fetch('/api/path/record/stop', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Path] Recording stopped: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to stop path recording:', err);
+  }
+}
+
+async function startBacktrackHome() {
+  try {
+    const res = await fetch('/api/path/backtrack/start', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Path] Backtracking started: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to start backtrack:', err);
+  }
+}
+
+async function abortBacktrackHome() {
+  try {
+    const res = await fetch('/api/path/backtrack/stop', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Path] Backtracking aborted: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to abort backtrack:', err);
+  }
+}
+
+function logBacktrackTrial() {
+  const surfaceSelect = document.getElementById('cal-surface-type');
+  const surface = surfaceSelect ? surfaceSelect.value : 'unknown';
+  sendServerMessage({
+    type: 'log_test_run',
+    testType: 'Backtrack Validation',
+    results: 'Backtrack return validation test logged by user',
+    surfaceType: surface
+  });
+}
+
+// ── Breakaway Calibration & Safety Control ──
+async function triggerCalibrateStart() {
+  try {
+    const res = await fetch('/api/calibration/simulate/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ safetyAck: true })
+    });
+    const data = await res.json();
+    logSystem(`[Calibration Simulation] Started: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to start calibration simulation:', err);
+  }
+}
+
+async function triggerCalibrateCancel() {
+  try {
+    const res = await fetch('/api/calibration/abort', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Calibration] Aborted: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to abort calibration:', err);
+  }
+}
+
+async function triggerRealCalibrateStart() {
+  try {
+    const res = await fetch('/api/calibration/real/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ safetyAck: true })
+    });
+    const data = await res.json();
+    logSystem(`[Real Calibration] Started: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to start real calibration:', err);
+  }
+}
+
+// ── Maintenance Mode ──
+async function enterMaintenanceMode() {
+  try {
+    const res = await fetch('/api/maintenance/enter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ safetyAck: true })
+    });
+    const data = await res.json();
+    logSystem(`[Maintenance] Entered: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to enter maintenance mode:', err);
+  }
+}
+
+async function exitMaintenanceMode() {
+  try {
+    const res = await fetch('/api/maintenance/exit', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Maintenance] Exited: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to exit maintenance mode:', err);
+  }
+}
+
+async function stepMaintenanceOutput(value) {
+  try {
+    const res = await fetch('/api/maintenance/set_output', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speeds: [value, value, value, value] })
+    });
+    const data = await res.json();
+    logSystem(`[Maintenance] Step output set to ${value}: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to step maintenance output:', err);
+  }
+}
+
+async function stopMaintenanceOutput() {
+  try {
+    const res = await fetch('/api/maintenance/set_output', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speeds: [0, 0, 0, 0] })
+    });
+    const data = await res.json();
+    logSystem(`[Maintenance] Stopped: ${JSON.stringify(data)}`);
+  } catch (err) {
+    console.error('Failed to stop maintenance output:', err);
+  }
+}
+
+// ── Initialization of Listeners ──
+function initCalibrationListeners() {
+  const t1 = document.getElementById('cal-dist-trial1');
+  const t2 = document.getElementById('cal-dist-trial2');
+  if (t1) t1.addEventListener('input', onDistanceTrialChange);
+  if (t2) t2.addEventListener('input', onDistanceTrialChange);
+
+  const rCw = document.getElementById('cal-rot-cw-angle');
+  const rCcw = document.getElementById('cal-rot-ccw-angle');
+  if (rCw) rCw.addEventListener('input', onRotationTrialChange);
+  if (rCcw) rCcw.addEventListener('input', onRotationTrialChange);
+  
+  const surfaceSelect = document.getElementById('cal-surface-type');
+  if (surfaceSelect) {
+    const saved = localStorage.getItem('cal_surface_type');
+    if (saved) surfaceSelect.value = saved;
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    initCalibrationListeners();
+    initLidarStraightLineTest();
+  });
+} else {
+  initCalibrationListeners();
+  initLidarStraightLineTest();
+}
+
+// ==============================================================================
+// Real-time Clock Update
+// ==============================================================================
+function updateTimeBadge() {
+  const timeStatus = document.getElementById('time-status');
+  if (timeStatus) {
+    const now = new Date();
+    timeStatus.textContent = `Time: ${now.toLocaleTimeString()}`;
+  }
+}
+setInterval(updateTimeBadge, 1000);
+updateTimeBadge();
+
+// ==============================================================================
+// Gamepad Integration
+// ==============================================================================
+let gamepadIndex = null;
+let gamepadActive = false;
+let lastSentJoystick = { x: 0, y: 0, deadman: false };
+let lastGamepadSendTime = 0;
+
+window.addEventListener('gamepadconnected', (e) => {
+  logSystem(`Gamepad connected: ${e.gamepad.id} at index ${e.gamepad.index}`);
+  gamepadIndex = e.gamepad.index;
+  gamepadActive = true;
+  updateGamepadBadge(true, e.gamepad.id);
+  startGamepadLoop();
+});
+
+window.addEventListener('gamepaddisconnected', (e) => {
+  if (gamepadIndex === e.gamepad.index) {
+    logSystem(`Gamepad disconnected: ${e.gamepad.id}`);
+    gamepadIndex = null;
+    gamepadActive = false;
+    updateGamepadBadge(false);
+    // Reset HUD
+    updateGamepadHUD(0, 0, false, "None");
+    // Send safety stop
+    sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
+  }
+});
+
+function updateGamepadBadge(connected, name = '') {
+  const gpStatus = document.getElementById('gamepad-status');
+  if (gpStatus) {
+    if (connected) {
+      updateBadge(gpStatus, 'ok', `Gamepad: Connected (${name.substring(0, 12)}...)`);
+    } else {
+      updateBadge(gpStatus, 'off', 'Gamepad: Disconnected');
+    }
+  }
+}
+
+function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
+  const elDeadman = document.getElementById('gp-live-deadman');
+  if (elDeadman) {
+    elDeadman.innerText = deadman ? 'ACTIVE' : 'RELEASED';
+    elDeadman.style.color = deadman ? '#10b981' : '#ef4444';
+  }
+  const elLinear = document.getElementById('gp-live-linear');
+  if (elLinear) {
+    elLinear.innerText = y.toFixed(2);
+  }
+  const elAngular = document.getElementById('gp-live-angular');
+  if (elAngular) {
+    elAngular.innerText = x.toFixed(2);
+  }
+  const elButtons = document.getElementById('gp-live-buttons');
+  if (elButtons) {
+    elButtons.innerText = pressedButtonsStr || 'None';
+  }
+  const elStop = document.getElementById('gp-live-stop');
+  if (elStop) {
+    const isMoving = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
+    elStop.innerText = isMoving ? 'MOVING' : 'STATIONARY';
+    elStop.style.color = isMoving ? '#f59e0b' : '#10b981';
+  }
+}
+
+function startGamepadLoop() {
+  function poll() {
+    if (!gamepadActive || gamepadIndex === null) return;
+    const gp = navigator.getGamepads()[gamepadIndex];
+    if (!gp) {
+      requestAnimationFrame(poll);
+      return;
+    }
+
+    // Read axes: Left stick vertical (1) and horizontal (0)
+    // Gamepad axes: -1 is up/left, 1 is down/right.
+    // Negate gp.axes[1] so positive is forward (up) and negative is reverse (down).
+    let throttle = -gp.axes[1];
+    let turn = gp.axes[0];
+
+    // Apply deadzone
+    if (Math.abs(throttle) < 0.1) throttle = 0;
+    if (Math.abs(turn) < 0.1) turn = 0;
+
+    // Detect buttons
+    const pressedButtons = [];
+    gp.buttons.forEach((btn, idx) => {
+      if (btn.pressed) {
+        pressedButtons.push(idx);
+      }
+    });
+
+    // Translate buttons to name tags
+    const buttonNames = [];
+    pressedButtons.forEach(btnIdx => {
+      if (btnIdx === 0) buttonNames.push("A (ESTOP)");
+      else if (btnIdx === 1) buttonNames.push("B (ESTOP)");
+      else if (btnIdx === 5) buttonNames.push("RB (Deadman)");
+      else if (btnIdx === 7) buttonNames.push("RT (Deadman)");
+      else if (btnIdx === 8) buttonNames.push("Select (Disarm)");
+      else if (btnIdx === 9) buttonNames.push("Start (Arm)");
+      else buttonNames.push(btnIdx);
+    });
+    const pressedButtonsStr = buttonNames.length > 0 ? buttonNames.join(", ") : "None";
+
+    // Deadman switch: Hold RB (5) or RT (7)
+    const deadmanPressed = gp.buttons[5].pressed || gp.buttons[7].pressed;
+
+    // Safety buttons: A (0) or B (1) triggers ESTOP
+    const estopPressed = gp.buttons[0].pressed || gp.buttons[1].pressed;
+
+    // Arm/Disarm triggers
+    const armPressed = gp.buttons[9].pressed;      // Start button
+    const disarmPressed = gp.buttons[8].pressed;   // Select button
+
+    if (estopPressed) {
+      triggerEstop();
+      updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr);
+      lastSentJoystick = { x: 0, y: 0, deadman: deadmanPressed };
+      lastGamepadSendTime = Date.now();
+    } else if (armPressed) {
+      armNormalDrive();
+      lastGamepadSendTime = Date.now() + 500; // Debounce arming
+    } else if (disarmPressed) {
+      disarmNormalDrive();
+      lastGamepadSendTime = Date.now() + 500; // Debounce disarming
+    }
+
+    // Sync with HUD
+    updateGamepadHUD(turn, throttle, deadmanPressed, pressedButtonsStr);
+
+    // Send joystick commands to server
+    if (!estopPressed && !armPressed && !disarmPressed) {
+      const now = Date.now();
+      const changed = turn !== lastSentJoystick.x || throttle !== lastSentJoystick.y || deadmanPressed !== lastSentJoystick.deadman;
+      const timeElapsed = now - lastGamepadSendTime > 100;
+
+      if (changed || (timeElapsed && (turn !== 0 || throttle !== 0 || deadmanPressed))) {
+        sendServerMessage({
+          type: 'joystick',
+          x: turn,
+          y: throttle,
+          deadman: deadmanPressed
+        });
+        lastSentJoystick = { x: turn, y: throttle, deadman: deadmanPressed };
+        lastGamepadSendTime = now;
+      }
+    }
+
+    requestAnimationFrame(poll);
+  }
+  requestAnimationFrame(poll);
+}
+
+// ==============================================================================
+// LiDAR Straight-Line Correction & Calibration Setup
+// ==============================================================================
+function initLidarStraightLineTest() {
+  const chkRigid = document.getElementById('chk-rigid-mount');
+  const chkLevel = document.getElementById('chk-level-mount');
+  const btnStartWizard = document.getElementById('btn-start-wizard');
+  const btnWizardYes = document.getElementById('btn-wizard-yes');
+  const btnWizardCancel = document.getElementById('btn-wizard-cancel');
+  
+  const btnStartLidar = document.getElementById('btn-start-lidar-test');
+  const btnStopLidar = document.getElementById('btn-stop-lidar-test');
+  const btnApplyProposed = document.getElementById('btn-apply-proposed');
+  const btnRollbackProposed = document.getElementById('btn-rollback-proposed');
+  const btnResetTrims = document.getElementById('btn-reset-trims');
+
+  const selectTrackWidth = document.getElementById('monitored-track-width');
+  if (selectTrackWidth) {
+    const savedWidth = localStorage.getItem('monitored_track_width');
+    if (savedWidth) {
+      monitoredTrackWidth = parseFloat(savedWidth);
+      selectTrackWidth.value = savedWidth;
+    } else {
+      monitoredTrackWidth = parseFloat(selectTrackWidth.value);
+    }
+    selectTrackWidth.addEventListener('change', () => {
+      monitoredTrackWidth = parseFloat(selectTrackWidth.value);
+      localStorage.setItem('monitored_track_width', selectTrackWidth.value);
+      drawLidarTestCanvas();
+    });
+  }
+
+
+  function checkGates() {
+    const rigid = chkRigid ? chkRigid.checked : false;
+    const level = chkLevel ? chkLevel.checked : false;
+    const btnStart = document.getElementById('btn-start-lidar-test');
+    if (btnStart) {
+      if (rigid && level && orientationVerified) {
+        btnStart.disabled = false;
+        btnStart.style.opacity = '1';
+        btnStart.style.cursor = 'pointer';
+      } else {
+        btnStart.disabled = true;
+        btnStart.style.opacity = '0.6';
+        btnStart.style.cursor = 'not-allowed';
+      }
+    }
+  }
+
+  if (chkRigid) chkRigid.addEventListener('change', checkGates);
+  if (chkLevel) chkLevel.addEventListener('change', checkGates);
+
+  if (btnStartWizard) {
+    btnStartWizard.addEventListener('click', () => {
+      orientationStep = 1;
+      document.getElementById('orientation-wizard-box').style.display = 'flex';
+      runWizardStep();
+    });
+  }
+
+  if (btnWizardYes) {
+    btnWizardYes.addEventListener('click', () => {
+      orientationStep++;
+      if (orientationStep > 4) {
+        orientationVerified = true;
+        localStorage.setItem('lidar_orientation_verified', 'true');
+        document.getElementById('orientation-wizard-box').style.display = 'none';
+        stopWizardPolling();
+        
+        const badge = document.getElementById('orientation-verified-badge');
+        if (badge) {
+          badge.textContent = 'Verified';
+          badge.style.background = 'rgba(16, 185, 129, 0.15)';
+          badge.style.color = '#10b981';
+          badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        }
+        
+        logSystem("✅ Coordinate orientation verified successfully via flat target checks.");
+        checkGates();
+      } else {
+        runWizardStep();
+      }
+    });
+  }
+
+  if (btnWizardCancel) {
+    btnWizardCancel.addEventListener('click', () => {
+      document.getElementById('orientation-wizard-box').style.display = 'none';
+      stopWizardPolling();
+    });
+  }
+
+  if (btnStartLidar) {
+    btnStartLidar.addEventListener('click', () => {
+      // Clear path data for fresh test
+      lidarOdomPath = [];
+      lidarPosePath = [];
+      calibPathHistory = []; // Clear historical paths for new run
+      
+      const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset').value || 0);
+      const lidarXOffset = parseFloat(document.getElementById('cfg-lidar-x').value || 0.0127);
+      const lidarYOffset = parseFloat(document.getElementById('cfg-lidar-y').value || 0.034925);
+      const maxRange = parseFloat(document.getElementById('cfg-max-range').value || 4.0);
+      const minConfidence = parseFloat(document.getElementById('cfg-min-confidence').value || 0.65);
+      const headingGain = parseFloat(document.getElementById('cfg-heading-gain').value || 0.80);
+      const lateralGain = parseFloat(document.getElementById('cfg-lateral-gain').value || 1.20);
+      const maxAngularCorr = parseFloat(document.getElementById('cfg-max-steering-corr').value || 0.35);
+      const corrSlewRate = parseFloat(document.getElementById('cfg-slew-rate').value || 1.0);
+      const angleSectorMasks = document.getElementById('cfg-sector-masks').value || '';
+
+      sendServerMessage({
+        type: 'start_lidar_test',
+        frontAngleOffset,
+        lidarXOffset,
+        lidarYOffset,
+        maxRange,
+        minConfidence,
+        headingGain,
+        lateralGain,
+        maxAngularCorr,
+        corrSlewRate,
+        angleSectorMasks
+      });
+      startTestScanPolling();
+    });
+  }
+
+  if (btnStopLidar) {
+    btnStopLidar.addEventListener('click', () => {
+      sendServerMessage({ type: 'stop_lidar_test' });
+    });
+  }
+
+  if (btnApplyProposed) {
+    btnApplyProposed.addEventListener('click', () => {
+      sendServerMessage({ type: 'apply_proposed_trims' });
+    });
+  }
+
+  if (btnRollbackProposed) {
+    btnRollbackProposed.addEventListener('click', () => {
+      sendServerMessage({ type: 'rollback_trims' });
+    });
+  }
+
+  if (btnResetTrims) {
+    btnResetTrims.addEventListener('click', () => {
+      sendServerMessage({ type: 'reset_trims' });
+    });
+  }
+  
+  if (orientationVerified) {
+    const badge = document.getElementById('orientation-verified-badge');
+    if (badge) {
+      badge.textContent = 'Verified';
+      badge.style.background = 'rgba(16, 185, 129, 0.15)';
+      badge.style.color = '#10b981';
+      badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+    }
+  }
+
+  // Register speed tier toggle checkboxes to trigger redrawing the canvas
+  const chkSlow = document.getElementById('chk-toggle-slow');
+  const chkMed = document.getElementById('chk-toggle-med');
+  const chkFast = document.getElementById('chk-toggle-fast');
+  [chkSlow, chkMed, chkFast].forEach(chk => {
+    if (chk) {
+      chk.addEventListener('change', drawLidarTestCanvas);
+    }
+  });
+
+  // Register floor testing limits toggle checkbox
+  const limitsChk = document.getElementById('limits-floor-testing');
+  if (limitsChk) {
+    limitsChk.addEventListener('change', () => {
+      fetch('/api/drive/limits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ floorTesting: limitsChk.checked })
+      })
+      .catch(err => console.error('Failed to update floor testing limits:', err));
+    });
+  }
+
+  checkGates();
+  
+  // Initial draw of empty canvas
+  drawLidarTestCanvas();
+}
+
+function runWizardStep() {
+  const textDiv = document.getElementById('wizard-step-text');
+  if (!textDiv) return;
+  
+  if (orientationStep === 1) {
+    textDiv.textContent = 'Step 1: Place a flat object exactly in front of the rover (0°).';
+  } else if (orientationStep === 2) {
+    textDiv.textContent = 'Step 2: Place a flat object exactly to the left of the rover (90°).';
+  } else if (orientationStep === 3) {
+    textDiv.textContent = 'Step 3: Place a flat object exactly behind the rover (180°).';
+  } else if (orientationStep === 4) {
+    textDiv.textContent = 'Step 4: Place a flat object exactly to the right of the rover (270°).';
+  }
+  
+  startWizardPolling();
+}
+
+function startWizardPolling() {
+  if (wizardPollInterval) clearInterval(wizardPollInterval);
+  
+  wizardPollInterval = setInterval(() => {
+    let targetAngle = 0;
+    if (orientationStep === 1) targetAngle = 0;
+    else if (orientationStep === 2) targetAngle = 90;
+    else if (orientationStep === 3) targetAngle = 180;
+    else if (orientationStep === 4) targetAngle = 270;
+    
+    fetch('/api/lidar/scan')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.points) {
+          let minDist = 999.0;
+          data.points.forEach(p => {
+            let diff = Math.abs(p.angleDeg - targetAngle);
+            if (diff > 180) diff = 360 - diff;
+            if (diff <= 15) {
+              const distM = p.distanceMm / 1000.0;
+              if (distM < minDist) minDist = distM;
+            }
+          });
+          
+          const rangeSpan = document.getElementById('wizard-live-range');
+          if (rangeSpan) {
+            if (minDist < 10.0) {
+              rangeSpan.textContent = `Live distance at ${targetAngle}°: ${minDist.toFixed(3)}m`;
+            } else {
+              rangeSpan.textContent = `Live distance at ${targetAngle}°: No point detected`;
+            }
+          }
+        }
+      })
+      .catch(err => {
+        console.error('Wizard scan poll failed:', err);
+      });
+  }, 300);
+}
+
+function stopWizardPolling() {
+  if (wizardPollInterval) {
+    clearInterval(wizardPollInterval);
+    wizardPollInterval = null;
+  }
+}
+
+const lidarCanvas = document.getElementById('lidar-path-canvas');
+const lidarCtx = lidarCanvas ? lidarCanvas.getContext('2d') : null;
+
+function drawLidarTestCanvas() {
+  if (!lidarCanvas || !lidarCtx) return;
+  
+  lidarCtx.fillStyle = '#0b0f19';
+  lidarCtx.fillRect(0, 0, lidarCanvas.width, lidarCanvas.height);
+  
+  // 1. Draw Monitored Track Width Corridor (grid/shaded corridor)
+  const pyLeft = 75 - (monitoredTrackWidth / 2) * 366.6;
+  const pyRight = 75 + (monitoredTrackWidth / 2) * 366.6;
+  
+  lidarCtx.fillStyle = 'rgba(0, 240, 255, 0.025)';
+  lidarCtx.fillRect(40, pyLeft, 0.9144 * 400, monitoredTrackWidth * 366.6);
+  
+  lidarCtx.strokeStyle = 'rgba(0, 240, 255, 0.12)';
+  lidarCtx.lineWidth = 1;
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(40, pyLeft);
+  lidarCtx.lineTo(40 + 0.9144 * 400, pyLeft);
+  lidarCtx.moveTo(40, pyRight);
+  lidarCtx.lineTo(40 + 0.9144 * 400, pyRight);
+  lidarCtx.stroke();
+
+  // Draw centerline and corridor bounds
+  lidarCtx.strokeStyle = 'rgba(0, 240, 255, 0.15)';
+  lidarCtx.lineWidth = 1;
+  lidarCtx.setLineDash([5, 5]);
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(0, 75);
+  lidarCtx.lineTo(lidarCanvas.width, 75);
+  lidarCtx.stroke();
+  lidarCtx.setLineDash([]);
+  
+  // Draw distance grid
+  lidarCtx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+  for (let x = 0.0; x <= 1.0; x += 0.25) {
+    const px = 40 + x * 400;
+    lidarCtx.beginPath();
+    lidarCtx.moveTo(px, 0);
+    lidarCtx.lineTo(px, lidarCanvas.height);
+    lidarCtx.stroke();
+    
+    lidarCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    lidarCtx.font = '8px monospace';
+    lidarCtx.fillText((x * 39.37).toFixed(0) + '"', px + 2, 145);
+  }
+  
+  // 5cm error corridor markers
+  lidarCtx.strokeStyle = 'rgba(239, 68, 68, 0.08)';
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(0, 75 - 0.05 * 366.6);
+  lidarCtx.lineTo(lidarCanvas.width, 75 - 0.05 * 366.6);
+  lidarCtx.moveTo(0, 75 + 0.05 * 366.6);
+  lidarCtx.lineTo(lidarCanvas.width, 75 + 0.05 * 366.6);
+  lidarCtx.stroke();
+  
+  // Start line (X = 0)
+  lidarCtx.strokeStyle = 'rgba(0, 240, 255, 0.3)';
+  lidarCtx.lineWidth = 2;
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(40, 15);
+  lidarCtx.lineTo(40, 135);
+  lidarCtx.stroke();
+  
+  // Target line (X = 3ft)
+  const targetPx = 40 + 0.9144 * 400;
+  lidarCtx.strokeStyle = 'rgba(16, 185, 129, 0.5)';
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(targetPx, 15);
+  lidarCtx.lineTo(targetPx, 135);
+  lidarCtx.stroke();
+  
+  // Color maps and checkbox states for speed tiers
+  const tierColors = {
+    SLOW: {
+      lidar: '#10b981',  // Emerald Green
+      odom: '#059669'   // Darker Green
+    },
+    MED: {
+      lidar: '#00f0ff',   // Electric Cyan
+      odom: '#0284c7'    // Sky Blue
+    },
+    FAST: {
+      lidar: '#f59e0b',  // Neon Amber/Orange
+      odom: '#d97706'   // Darker Orange
+    }
+  };
+
+  const showSlow = document.getElementById('chk-toggle-slow') ? document.getElementById('chk-toggle-slow').checked : true;
+  const showMed = document.getElementById('chk-toggle-med') ? document.getElementById('chk-toggle-med').checked : true;
+  const showFast = document.getElementById('chk-toggle-fast') ? document.getElementById('chk-toggle-fast').checked : true;
+  
+  const showTier = {
+    SLOW: showSlow,
+    MED: showMed,
+    FAST: showFast
+  };
+
+  // 2. Draw Historical Paths
+  calibPathHistory.forEach(path => {
+    const tier = path.tier || 'SLOW';
+    if (!showTier[tier]) return;
+    
+    const colors = tierColors[tier];
+    
+    // Draw historical odom path (dashed)
+    if (path.odom && path.odom.length > 0) {
+      lidarCtx.save();
+      lidarCtx.strokeStyle = colors.odom;
+      lidarCtx.lineWidth = 1.2;
+      lidarCtx.setLineDash([3, 3]);
+      lidarCtx.beginPath();
+      let first = true;
+      path.odom.forEach(pt => {
+        const px = 40 + pt.x * 400;
+        const py = 75 - pt.y * 366.6;
+        if (first) {
+          lidarCtx.moveTo(px, py);
+          first = false;
+        } else {
+          lidarCtx.lineTo(px, py);
+        }
+      });
+      lidarCtx.stroke();
+      lidarCtx.restore();
+    }
+    
+    // Draw historical lidar path (solid)
+    if (path.lidar && path.lidar.length > 0) {
+      lidarCtx.save();
+      lidarCtx.strokeStyle = colors.lidar;
+      lidarCtx.lineWidth = 1.2;
+      lidarCtx.beginPath();
+      let first = true;
+      path.lidar.forEach(pt => {
+        const px = 40 + pt.x * 400;
+        const py = 75 - pt.y * 366.6;
+        if (first) {
+          lidarCtx.moveTo(px, py);
+          first = false;
+        } else {
+          lidarCtx.lineTo(px, py);
+        }
+      });
+      lidarCtx.stroke();
+      lidarCtx.restore();
+    }
+  });
+
+  // 3. Draw Current Active Paths
+  const activeTier = lastTelemetrySpeedTier || 'SLOW';
+  if (showTier[activeTier]) {
+    const colors = tierColors[activeTier];
+    
+    // Draw current active odom path (dashed)
+    if (lidarOdomPath.length > 0) {
+      lidarCtx.save();
+      lidarCtx.strokeStyle = colors.odom;
+      lidarCtx.lineWidth = 2.2;
+      lidarCtx.setLineDash([4, 4]);
+      lidarCtx.beginPath();
+      let first = true;
+      lidarOdomPath.forEach(pt => {
+        const px = 40 + pt.x * 400;
+        const py = 75 - pt.y * 366.6;
+        if (first) {
+          lidarCtx.moveTo(px, py);
+          first = false;
+        } else {
+          lidarCtx.lineTo(px, py);
+        }
+      });
+      lidarCtx.stroke();
+      lidarCtx.restore();
+    }
+    
+    // Draw current active lidar path (solid)
+    if (lidarPosePath.length > 0) {
+      lidarCtx.save();
+      lidarCtx.strokeStyle = colors.lidar;
+      lidarCtx.lineWidth = 2.2;
+      lidarCtx.beginPath();
+      let first = true;
+      lidarPosePath.forEach(pt => {
+        const px = 40 + pt.x * 400;
+        const py = 75 - pt.y * 366.6;
+        if (first) {
+          lidarCtx.moveTo(px, py);
+          first = false;
+        } else {
+          lidarCtx.lineTo(px, py);
+        }
+      });
+      lidarCtx.stroke();
+      lidarCtx.restore();
+    }
+  }
+  
+  // 4. Draw Raw LiDAR Scan Points projected in Track Frame
+  if (lastLidarScanForTest && lastLidarScanForTest.points && lastLidarScanForTest.points.length > 0) {
+    const latestPose = lidarPosePath.length > 0 ? lidarPosePath[lidarPosePath.length - 1] : { x: 0, y: 0, yaw: 0 };
+    
+    lidarCtx.fillStyle = 'rgba(6, 182, 212, 0.4)'; // glowing cyan with transparency
+    lastLidarScanForTest.points.forEach(pt => {
+      const angleRad = (pt.angleDeg - 90) * Math.PI / 180;
+      const distM = pt.distanceMm / 1000.0;
+      
+      // Laser point in LiDAR local frame
+      const x_lidar = distM * Math.cos(angleRad);
+      const y_lidar = - distM * Math.sin(angleRad); // Negated for right-handed mapping
+      
+      // LiDAR to chassis frame translation
+      const x_chassis = x_lidar + (parseFloat(document.getElementById('cfg-lidar-x')?.value) || 0.0127);
+      const y_chassis = y_lidar + (parseFloat(document.getElementById('cfg-lidar-y')?.value) || 0.034925);
+      
+      // Chassis to track frame translation and rotation
+      const x_track = latestPose.x + x_chassis * Math.cos(latestPose.yaw) - y_chassis * Math.sin(latestPose.yaw);
+      const y_track = latestPose.y + x_chassis * Math.sin(latestPose.yaw) + y_chassis * Math.cos(latestPose.yaw);
+      
+      // Project to track canvas
+      const px = 40 + x_track * 400;
+      const py = 75 - y_track * 366.6;
+      
+      if (px >= 0 && px <= lidarCanvas.width && py >= 0 && py <= lidarCanvas.height) {
+        lidarCtx.fillRect(px - 1, py - 1, 2, 2);
+      }
+    });
+  }
+
+  // Draw obstacles
+  function drawObstaclePoint(pt, label, color) {
+    if (!pt) return;
+    const px = 40 + pt.x * 400;
+    const py = 75 - pt.y * 366.6;
+    
+    if (px >= 0 && px <= lidarCanvas.width && py >= 0 && py <= lidarCanvas.height) {
+      lidarCtx.save();
+      lidarCtx.strokeStyle = color;
+      lidarCtx.shadowBlur = 6;
+      lidarCtx.shadowColor = color;
+      lidarCtx.lineWidth = 1.5;
+      
+      lidarCtx.beginPath();
+      lidarCtx.arc(px, py, 4, 0, 2 * Math.PI);
+      lidarCtx.stroke();
+      
+      lidarCtx.fillStyle = color;
+      lidarCtx.beginPath();
+      lidarCtx.arc(px, py, 2, 0, 2 * Math.PI);
+      lidarCtx.fill();
+      
+      lidarCtx.shadowBlur = 0;
+      lidarCtx.fillStyle = '#ffffff';
+      lidarCtx.font = 'bold 7px monospace';
+      lidarCtx.fillText(label, px + 6, py - 3);
+      lidarCtx.restore();
+    }
+  }
+  
+  drawObstaclePoint(closestFrontObstacle, 'FRONT', '#ff0055');
+  drawObstaclePoint(closestLeftObstacle, 'LEFT', closestLeftObstacle && closestLeftObstacle.dist < 0 ? '#ff0055' : '#f59e0b');
+  drawObstaclePoint(closestRightObstacle, 'RIGHT', closestRightObstacle && closestRightObstacle.dist < 0 ? '#ff0055' : '#f59e0b');
+
+  // Draw top-down rover triangle sprite
+  const latest = lidarPosePath.length > 0 ? lidarPosePath[lidarPosePath.length - 1] : { x: 0, y: 0, yaw: 0 };
+  const px = 40 + latest.x * 400;
+  const py = 75 - latest.y * 366.6;
+  
+  lidarCtx.save();
+  lidarCtx.translate(px, py);
+  lidarCtx.rotate(-latest.yaw);
+  
+  lidarCtx.fillStyle = 'rgba(0, 240, 255, 0.4)';
+  lidarCtx.strokeStyle = '#00f0ff';
+  lidarCtx.lineWidth = 1.5;
+  lidarCtx.beginPath();
+  lidarCtx.moveTo(12, 0);
+  lidarCtx.lineTo(-8, -8);
+  lidarCtx.lineTo(-8, 8);
+  lidarCtx.closePath();
+  lidarCtx.fill();
+  lidarCtx.stroke();
+  
+  lidarCtx.restore();
+}
+
+function openLowEndCalibration() {
+  const tabBtn = document.querySelector('.tab-btn[data-tab="tab-calibrate"]');
+  if (tabBtn) {
+    tabBtn.click();
+    const section = document.getElementById('tab-calibrate');
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth' });
+    }
+  }
+}
 

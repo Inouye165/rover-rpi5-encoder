@@ -82,7 +82,7 @@
           <!-- Floor testing limits toggle -->
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 12px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
             <label for="limits-floor-testing" style="font-weight: bold; color: var(--text-muted); cursor: pointer;">Floor Testing Limits (Max 0.17 m/s):</label>
-            <input type="checkbox" id="limits-floor-testing" checked style="width: 18px; height: 18px; cursor: pointer;">
+            <input type="checkbox" id="limits-floor-testing" style="width: 18px; height: 18px; cursor: pointer;">
           </div>
 
           <!-- Gamepad Cheat-Sheet Mapping info -->
@@ -800,6 +800,321 @@
             </div>
           </div>
 
+          <!-- LiDAR Straight-Line Correction & Calibration Panel -->
+          <section class="panel glass" style="grid-column: span 2; margin-top: 20px; border: 1px solid rgba(0, 240, 255, 0.2); box-shadow: 0 0 20px rgba(0, 240, 255, 0.05); padding: 25px; border-radius: 16px; background: rgba(17, 24, 39, 0.6); backdrop-filter: blur(10px);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 240, 255, 0.2); padding-bottom: 15px; margin-bottom: 20px;">
+              <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; color: #00f0ff; text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);"><span style="font-size: 1.5rem;">📡</span> LiDAR Straight-Line Correction & Calibration</h2>
+              <span id="lidar-test-state-badge" class="badge" style="background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 13px;">IDLE</span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1.2fr 1.8fr; gap: 25px;">
+              <!-- Left Column: Gates, Settings & Controls -->
+              <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- 1. Mounting and Verification Gates -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 12px;">
+                  <div style="font-weight: bold; font-size: 0.95rem; color: #00f0ff; margin-bottom: 5px; display: flex; align-items: center; gap: 6px;">
+                    <span>🛡️</span> Mounting & Safety Verification
+                  </div>
+                  
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.85rem; color: var(--text-main);">
+                    <input type="checkbox" id="chk-rigid-mount" style="accent-color: #00f0ff;">
+                    <span>LiDAR is rigidly attached to chassis</span>
+                  </label>
+                  
+                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.85rem; color: var(--text-main);">
+                    <input type="checkbox" id="chk-level-mount" style="accent-color: #00f0ff;">
+                    <span>LiDAR is leveled horizontally (pitch/roll ~0)</span>
+                  </label>
+
+                  <!-- Orientation Wizard Button and Step Panel -->
+                  <div style="margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                      <span style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted);">Orientation Wizard:</span>
+                      <span id="orientation-verified-badge" class="badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); font-size: 11px; padding: 2px 6px;">Unverified</span>
+                    </div>
+                    <button class="btn btn-secondary btn-small" id="btn-start-wizard" style="width: 100%; font-weight: bold; height: 32px; font-size: 11px;">Run Coordinate Orientation Wizard</button>
+                    
+                    <div id="orientation-wizard-box" style="display: none; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 8px; padding: 12px; margin-top: 10px; font-size: 0.8rem; flex-direction: column; gap: 8px;">
+                      <div id="wizard-step-text" style="color: #fff; font-weight: bold; margin-bottom: 5px;">Step 1: Place flat object in front of the rover (0°).</div>
+                      <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span id="wizard-live-range" style="font-family: monospace; color: #00f0ff;">Range at 0°: --m</span>
+                        <div style="display: flex; gap: 6px;">
+                          <button class="btn btn-small" id="btn-wizard-yes" style="padding: 2px 8px; font-size: 10px; background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">Verify</button>
+                          <button class="btn btn-small" id="btn-wizard-cancel" style="padding: 2px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4);">Cancel</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Track Interference Monitor -->
+                  <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                      <span style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">⚠️ Track Interference Monitor:</span>
+                      <span id="interference-warning-badge" class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); font-size: 11px; padding: 2px 6px; font-weight: bold;">✓ Clear</span>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 0.8rem;">
+                      <span style="color: var(--text-muted);">Monitored Track Width:</span>
+                      <select id="monitored-track-width" style="background: #111827; border: 1px solid var(--border); color: #fff; padding: 3px 6px; border-radius: 4px; font-size: 11px; outline: none; cursor: pointer; font-family: monospace;">
+                        <option value="0.30">1.0 ft (30cm)</option>
+                        <option value="0.45">1.5 ft (45cm)</option>
+                        <option value="0.60" selected>2.0 ft (60cm)</option>
+                        <option value="0.75">2.5 ft (75cm)</option>
+                        <option value="0.90">3.0 ft (90cm)</option>
+                      </select>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; font-family: monospace; font-size: 0.75rem;">
+                      <div id="box-interfere-front" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
+                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Front Path</div>
+                        <div id="val-interfere-front" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
+                      </div>
+                      <div id="box-interfere-left" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
+                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Left Side</div>
+                        <div id="val-interfere-left" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
+                      </div>
+                      <div id="box-interfere-right" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
+                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Right Side</div>
+                        <div id="val-interfere-right" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+
+                <!-- 2. Selectable Modes -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+                  <div style="font-weight: bold; font-size: 0.95rem; color: #00f0ff; display: flex; align-items: center; gap: 6px;">
+                    <span>⚙️</span> Select Mode
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem; color: var(--text-main);">
+                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                      <input type="radio" name="lidar-test-mode" value="observe" checked style="margin-top: 3px; accent-color: #00f0ff;">
+                      <div>
+                        <span style="font-weight: bold; color: #fff;">Observe Only (Default)</span>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Measure lateral drift & heading error; manual steering locked.</div>
+                      </div>
+                    </label>
+                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                      <input type="radio" name="lidar-test-mode" value="correct" style="margin-top: 3px; accent-color: #00f0ff;">
+                      <div>
+                        <span style="font-weight: bold; color: #fff;">Live LiDAR Correction</span>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Apply active steering corrections; do not save new trims.</div>
+                      </div>
+                    </label>
+                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                      <input type="radio" name="lidar-test-mode" value="learn" style="margin-top: 3px; accent-color: #00f0ff;">
+                      <div>
+                        <span style="font-weight: bold; color: #fff;">Learn Calibration</span>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">Run a single forward pass to calculate and propose motor trims.</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- 3. Action Buttons -->
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" id="btn-start-lidar-test" style="flex: 1; font-weight: bold; font-size: 0.9rem; background: linear-gradient(135deg, #00f0ff, #0072ff); opacity: 0.6; cursor: not-allowed; border: none; color: #fff; box-shadow: 0 0 15px rgba(0, 240, 255, 0.2);" disabled>Start LiDAR Test</button>
+                    <button class="btn btn-danger" id="btn-stop-lidar-test" style="flex: 1; font-weight: bold; font-size: 0.9rem; background: linear-gradient(135deg, #ef4444, #b91c1c); display: none; border: none; color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);">Abort Test (Stop)</button>
+                  </div>
+                  <button class="btn" onclick="openLowEndCalibration()" style="width: 100%; font-weight: bold; font-size: 0.85rem; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: all 0.2s;">⚡ Run Low-End Motor Calibration</button>
+                </div>
+              </div>
+
+              <!-- Right Column: Visualizer, Stats & Calibration Proposal -->
+              <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- Live Stats Bar -->
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; font-family: monospace; font-size: 0.8rem; text-align: center;">
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">LiDAR Pose X</div>
+                    <div id="stat-lidar-x" style="font-weight: bold; color: #00f0ff; font-size: 0.95rem;">0.000m</div>
+                  </div>
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">Lateral Drift (Y)</div>
+                    <div id="stat-lidar-y" style="font-weight: bold; color: #ef4444; font-size: 0.95rem;">0.000m</div>
+                  </div>
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">Heading Error</div>
+                    <div id="stat-lidar-yaw" style="font-weight: bold; color: #f59e0b; font-size: 0.95rem;">0.00°</div>
+                  </div>
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">ICP Confidence</div>
+                    <div id="stat-lidar-conf" style="font-weight: bold; color: #10b981; font-size: 0.95rem;">0.0%</div>
+                  </div>
+                </div>
+
+                <!-- Live Path Plotting Canvas -->
+                <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border); border-radius: 12px; padding: 15px; position: relative;">
+                  <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <span style="font-weight: bold; color: var(--text-main);">Path Comparison: LiDAR vs. Encoder (3ft Track)</span>
+                      <span style="font-size: 0.7rem; color: var(--text-muted); display: flex; gap: 10px;">
+                        <span style="display: flex; align-items: center; gap: 4px;"><span style="display: inline-block; width: 8px; height: 2px; background: #fff; border-radius: 1px;"></span> Solid = LiDAR</span>
+                        <span style="display: flex; align-items: center; gap: 4px;"><span style="display: inline-block; width: 8px; height: 2px; border-bottom: 2px dashed #fff;"></span> Dashed = Encoder</span>
+                      </span>
+                    </div>
+                    
+                    <div style="display: flex; gap: 15px; font-size: 0.75rem; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #10b981; font-weight: bold; user-select: none;">
+                        <input type="checkbox" id="chk-toggle-slow" checked style="accent-color: #10b981; cursor: pointer;">
+                        <span>SLOW Tier (0.08 m/s)</span>
+                      </label>
+                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #00f0ff; font-weight: bold; user-select: none;">
+                        <input type="checkbox" id="chk-toggle-med" checked style="accent-color: #00f0ff; cursor: pointer;">
+                        <span>MED Tier (0.11 m/s)</span>
+                      </label>
+                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #f59e0b; font-weight: bold; user-select: none;">
+                        <input type="checkbox" id="chk-toggle-fast" checked style="accent-color: #f59e0b; cursor: pointer;">
+                        <span>FAST Tier (0.15 m/s)</span>
+                      </label>
+                    </div>
+                  </div>
+                  <canvas id="lidar-path-canvas" width="480" height="150" style="width: 100%; height: 150px; background: #0b0f19; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);"></canvas>
+                </div>
+
+                <!-- Calibration Proposal & Sync Box -->
+                <div style="background: rgba(0, 240, 255, 0.02); border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; font-size: 0.9rem; color: #00f0ff; display: flex; align-items: center; gap: 6px;">
+                      <span>📊</span> Proposed Motor Trims
+                    </span>
+                    <span id="pass-count-label" style="font-size: 0.75rem; color: rgba(255,255,255,0.6); font-family: monospace;">Completed Passes: 0/1</span>
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <!-- FWD Trims -->
+                    <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px;">
+                      <div style="font-weight: bold; font-size: 0.75rem; color: var(--text-muted);">FORWARD TRIMS (FWD)</div>
+                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
+                        <span>Active L/R:</span>
+                        <span id="active-fwd-trims" style="font-family: monospace; font-weight: bold;">1.0000 / 1.0000</span>
+                      </div>
+                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
+                        <span style="color: #00f0ff;">Proposed L/R:</span>
+                        <span id="proposed-fwd-trims" style="font-family: monospace; font-weight: bold; color: #00f0ff;">-- / --</span>
+                      </div>
+                    </div>
+                    
+                    <!-- REV Trims -->
+                    <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px;">
+                      <div style="font-weight: bold; font-size: 0.75rem; color: var(--text-muted);">REVERSE TRIMS (REV)</div>
+                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
+                        <span>Active L/R:</span>
+                        <span id="active-rev-trims" style="font-family: monospace; font-weight: bold;">1.0000 / 1.0000</span>
+                      </div>
+                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
+                        <span style="color: #00f0ff;">Proposed L/R:</span>
+                        <span id="proposed-rev-trims" style="font-family: monospace; font-weight: bold; color: #00f0ff;">-- / --</span>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Calibration Persist Actions -->
+                  <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                    <button class="btn btn-small" id="btn-apply-proposed" style="flex: 1.5; font-weight: bold; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; opacity: 0.6; cursor: not-allowed; height: 32px;" disabled>Save/Apply Trims to ESP32 NVS</button>
+                    <button class="btn btn-small" id="btn-rollback-proposed" style="flex: 1; font-weight: bold; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #ef4444; height: 32px;">Rollback</button>
+                    <button class="btn btn-small" id="btn-reset-trims" style="flex: 1; font-weight: bold; background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.4); color: #9ca3af; height: 32px;">Reset (1.0)</button>
+                  </div>
+                </div>
+
+                <!-- Live Motor Power Output Box -->
+                <div style="background: rgba(168, 85, 247, 0.02); border: 1px solid rgba(168, 85, 247, 0.15); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; font-size: 0.9rem; color: #c084fc; display: flex; align-items: center; gap: 6px;">
+                      <span>⚡</span> Live Motor Power Output
+                    </span>
+                    <span id="power-active-tier" style="font-size: 0.75rem; color: rgba(255,255,255,0.6); font-family: monospace;">Tier: SLOW</span>
+                  </div>
+
+                  <div style="display: flex; flex-direction: column; gap: 12px; font-family: monospace; font-size: 0.75rem;">
+                    <!-- Left Power -->
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
+                        <span>Left Motors (M1/M3) Power:</span>
+                        <span id="lbl-power-left" style="font-weight: bold; color: #10b981;">0% (IDLE)</span>
+                      </div>
+                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+                        <div id="bar-power-left" style="height: 100%; width: 0%; background: linear-gradient(90deg, #10b981, #00f0ff); transition: width 0.1s ease;"></div>
+                      </div>
+                    </div>
+
+                     <!-- Right Power -->
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
+                        <span>Right Motors (M2/M4) Power:</span>
+                        <span id="lbl-power-right" style="font-weight: bold; color: #10b981;">0% (IDLE)</span>
+                      </div>
+                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+                        <div id="bar-power-right" style="height: 100%; width: 0%; background: linear-gradient(90deg, #10b981, #00f0ff); transition: width 0.1s ease;"></div>
+                      </div>
+                    </div>
+
+                    <!-- Live Control Effort -->
+                    <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
+                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
+                        <span>Live Steering Correction:</span>
+                        <span id="lbl-control-effort" style="font-weight: bold; color: #00f0ff;">0.000 rad/s (CENTER)</span>
+                      </div>
+                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; position: relative;">
+                        <!-- Center indicator line -->
+                        <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.25); z-index: 1;"></div>
+                        <!-- Correction slider bar -->
+                        <div id="bar-control-effort" style="height: 100%; width: 0%; position: absolute; left: 50%; background: #a855f7; transition: all 0.1s ease;"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Advanced Configuration Accordion Toggle -->
+                <details style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 0.8rem; color: var(--text-main);">
+                  <summary style="font-weight: bold; cursor: pointer; color: #00f0ff; outline: none; user-select: none;">⚙️ Advanced LiDAR & Controller Settings</summary>
+                  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; font-family: monospace;">
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Heading Gain (Kp Yaw)</label>
+                      <input type="number" id="cfg-heading-gain" value="0.80" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lateral Gain (Kp Y)</label>
+                      <input type="number" id="cfg-lateral-gain" value="2.50" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Max Steering Corr (rad/s)</label>
+                      <input type="number" id="cfg-max-steering-corr" value="0.35" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Front Angle Offset (deg)</label>
+                      <input type="number" id="cfg-front-angle-offset" value="0.0" step="0.5" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lidar X Offset (m)</label>
+                      <input type="number" id="cfg-lidar-x" value="0.0127" step="0.001" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lidar Y Offset (m)</label>
+                      <input type="number" id="cfg-lidar-y" value="0.0349" step="0.001" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Max Lidar Range (m)</label>
+                      <input type="number" id="cfg-max-range" value="4.0" step="0.5" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Min ICP Confidence</label>
+                      <input type="number" id="cfg-min-confidence" value="0.65" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div>
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Slew Rate (rad/s²)</label>
+                      <input type="number" id="cfg-slew-rate" value="1.0" step="0.1" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
+                    </div>
+                    <div style="grid-column: span 3;">
+                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Angle Sector Masks (e.g. "45-60,180-200")</label>
+                      <input type="text" id="cfg-sector-masks" value="" placeholder="None" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; box-sizing: border-box;">
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
+
           <!-- The Four Wheel Encoder Comparer -->
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
             <!-- Left Front (M1) -->
@@ -1472,7 +1787,7 @@
                     <th style="padding: 10px 15px; color: var(--cyan-glow);">Sample #</th>
                     <th style="padding: 10px 15px; color: var(--cyan-glow);">Angle (Degrees)</th>
                     <th style="padding: 10px 15px; color: var(--cyan-glow);">Distance (Millimeters)</th>
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Distance (Meters)</th>
+                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Distance (Ft/In)</th>
                     <th style="padding: 10px 15px; color: var(--cyan-glow);">Quality / Signal</th>
                   </tr>
                 </thead>
