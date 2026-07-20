@@ -102,13 +102,15 @@ if [ -n "$container_id" ]; then
     done
 
     # 8. Node and Topic checks
-    if sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list" 2>/dev/null | grep -q "rover_system_health"; then
+    node_list="$(sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list" 2>/dev/null || true)"
+    if grep -qx '/rover_system_health' <<< "$node_list"; then
         print_status "PASS" "rover_system_health node is running."
     else
         print_status "FAIL" "rover_system_health node is NOT running!"
     fi
 
-    if sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list" 2>/dev/null | grep -q "/diagnostics"; then
+    topic_list="$(sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list" 2>/dev/null || true)"
+    if grep -qx '/diagnostics' <<< "$topic_list"; then
         print_status "PASS" "diagnostic topic (/diagnostics) exists."
     else
         print_status "FAIL" "diagnostic topic does NOT exist!"
@@ -116,9 +118,9 @@ if [ -n "$container_id" ]; then
 
     # 9. Phase 1 Forbidden Topics check
     echo "--- Published Topics Verification ---"
-    active_topics=$(sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list" 2>/dev/null || echo "")
+    active_topics="$topic_list"
     for forbidden in "/scan" "/odom" "/cmd_vel"; do
-        if echo "$active_topics" | grep -q "^${forbidden}$"; then
+        if grep -qx "$forbidden" <<< "$active_topics"; then
             print_status "FAIL" "Forbidden topic '$forbidden' is published!"
         else
             print_status "PASS" "Forbidden topic '$forbidden' is NOT published."
