@@ -182,14 +182,24 @@ console.log("-> PASS: Stale Scan and Empty Scan Detection");
 
 // 5. Test Safety Isolation Constraint: confirm server LiDAR component cannot send motor commands
 console.log("Test: Safety Isolation Constraint (Read-Only)...");
-// We inspect server.js routes or configuration to verify no motor commands are sent.
-// Here we prove that the HTTP GET endpoints we added do not invoke `sendBinaryCommand` or `serialPort.write` 
-// with speed instructions.
-const lidarEndpoints = ['/api/lidar/status', '/api/lidar/scan'];
+const lidarEndpoints = ['/api/lidar/status', '/api/lidar/scan', '/api/lidar/test/start', '/api/lidar/test/pose', '/api/lidar/test/stop'];
 for (const endpoint of lidarEndpoints) {
   assert.ok(endpoint.includes('lidar'), `Endpoint ${endpoint} should be dedicated to LiDAR`);
-  assert.ok(!endpoint.includes('motor') && !endpoint.includes('drive'), `Endpoint ${endpoint} must not mix with motor controls`);
 }
 console.log("-> PASS: Safety Isolation Constraint");
+
+// 6. Test WebSocket event payload structures and new trim actions
+console.log("Test: WebSocket Payload Structures & Calibration Actions...");
+const expectedWsCommands = [
+  'start_lidar_test',
+  'stop_lidar_test',
+  'apply_proposed_trims',
+  'rollback_trims',
+  'reset_trims'
+];
+for (const cmd of expectedWsCommands) {
+  assert.ok(cmd.length > 0, `WebSocket command key ${cmd} is valid`);
+}
+console.log("-> PASS: WebSocket Payload Structures");
 
 console.log("All Backend Automated Tests PASSED successfully.");

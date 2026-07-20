@@ -128,8 +128,12 @@ const MAX_POSITION_SPEED = 60;
 
 // Phase 4 Coordinated Normal Drive State
 let latestNormalDriveStatus = null;
+let lastDeadmanPressedTime = Date.now();
+let reverseWaitStartTime = 0;
 let targetLinear = 0.0;
 let targetAngular = 0.0;
+let measuredLinearVel = 0.0;
+let measuredAngularVel = 0.0;
 let driveCommandNeedsFlush = false;
 let driveLoopStarted = false;
 let latestCalibrationStatus = null;
@@ -147,7 +151,7 @@ let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
 let TRACK_WIDTH = 0.170;  // mutable track width (synchronized with ESP32 NVS)
 
 // Limits configuration and active command source
-let floorTesting = true; // default to safe floor testing limits on startup
+let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
 
@@ -168,6 +172,78 @@ let calibrationDb = {
   testLogs: []
 };
 
+// LiDAR straight-line test variables
+let lidarTestState = 'IDLE'; // 'IDLE', 'ZEROING', 'FORWARD_RUNNING', 'COMPLETE', 'ABORTED'
+let lidarTestMode = 'correct'; // always correct+learn now
+let lidarRigidConfirmed = false;
+let lidarLevelConfirmed = false;
+let orientationVerified = false;
+
+// Fully automated multi-pass calibration
+let autoCalibActive = false;       // true = deadman bypassed, rover drives itself
+const AUTO_CALIB_SPEEDS = [0.11]; // m/s: med only
+const AUTO_CALIB_SPEED_LABELS = ['MED'];
+const AUTO_CALIB_PASSES_PER_TIER = 1;
+let autoCalibSpeedTier = 0;        // 0=med only
+let autoCalibPassIndex = 0;        // 0
+let autoCalibTotalPass = 0;        // 0-0 overall
+let tierPassSummaries = { SLOW: [], MED: [], FAST: [] };
+
+// Leg stall/movement monitoring variables
+let calibLegStartTime = 0;
+let calibLastMoveTime = 0;
+let calibLastX = 0;
+let calibLastTicks = [0, 0, 0, 0];
+let calibSpeedBoost = 0.0;
+let interPassPauseStartTime = 0;
+let returnHomeWaitStartTime = 0;
+
+// Calibration & offset settings
+let fwdAngleOffset = 0.0;
+let lidarXOffset = 0.0127;
+let lidarYOffset = 0.034925;
+let lidarYawOffset = 0.0;
+let maxCalibRange = 4.0;
+let chassisMargin = 0.02;
+let angleSectorMasks = ''; // raw string, e.g. "45-60,180-200"
+
+// Path controller gains & limits
+let headingGain = 0.8;      // K_p^psi
+let lateralGain = 2.5;      // K_p^y (Increased to make lateral correction stronger)
+let lateralKi = 0.4;        // K_i^y (Added to eliminate steady-state drift)
+let lateralErrorSum = 0.0;  // accumulated lateral error
+let correctionDeadband = 0.005; // 5mm
+let maxAngularCorr = 0.35;   // rad/s limit
+let corrSlewRate = 1.0;     // rad/s^2 limit
+let minConfidence = 0.65;
+let maxScanAgeMs = 300;
+
+// Test variables
+let lidarPose = { x: 0, y: 0, yaw: 0 };
+let lidarMetrics = { confidence: 0, inliers: 0, rmse: 0, scanAgeMs: 0, status: 'idle', rejectionReason: '' };
+let lastLidarPoseTime = null;
+let lastOdomPose = { x: 0, y: 0, yaw: 0 }; // relative encoders path tracking
+let odomStartTicks = [0, 0, 0, 0];
+let lastCorrectionApplied = 0.0;
+let lastPathControllerTime = null;
+
+// Bounded session logs for passes
+let testSessionId = '';
+let testPassNumber = 0;
+let testDirection = 'FORWARD';
+let sessionLogs = [];
+let passSummaries = [];
+
+// Proposed trims
+let activeFwdTrim = { left: 1.0, right: 1.0 };
+let activeRevTrim = { left: 1.0, right: 1.0 };
+let proposedFwdTrim = { left: 1.0, right: 1.0 };
+let proposedRevTrim = { left: 1.0, right: 1.0 };
+let acceptedPasses = 0;
+let calibrationConfidence = 0.0;
+let backupTrims = { fwd: { left: 1.0, right: 1.0 }, rev: { left: 1.0, right: 1.0 } };
+
+
 function loadCalibrationDb() {
   try {
     if (fs.existsSync(CALIBRATION_DB_FILE)) {
@@ -183,6 +259,20 @@ function loadCalibrationDb() {
         }
         console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m`);
       }
+      if (calibrationDb.floorTesting !== undefined) {
+        floorTesting = calibrationDb.floorTesting;
+        console.log(`[Config DB] Set floorTesting limits from database: ${floorTesting}`);
+      }
+      if (calibrationDb.fwdTrim) {
+        activeFwdTrim = { ...calibrationDb.fwdTrim };
+        proposedFwdTrim = { ...calibrationDb.fwdTrim };
+        console.log(`[Config DB] Loaded FWD trims from DB: L=${activeFwdTrim.left.toFixed(4)} R=${activeFwdTrim.right.toFixed(4)}`);
+      }
+      if (calibrationDb.revTrim) {
+        activeRevTrim = { ...calibrationDb.revTrim };
+        proposedRevTrim = { ...calibrationDb.revTrim };
+        console.log(`[Config DB] Loaded REV trims from DB: L=${activeRevTrim.left.toFixed(4)} R=${activeRevTrim.right.toFixed(4)}`);
+      }
     } else {
       saveCalibrationDb();
     }
@@ -193,6 +283,9 @@ function loadCalibrationDb() {
 
 function saveCalibrationDb() {
   try {
+    calibrationDb.floorTesting = floorTesting;
+    calibrationDb.fwdTrim = { left: activeFwdTrim.left, right: activeFwdTrim.right };
+    calibrationDb.revTrim = { left: activeRevTrim.left, right: activeRevTrim.right };
     fs.writeFileSync(CALIBRATION_DB_FILE, JSON.stringify(calibrationDb, null, 2), 'utf8');
     console.log('[Config DB] Calibration database saved successfully.');
   } catch (err) {
@@ -222,6 +315,9 @@ let lastImuTimestamp = null;
 // ────────────────────────────────────────────────────────────
 const LIDAR_STATUS_URL = process.env.LIDAR_STATUS_URL || 'http://127.0.0.1:3002/status';
 const LIDAR_SCAN_URL   = process.env.LIDAR_SCAN_URL   || 'http://127.0.0.1:3002/scan';
+const LIDAR_TEST_START_URL = process.env.LIDAR_TEST_START_URL || 'http://127.0.0.1:3002/test/start';
+const LIDAR_TEST_POSE_URL  = process.env.LIDAR_TEST_POSE_URL  || 'http://127.0.0.1:3002/test/pose';
+const LIDAR_TEST_STOP_URL  = process.env.LIDAR_TEST_STOP_URL  || 'http://127.0.0.1:3002/test/stop';
 
 // ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
@@ -642,37 +738,7 @@ function parseTelemetryPacket(extType, data) {
       currentTicks[2] = m3;
       currentTicks[3] = m4;
 
-      // Position Control Loop (run every time we get an encoder telemetry update)
-      let motorSpeeds = [0, 0, 0, 0];
-      let anyPositionMode = false;
-      
-      for (let i = 0; i < 4; i++) {
-        if (positionMode[i]) {
-          anyPositionMode = true;
-          const error = targetPosition[i] - currentTicks[i];
-          if (Math.abs(error) <= 3) {
-            positionMode[i] = false;
-            console.log(`[Position Control] Motor ${i + 1} reached target.`);
-          } else {
-            let speed = error * KP_POSITION;
-            if (speed > 0) {
-              if (speed < MIN_POSITION_SPEED) speed = MIN_POSITION_SPEED;
-              if (speed > MAX_POSITION_SPEED) speed = MAX_POSITION_SPEED;
-            } else {
-              if (speed > -MIN_POSITION_SPEED) speed = -MIN_POSITION_SPEED;
-              if (speed < -MAX_POSITION_SPEED) speed = -MAX_POSITION_SPEED;
-            }
-            motorSpeeds[i] = Math.round(speed);
-          }
-        }
-      }
-      
-      if (anyPositionMode) {
-        // Send motor speeds to serial
-        sendMotorSpeeds(motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
-      }
 
-      encoderPacketCount += 1;
 
       // ── Skid-Steer Encoder Odometry Integration ──
       const now = Date.now();
@@ -702,6 +768,8 @@ function parseTelemetryPacket(extType, data) {
         if (dt > 0) {
           linearVel = dCenterDist / dt;
           angularVel = dYaw / dt;
+          measuredLinearVel = linearVel;
+          measuredAngularVel = angularVel;
         }
 
         const yawAvg = odomYaw + dYaw / 2.0;
@@ -1123,12 +1191,22 @@ function parseTelemetryPacket(extType, data) {
       broadcast({ type: 'rover_params_sync', diameter, separation });
     }
 
-  } else if (extType === 0x38) { // TYPE_ROVER_TRIMS
+  } else if (extType === 0x38) { // TYPE_ROVER_TRIMS (Forward)
     if (data.length >= 8) {
       const leftTrim = data.readFloatLE(0);
       const rightTrim = data.readFloatLE(4);
-      console.log(`[Config Sync] ESP32 reported left trim = ${leftTrim.toFixed(4)}, right trim = ${rightTrim.toFixed(4)}`);
+      activeFwdTrim = { left: leftTrim, right: rightTrim };
+      console.log(`[Config Sync] ESP32 reported Left FWD Trim = ${leftTrim.toFixed(4)}, Right FWD Trim = ${rightTrim.toFixed(4)}`);
       broadcast({ type: 'rover_trims_sync', leftTrim, rightTrim });
+    }
+
+  } else if (extType === 0x39) { // TYPE_ROVER_TRIMS_REV (Reverse)
+    if (data.length >= 8) {
+      const leftTrimRev = data.readFloatLE(0);
+      const rightTrimRev = data.readFloatLE(4);
+      activeRevTrim = { left: leftTrimRev, right: rightTrimRev };
+      console.log(`[Config Sync] ESP32 reported Left REV Trim = ${leftTrimRev.toFixed(4)}, Right REV Trim = ${rightTrimRev.toFixed(4)}`);
+      broadcast({ type: 'rover_trims_rev_sync', leftTrimRev, rightTrimRev });
     }
 
   } else {
@@ -1196,8 +1274,30 @@ function initSerial(portName = COM_PORT) {
       }
     }, 600);
     setTimeout(() => {
-      // Query straight drive trims from ESP32 NVS
-      sendBinaryCommand(0x38, [], { dualChecksum: true });
+      if (activeFwdTrim) {
+        const leftBytes = floatToLEBytes(activeFwdTrim.left);
+        const rightBytes = floatToLEBytes(activeFwdTrim.right);
+        sendBinaryCommand(0x38, [...leftBytes, ...rightBytes], { dualChecksum: true });
+        setTimeout(() => {
+          sendBinaryCommand(0x38, [], { dualChecksum: true });
+        }, 100);
+        console.log(`[Config Sync] Pushed FWD trims to ESP32: L=${activeFwdTrim.left} R=${activeFwdTrim.right}`);
+      } else {
+        sendBinaryCommand(0x38, [], { dualChecksum: true });
+      }
+      setTimeout(() => {
+        if (activeRevTrim) {
+          const leftBytes = floatToLEBytes(activeRevTrim.left);
+          const rightBytes = floatToLEBytes(activeRevTrim.right);
+          sendBinaryCommand(0x39, [...leftBytes, ...rightBytes], { dualChecksum: true });
+          setTimeout(() => {
+            sendBinaryCommand(0x39, [], { dualChecksum: true });
+          }, 100);
+          console.log(`[Config Sync] Pushed REV trims to ESP32: L=${activeRevTrim.left} R=${activeRevTrim.right}`);
+        } else {
+          sendBinaryCommand(0x39, [], { dualChecksum: true });
+        }
+      }, 250);
     }, 1000);
     setTimeout(() => {
       const beepLo = 100 & 0xFF;
@@ -1331,6 +1431,30 @@ wss.on('connection', (ws) => {
               cmdSource = 'NONE';
             }
 
+            // LiDAR Automated Calibration Test active handling
+            if (lidarTestState !== 'IDLE') {
+              if (autoCalibActive) {
+                // Fully automated mode: any joystick movement = emergency abort
+                if (Math.abs(x) > 0.15 || Math.abs(y) > 0.15) {
+                  abortLidarTest('Joystick override — emergency abort.');
+                  autoCalibActive = false;
+                  console.log('[Auto Calib] Aborted by joystick override.');
+                }
+                // Ignore all joystick input otherwise — rover drives itself
+                return;
+              }
+              
+              // Legacy manual mode fallback (should not be reached in normal use)
+              turnScaled = 0.0;
+              if (lidarTestState === 'COMPLETE' || lidarTestState === 'ABORTED') {
+                if (Math.abs(throttle) < 0.05) {
+                  lidarTestState = 'IDLE';
+                  broadcast({ type: 'lidar_test_status', state: lidarTestState, msg: 'Test cleared.' });
+                }
+              }
+              return;
+            }
+
             if (deadmanPressed) {
               if (!backtracking && cmdSource !== 'CALIBRATION_TEST') {
                 const MAX_LINEAR = floorTesting ? 0.17 : 0.80;
@@ -1355,6 +1479,153 @@ wss.on('connection', (ws) => {
                 cmdSource = 'NONE';
               }
             }
+          }
+          break;
+
+        case 'start_lidar_test':
+          if (lidarTestState !== 'IDLE') {
+            return ws.send(JSON.stringify({ type: 'error', message: 'LiDAR test is already running.' }));
+          }
+          lidarTestMode = 'correct'; // always correct+learn
+          fwdAngleOffset = parseFloat(msg.frontAngleOffset || 0.0);
+          lidarXOffset = parseFloat(msg.lidarXOffset || 0.0127);
+          lidarYOffset = parseFloat(msg.lidarYOffset || 0.034925);
+          lidarYawOffset = parseFloat(msg.lidarYawOffset || 0.0);
+          maxCalibRange = parseFloat(msg.maxRange || 4.0);
+          chassisMargin = parseFloat(msg.chassisMargin || 0.02);
+          angleSectorMasks = msg.angleSectorMasks || '';
+          
+          headingGain = parseFloat(msg.headingGain || 0.8);
+          lateralGain = parseFloat(msg.lateralGain || 1.2);
+          maxAngularCorr = parseFloat(msg.maxAngularCorr || 0.35);
+          corrSlewRate = parseFloat(msg.corrSlewRate || 1.0);
+          minConfidence = parseFloat(msg.minConfidence || 0.65);
+          
+          // Reset multi-pass state
+          sessionLogs = [];
+          passSummaries = [];
+          acceptedPasses = 0;
+          calibrationConfidence = 0.0;
+          testSessionId = 'session_' + Date.now();
+          testPassNumber = 0;
+          autoCalibSpeedTier = 0;
+          autoCalibPassIndex = 0;
+          autoCalibTotalPass = 0;
+          autoCalibActive = true;
+          tierPassSummaries = { SLOW: [], MED: [], FAST: [] };
+          
+          lidarTestState = 'ZEROING';
+          console.log(`[Auto Calib] Starting 9-pass automated calibration test.`);
+          
+          let startUrl = `${LIDAR_TEST_START_URL}?front_angle_offset=${fwdAngleOffset}&lidar_x_offset=${lidarXOffset}&lidar_y_offset=${lidarYOffset}&lidar_yaw_offset=${lidarYawOffset}&min_range=0.15&max_range=${maxCalibRange}&chassis_margin=${chassisMargin}`;
+          if (angleSectorMasks) {
+            startUrl += `&angle_sector_masks=${encodeURIComponent(angleSectorMasks)}`;
+          }
+          
+          http.get(startUrl, (sRes) => {
+            let body = '';
+            sRes.on('data', (c) => { body += c; });
+            sRes.on('end', () => {
+              console.log('[Auto Calib] Python sidecar start response:', body);
+            });
+          }).on('error', (err) => {
+            console.error('[Auto Calib] Failed to notify python sidecar:', err.message);
+          });
+          
+          if (serialPort && serialPort.isOpen) {
+            const clearPkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+            serialPort.write(clearPkt);
+            const armPkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+            serialPort.write(armPkt);
+          }
+          
+          startTestPosePolling();
+          broadcast({ 
+            type: 'lidar_test_status', 
+            state: lidarTestState, 
+            msg: 'Initializing zeroing calibration. Keep rover stationary...',
+            speedTier: AUTO_CALIB_SPEED_LABELS[autoCalibSpeedTier],
+            passIndex: autoCalibPassIndex + 1,
+            totalPass: autoCalibTotalPass + 1,
+            totalPasses: AUTO_CALIB_SPEEDS.length * AUTO_CALIB_PASSES_PER_TIER
+          });
+          break;
+          
+        case 'stop_lidar_test':
+          autoCalibActive = false;
+          targetLinear = 0.0;
+          targetAngular = 0.0;
+          lastCorrectionApplied = 0.0;
+          abortLidarTest('Manually stopped by operator.');
+          lidarTestState = 'IDLE';
+          console.log('[Auto Calib] Test stopped by operator. Manual control restored.');
+          broadcast({ type: 'lidar_test_status', state: lidarTestState, msg: 'Test stopped. Manual control restored.' });
+          break;
+          
+        case 'apply_proposed_trims':
+          if (serialPort && serialPort.isOpen) {
+            backupTrims.fwd = { left: activeFwdTrim.left, right: activeFwdTrim.right };
+            backupTrims.rev = { left: activeRevTrim.left, right: activeRevTrim.right };
+            
+            const leftFwdBytes = floatToLEBytes(proposedFwdTrim.left);
+            const rightFwdBytes = floatToLEBytes(proposedFwdTrim.right);
+            sendBinaryCommand(0x38, [...leftFwdBytes, ...rightFwdBytes], { dualChecksum: true });
+            
+            setTimeout(() => {
+              const leftRevBytes = floatToLEBytes(proposedRevTrim.left);
+              const rightRevBytes = floatToLEBytes(proposedRevTrim.right);
+              sendBinaryCommand(0x39, [...leftRevBytes, ...rightRevBytes], { dualChecksum: true });
+            }, 100);
+            
+            setTimeout(() => {
+              sendBinaryCommand(0x38, [], { dualChecksum: true });
+              setTimeout(() => {
+                sendBinaryCommand(0x39, [], { dualChecksum: true });
+              }, 100);
+            }, 500);
+            
+            broadcast({ type: 'message', data: `[LiDAR Calib] Saved trims. FWD: ${proposedFwdTrim.left.toFixed(4)} / ${proposedFwdTrim.right.toFixed(4)} | REV: ${proposedRevTrim.left.toFixed(4)} / ${proposedRevTrim.right.toFixed(4)}` });
+          }
+          break;
+          
+        case 'rollback_trims':
+          if (serialPort && serialPort.isOpen) {
+            const leftFwdBytes = floatToLEBytes(backupTrims.fwd.left);
+            const rightFwdBytes = floatToLEBytes(backupTrims.fwd.right);
+            sendBinaryCommand(0x38, [...leftFwdBytes, ...rightFwdBytes], { dualChecksum: true });
+            
+            setTimeout(() => {
+              const leftRevBytes = floatToLEBytes(backupTrims.rev.left);
+              const rightRevBytes = floatToLEBytes(backupTrims.rev.right);
+              sendBinaryCommand(0x39, [...leftRevBytes, ...rightRevBytes], { dualChecksum: true });
+            }, 100);
+            
+            setTimeout(() => {
+              sendBinaryCommand(0x38, [], { dualChecksum: true });
+              setTimeout(() => {
+                sendBinaryCommand(0x39, [], { dualChecksum: true });
+              }, 100);
+            }, 500);
+            
+            broadcast({ type: 'message', data: `[LiDAR Calib] Rolled back trims to previous values.` });
+          }
+          break;
+          
+        case 'reset_trims':
+          if (serialPort && serialPort.isOpen) {
+            const leftBytes = floatToLEBytes(1.0);
+            const rightBytes = floatToLEBytes(1.0);
+            sendBinaryCommand(0x38, [...leftBytes, ...rightBytes], { dualChecksum: true });
+            setTimeout(() => {
+              sendBinaryCommand(0x39, [...leftBytes, ...rightBytes], { dualChecksum: true });
+            }, 100);
+            setTimeout(() => {
+              sendBinaryCommand(0x38, [], { dualChecksum: true });
+              setTimeout(() => {
+                sendBinaryCommand(0x39, [], { dualChecksum: true });
+              }, 100);
+            }, 500);
+            broadcast({ type: 'message', data: `[LiDAR Calib] Reset trims to 1.000.` });
           }
           break;
 
@@ -1802,6 +2073,7 @@ app.get('/api/drive/status', (req, res) => {
 app.post('/api/drive/limits', (req, res) => {
   floorTesting = req.body.floorTesting !== false;
   console.log(`[Drive] Limits configured: floorTesting=${floorTesting}`);
+  saveCalibrationDb();
   broadcast({ type: 'limits_status', floorTesting });
   res.json({ ok: true, floorTesting });
 });
@@ -2037,9 +2309,629 @@ app.get('/api/beep', (req, res) => {
 
 
 
+// Helper to send a beep command to the ESP32
+function sendBeep(ms) {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_BEEP, [ms & 0xFF, (ms >> 8) & 0xFF]);
+    serialPort.write(pkt);
+  }
+}
+
+// Aborts the active LiDAR straight-line test safely
+function abortLidarTest(reason) {
+  console.warn(`[Auto Calib Abort] ${reason}`);
+  autoCalibActive = false;
+  lidarTestState = 'IDLE';  // go straight to IDLE so manual control works immediately
+  stopTestPosePolling();
+  
+  // Safe stop: send zero velocities to ESP32
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  lastCorrectionApplied = 0.0;
+  cmdSource = 'NONE';
+  
+  if (serialPort && serialPort.isOpen) {
+    const stopPkt = buildPacket(FUNC_MOTION, [0, 0, 0, 0, 0, 0]);
+    serialPort.write(stopPkt);
+  }
+  
+  sendBeep(400);
+  
+  broadcast({
+    type: 'lidar_test_status',
+    state: lidarTestState,
+    msg: `Test ABORTED: ${reason}. Manual control restored.`,
+    reason: reason
+  });
+  
+  http.get(LIDAR_TEST_STOP_URL, () => {}).on('error', () => {});
+}
+
+// Computes the path controller step and runs the state machine
+function updatePathController() {
+  const now = Date.now();
+  if (lastPathControllerTime === null) {
+    lastPathControllerTime = now;
+    return;
+  }
+  const dt = (now - lastPathControllerTime) / 1000.0;
+  lastPathControllerTime = now;
+  
+  if (lidarTestState === 'IDLE' || lidarTestState === 'ABORTED' || lidarTestState === 'ZEROING' || lidarTestState === 'COMPLETE') {
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+    lastCorrectionApplied = 0.0;
+    return;
+  }
+  
+  if (lidarTestState === 'RETURNING_HOME_WAIT') {
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+    lastCorrectionApplied = 0.0;
+    if (Date.now() - returnHomeWaitStartTime > 2000) {
+      lidarTestState = 'RETURNING_HOME';
+      odomStartTicks = [...currentTicks];
+      lastOdomPose = { x: 0, y: 0, yaw: 0 };
+      calibLegStartTime = Date.now();
+      calibLastMoveTime = Date.now();
+      calibLastX = lidarPose.x;
+      calibLastTicks = [...currentTicks];
+      calibSpeedBoost = 0.0;
+      lateralErrorSum = 0.0;
+      
+      sendBeep(150);
+      console.log('[Auto Calib] Returning home started (REVERSE).');
+      broadcastAutoCalibStatus('Returning home started (REVERSE)...');
+    }
+    return;
+  }
+  
+  // 1. Calculate encoder relative odometry
+  const relTicks = currentTicks.map((t, idx) => t - odomStartTicks[idx]);
+  const avgLeft = (relTicks[0] + relTicks[2]) / 2.0;
+  const avgRight = (relTicks[1] + relTicks[3]) / 2.0;
+  
+  const ticksPerMeter = TICKS_PER_REV / (2.0 * Math.PI * WHEEL_RADIUS);
+  const distL = avgLeft / ticksPerMeter;
+  const distR = avgRight / ticksPerMeter;
+  const distTotal = (distL + distR) / 2.0;
+  const odomYaw = (distR - distL) / TRACK_WIDTH;
+  
+  lastOdomPose = {
+    x: distTotal * Math.cos(odomYaw),
+    y: distTotal * Math.sin(odomYaw),
+    yaw: odomYaw
+  };
+  
+  // 2. Get current speed for this tier
+  const currentSpeed = AUTO_CALIB_SPEEDS[autoCalibSpeedTier] || 0.08;
+  const tierLabel = AUTO_CALIB_SPEED_LABELS[autoCalibSpeedTier] || 'MED';
+  
+  // 3. Evaluate state target conditions & Deceleration profile
+  const x_meters = lidarPose.x;
+
+  // Monitor for correct movement (stall check and direction safety bounds)
+  if (lidarTestState === 'FORWARD_RUNNING') {
+    const isDecel = (x_meters >= 0.762);
+    
+    if (!isDecel) {
+      const elapsedLeg = Date.now() - calibLegStartTime;
+      if (elapsedLeg > 500) {
+        const deltaX = lidarPose.x - calibLastX;
+        const tickDiff = currentTicks.reduce((sum, t, idx) => sum + Math.abs(t - calibLastTicks[idx]), 0);
+        
+        const progressX = deltaX;
+        
+        // If we see significant progress in correct direction (1.0cm) or wheels spinning (sum of 15 ticks across all wheels)
+        const actualSpeed = Math.abs(measuredLinearVel);
+        const targetSpeed = Math.abs(targetLinear);
+        if (progressX > 0.01 || tickDiff > 15 || actualSpeed >= 0.7 * targetSpeed) {
+          calibLastMoveTime = Date.now();
+          calibLastX = lidarPose.x;
+          calibLastTicks = [...currentTicks];
+          calibSpeedBoost = Math.max(0.0, calibSpeedBoost - 0.005 * dt);
+        } else {
+          calibSpeedBoost = Math.min(0.08, calibSpeedBoost + 0.01 * dt);
+        }
+        
+        // Safety: check for moving in the wrong direction by more than 8cm
+        if (progressX < -0.08) {
+          abortLidarTest(`Incorrect movement direction detected. Expected FORWARD_RUNNING, but drifted in opposite direction.`);
+          return;
+        }
+        
+        // Check for stall (no progress or wheel spin for 4.0 seconds)
+        const stallDuration = Date.now() - calibLastMoveTime;
+        if (stallDuration > 4000) {
+          abortLidarTest(`Stall detected: Rover failed to move for 4.0s during FORWARD_RUNNING.`);
+          return;
+        }
+      }
+    } else {
+      calibLastMoveTime = Date.now();
+      calibLastX = lidarPose.x;
+      calibLastTicks = [...currentTicks];
+    }
+  }
+
+  // Monitor progress for RETURNING_HOME
+  if (lidarTestState === 'RETURNING_HOME') {
+    const isDecel = (x_meters <= 0.20);
+    
+    if (!isDecel) {
+      const elapsedLeg = Date.now() - calibLegStartTime;
+      if (elapsedLeg > 500) {
+        const deltaX = calibLastX - lidarPose.x; // positive progress when moving backward
+        const tickDiff = currentTicks.reduce((sum, t, idx) => sum + Math.abs(t - calibLastTicks[idx]), 0);
+        
+        const progressX = deltaX;
+        const actualSpeed = Math.abs(measuredLinearVel);
+        const targetSpeed = Math.abs(targetLinear);
+        if (progressX > 0.01 || tickDiff > 15 || actualSpeed >= 0.7 * targetSpeed) {
+          calibLastMoveTime = Date.now();
+          calibLastX = lidarPose.x;
+          calibLastTicks = [...currentTicks];
+          calibSpeedBoost = Math.max(0.0, calibSpeedBoost - 0.005 * dt);
+        } else {
+          calibSpeedBoost = Math.min(0.08, calibSpeedBoost + 0.01 * dt);
+        }
+        
+        if (progressX < -0.08) {
+          abortLidarTest(`Incorrect movement direction detected. Expected RETURNING_HOME, but drifted in opposite direction.`);
+          return;
+        }
+        
+        const stallDuration = Date.now() - calibLastMoveTime;
+        if (stallDuration > 4000) {
+          abortLidarTest(`Stall detected: Rover failed to move for 4.0s during RETURNING_HOME.`);
+          return;
+        }
+      }
+    } else {
+      calibLastMoveTime = Date.now();
+      calibLastX = lidarPose.x;
+      calibLastTicks = [...currentTicks];
+    }
+  }
+  
+  if (lidarTestState === 'FORWARD_RUNNING') {
+    testDirection = 'FORWARD';
+    targetLinear = currentSpeed + calibSpeedBoost;
+    cmdSource = 'LIDAR_TEST';
+    
+    if (x_meters >= 0.9144) {
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+      lastCorrectionApplied = 0.0;
+      sendBeep(300);
+      
+      saveCompletedPassSummary();
+      computeFinalTrims();
+      
+      lidarTestState = 'RETURNING_HOME_WAIT';
+      returnHomeWaitStartTime = Date.now();
+      
+      console.log('[Auto Calib] Forward pass complete. Saving trims and starting return-to-home sequence...');
+      broadcastAutoCalibStatus('Forward pass complete. Pausing before return...');
+      return;
+    } else if (x_meters >= 0.762) {
+      const scale = (0.9144 - x_meters) / 0.1524;
+      const clampedScale = Math.max(0.15, Math.min(1.0, scale));
+      targetLinear = targetLinear * clampedScale;
+    }
+  }
+
+  if (lidarTestState === 'RETURNING_HOME') {
+    testDirection = 'REVERSE';
+    targetLinear = -currentSpeed - calibSpeedBoost;
+    cmdSource = 'LIDAR_TEST';
+    
+    const x_meters = lidarPose.x;
+    if (x_meters <= 0.05) {
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+      lastCorrectionApplied = 0.0;
+      sendBeep(500);
+      
+      lidarTestState = 'COMPLETE';
+      autoCalibActive = false;
+      
+      console.log('[Auto Calib] Returned home successfully. Calibration finished.');
+      broadcastAutoCalibStatus('Returned home successfully. Calibration finished.');
+      stopTestPosePolling();
+      http.get(LIDAR_TEST_STOP_URL, () => {}).on('error', () => {});
+      
+      setTimeout(() => {
+        lidarTestState = 'IDLE';
+        broadcast({ type: 'lidar_test_status', state: lidarTestState, msg: 'Calibration complete. Manual control restored.' });
+      }, 5000);
+      return;
+    } else if (x_meters <= 0.20) {
+      const scale = (x_meters - 0.05) / 0.15;
+      const clampedScale = Math.max(0.15, Math.min(1.0, scale));
+      targetLinear = targetLinear * clampedScale;
+    }
+  }
+  
+  // 4. Compute path correction (always active — LiDAR auto-corrects drift)
+  let correction = 0.0;
+  let sampleAccepted = false;
+  
+  if (lidarMetrics.scanAgeMs > maxScanAgeMs || lidarMetrics.confidence < minConfidence || lidarMetrics.rejectionReason) {
+    correction = lastCorrectionApplied * 0.8;
+    lastCorrectionApplied = correction;
+  } else {
+    const e_y = lidarPose.y;
+    const e_yaw = lidarPose.yaw;
+    const v_sign = (testDirection === 'FORWARD') ? 1.0 : -1.0;
+    
+    // Accumulate lateral error for integral action to eliminate steady-state drift
+    lateralErrorSum += e_y * dt;
+    lateralErrorSum = Math.max(-0.15, Math.min(0.15, lateralErrorSum));
+    
+    const omega_raw = - (v_sign * lateralGain * e_y + v_sign * lateralKi * lateralErrorSum + headingGain * e_yaw);
+    
+    const max_delta = corrSlewRate * dt;
+    const d_omega = omega_raw - lastCorrectionApplied;
+    const clamped_d = Math.max(-max_delta, Math.min(max_delta, d_omega));
+    correction = lastCorrectionApplied + clamped_d;
+    
+    correction = Math.max(-maxAngularCorr, Math.min(maxAngularCorr, correction));
+    
+    const speedScale = Math.min(1.0, Math.abs(targetLinear) / 0.05);
+    correction = correction * speedScale;
+    
+    lastCorrectionApplied = correction;
+    sampleAccepted = true;
+  }
+  
+  // Always apply correction (test is always in correct mode)
+  targetAngular = correction;
+  
+  // 5. High-rate session logging
+  const timestamp = Date.now();
+  const logRow = {
+    timestamp,
+    sessionId: testSessionId,
+    passNumber: autoCalibTotalPass,
+    speedTier: tierLabel,
+    direction: testDirection,
+    requestedSpeed: targetLinear,
+    m1_ticks: currentTicks[0],
+    m2_ticks: currentTicks[1],
+    m3_ticks: currentTicks[2],
+    m4_ticks: currentTicks[3],
+    odomX: lastOdomPose.x,
+    odomY: lastOdomPose.y,
+    odomYaw: lastOdomPose.yaw,
+    lidarX: lidarPose.x,
+    lidarY: lidarPose.y,
+    lidarYaw: lidarPose.yaw,
+    headingError: lidarPose.yaw,
+    lateralError: lidarPose.y,
+    appliedCorrection: targetAngular,
+    leftTrimOffset: activeFwdTrim.left,
+    rightTrimOffset: activeFwdTrim.right,
+    confidence: lidarMetrics.confidence,
+    rmse: lidarMetrics.rmse,
+    sampleAccepted
+  };
+  
+  if (lidarTestState === 'FORWARD_RUNNING') {
+    sessionLogs.push(logRow);
+  }
+  
+  // Estimate motor power output (PWM magnitude percentage)
+  const L_width = 0.170; // track width (m)
+  const r_wheel = 0.0325; // wheel radius (m)
+  const kV_approx = 45.0; // kV parameter approx
+  const fwd_breakaway_approx = 45.0; // breakaway PWM approx
+  
+  const leftMps = targetLinear - (targetAngular * L_width / 2.0);
+  const rightMps = targetLinear + (targetAngular * L_width / 2.0);
+  
+  const leftRadps = leftMps / r_wheel;
+  const rightRadps = rightMps / r_wheel;
+  
+  let leftPwm = 0;
+  let rightPwm = 0;
+  if (Math.abs(leftMps) > 0.005) {
+    const sign = Math.sign(leftRadps);
+    leftPwm = sign * fwd_breakaway_approx + kV_approx * leftRadps;
+  }
+  if (Math.abs(rightMps) > 0.005) {
+    const sign = Math.sign(rightRadps);
+    rightPwm = sign * fwd_breakaway_approx + kV_approx * rightRadps;
+  }
+  
+  leftPwm = Math.max(-255, Math.min(255, leftPwm));
+  rightPwm = Math.max(-255, Math.min(255, rightPwm));
+  
+  const leftPowerPct = Math.round((Math.abs(leftPwm) / 255.0) * 100);
+  const rightPowerPct = Math.round((Math.abs(rightPwm) / 255.0) * 100);
+
+  // Broadcast telemetry updates to WebSocket clients
+  broadcast({
+    type: 'lidar_test_telemetry',
+    state: lidarTestState,
+    direction: testDirection,
+    requestedSpeed: targetLinear,
+    leftPowerPct,
+    rightPowerPct,
+    odomPose: lastOdomPose,
+    lidarPose: lidarPose,
+    metrics: lidarMetrics,
+    appliedCorrection: targetAngular,
+    lastCorrection: lastCorrectionApplied,
+    speedTier: tierLabel,
+    passIndex: autoCalibPassIndex + 1,
+    totalPass: autoCalibTotalPass + 1,
+    totalPasses: AUTO_CALIB_SPEEDS.length * AUTO_CALIB_PASSES_PER_TIER
+  });
+
+  // 6. 1Hz rate console logging for calibration diagnostics
+  const elapsed = Date.now() - calibLegStartTime;
+  if (elapsed % 1000 < 100) { 
+    console.log(`[Auto Calib Debug] State: ${lidarTestState} | X: ${lidarPose.x.toFixed(3)}m, Y: ${lidarPose.y.toFixed(4)}m, Yaw: ${lidarPose.yaw.toFixed(4)}rad | Cmd: V_lin=${targetLinear.toFixed(3)}m/s, W_ang=${targetAngular.toFixed(3)}rad/s | Boost: ${calibSpeedBoost.toFixed(3)}m/s | Integrator: ${lateralErrorSum.toFixed(4)}`);
+  }
+}
+
+// Helper: broadcast auto-calib status with progress info
+function broadcastAutoCalibStatus(msg) {
+  broadcast({
+    type: 'lidar_test_status',
+    state: lidarTestState,
+    msg,
+    speedTier: AUTO_CALIB_SPEED_LABELS[autoCalibSpeedTier],
+    passIndex: autoCalibPassIndex + 1,
+    totalPass: autoCalibTotalPass + 1,
+    totalPasses: AUTO_CALIB_SPEEDS.length * AUTO_CALIB_PASSES_PER_TIER
+  });
+}
+
+// Compute final proposed trims from the completed passes
+function computeFinalTrims() {
+  proposedFwdTrim.left = activeFwdTrim.left;
+  proposedFwdTrim.right = activeFwdTrim.right;
+  proposedRevTrim.left = activeRevTrim.left;
+  proposedRevTrim.right = activeRevTrim.right;
+  
+  acceptedPasses = passSummaries.length;
+  calibrationConfidence = 1.0;
+  
+  console.log(`[Auto Calib] Final proposed trims — FWD L=${proposedFwdTrim.left.toFixed(4)} R=${proposedFwdTrim.right.toFixed(4)} | REV L=${proposedRevTrim.left.toFixed(4)} R=${proposedRevTrim.right.toFixed(4)} | Conf=${calibrationConfidence.toFixed(2)}`);
+  
+  // Save session data
+  try {
+    fs.writeFileSync('public/lidar_test_session.json', JSON.stringify(sessionLogs, null, 2));
+    let csv = 'Timestamp,Pass,SpeedTier,Direction,RequestedSpeed,OdomX,OdomY,OdomYaw,LidarX,LidarY,LidarYaw,Correction,FwdTrimL,FwdTrimR,Confidence\n';
+    sessionLogs.forEach(row => {
+      csv += `${row.timestamp},${row.passNumber},${row.speedTier},${row.direction},${row.requestedSpeed},${row.odomX.toFixed(4)},${row.odomY.toFixed(4)},${row.odomYaw.toFixed(4)},${row.lidarX.toFixed(4)},${row.lidarY.toFixed(4)},${row.lidarYaw.toFixed(4)},${row.appliedCorrection.toFixed(4)},${row.leftTrimOffset.toFixed(4)},${row.rightTrimOffset.toFixed(4)},${row.confidence.toFixed(4)}\n`;
+    });
+    fs.writeFileSync('public/lidar_test_session.csv', csv);
+    fs.writeFileSync('public/lidar_test_summaries.json', JSON.stringify({ passSummaries, proposedFwdTrim, proposedRevTrim, calibrationConfidence }, null, 2));
+  } catch (err) {
+    console.error('[Auto Calib] Failed to write session data:', err.message);
+  }
+  
+  broadcast({
+    type: 'lidar_test_results',
+    acceptedPasses,
+    passSummaries,
+    proposedFwdTrim,
+    proposedRevTrim,
+    calibrationConfidence
+  });
+}
+
+// Summarize and learn proposed trims when a pass is completed
+function saveCompletedPassSummary() {
+  if (sessionLogs.length === 0) return;
+  
+  const currentPassRows = sessionLogs.filter(r => r.sampleAccepted);
+  const speedVal = AUTO_CALIB_SPEEDS[autoCalibSpeedTier] || 0.11;
+  const tierLab = AUTO_CALIB_SPEED_LABELS[autoCalibSpeedTier] || 'MED';
+  
+  if (currentPassRows.length > 0) {
+    const maxLatErr = Math.max(...currentPassRows.map(r => Math.abs(r.lateralError)));
+    const finalLatErr = currentPassRows[currentPassRows.length - 1].lateralError;
+    const maxHeadErr = Math.max(...currentPassRows.map(r => Math.abs(r.headingError)));
+    const finalHeadErr = currentPassRows[currentPassRows.length - 1].headingError;
+    const avgCorr = currentPassRows.reduce((sum, r) => sum + r.appliedCorrection, 0) / currentPassRows.length;
+    const peakCorr = Math.max(...currentPassRows.map(r => Math.abs(r.appliedCorrection)));
+    const disagreement = Math.max(...currentPassRows.map(r => Math.abs(r.odomX - r.lidarX)));
+    
+    const direction = 'FORWARD';
+    const distanceVal = currentPassRows[currentPassRows.length - 1].lidarX;
+    
+    const passStats = {
+      direction,
+      speedTier: tierLab,
+      speed: speedVal,
+      distance: distanceVal,
+      maxLateralError: maxLatErr,
+      finalLateralError: finalLatErr,
+      maxHeadingError: maxHeadErr,
+      finalHeadingError: finalHeadErr,
+      avgCorrection: avgCorr,
+      peakCorrection: peakCorr,
+      disagreement
+    };
+    passSummaries.push(passStats);
+    
+    // Calculate the hardware trim: exact inverse of the average control effort
+    const trimOffset = (avgCorr * TRACK_WIDTH) / speedVal;
+    
+    activeFwdTrim.left = Math.max(0.80, Math.min(1.20, activeFwdTrim.left * (1 - trimOffset)));
+    activeFwdTrim.right = Math.max(0.80, Math.min(1.20, activeFwdTrim.right * (1 + trimOffset)));
+    
+    proposedFwdTrim.left = activeFwdTrim.left;
+    proposedFwdTrim.right = activeFwdTrim.right;
+    
+    // Calibrate encoder motors on ESP32: apply and save trims
+    if (serialPort && serialPort.isOpen) {
+      const leftBytes = floatToLEBytes(activeFwdTrim.left);
+      const rightBytes = floatToLEBytes(activeFwdTrim.right);
+      sendBinaryCommand(0x38, [...leftBytes, ...rightBytes], { dualChecksum: true });
+      setTimeout(() => {
+        sendBinaryCommand(0x38, [], { dualChecksum: true });
+      }, 100);
+      console.log(`[Auto Calib] Dynamically saved FWD trims on ESP32: L=${activeFwdTrim.left.toFixed(4)} R=${activeFwdTrim.right.toFixed(4)}`);
+    }
+    
+    saveCalibrationDb();
+    
+    acceptedPasses = passSummaries.length;
+    calibrationConfidence = 1.0;
+  }
+  
+  try {
+    fs.writeFileSync('public/lidar_test_session.json', JSON.stringify(sessionLogs, null, 2));
+    let csv = 'Timestamp,Pass,Direction,RequestedSpeed,OdomX,OdomY,OdomYaw,LidarX,LidarY,LidarYaw,Correction,FwdTrimL,FwdTrimR,Confidence\n';
+    sessionLogs.forEach(row => {
+      csv += `${row.timestamp},${row.passNumber},${row.direction},${row.requestedSpeed},${row.odomX.toFixed(4)},${row.odomY.toFixed(4)},${row.odomYaw.toFixed(4)},${row.lidarX.toFixed(4)},${row.lidarY.toFixed(4)},${row.lidarYaw.toFixed(4)},${row.appliedCorrection.toFixed(4)},${row.leftTrimOffset.toFixed(4)},${row.rightTrimOffset.toFixed(4)},${row.confidence.toFixed(4)}\n`;
+    });
+    fs.writeFileSync('public/lidar_test_session.csv', csv);
+    fs.writeFileSync('public/lidar_test_summaries.json', JSON.stringify(passSummaries, null, 2));
+  } catch (err) {
+    console.error('[LiDAR Test Logs] Failed to write logs:', err.message);
+  }
+  
+  broadcast({
+    type: 'lidar_test_results',
+    acceptedPasses,
+    passSummaries,
+    proposedFwdTrim,
+    proposedRevTrim,
+    calibrationConfidence
+  });
+}
+
+let testPoseInterval = null;
+
+function startTestPosePolling() {
+  if (testPoseInterval) return;
+  lastPathControllerTime = Date.now();
+  
+  testPoseInterval = setInterval(() => {
+    if (lidarTestState === 'IDLE') {
+      stopTestPosePolling();
+      return;
+    }
+    
+    http.get(LIDAR_TEST_POSE_URL, (sRes) => {
+      let body = '';
+      sRes.on('data', (c) => { body += c; });
+      sRes.on('end', () => {
+        try {
+          const resObj = JSON.parse(body);
+          if (resObj && resObj.pose) {
+            lidarPose = resObj.pose;
+            lidarMetrics = resObj.metrics;
+            
+            if (lidarTestState === 'ZEROING' && resObj.state === 'READY') {
+              lidarTestState = 'FORWARD_RUNNING';
+              odomStartTicks = [...currentTicks];
+              lastOdomPose = { x: 0, y: 0, yaw: 0 };
+              testPassNumber = 1;
+              lastPathControllerTime = Date.now();
+              
+              calibLegStartTime = Date.now();
+              calibLastMoveTime = Date.now();
+              calibLastX = resObj.pose.x;
+              calibLastTicks = [...currentTicks];
+              calibSpeedBoost = 0.0; // Reset speed boost!
+              lateralErrorSum = 0.0; // Reset lateral error integrator!
+              
+              sendBeep(150);
+              console.log('[Test State Machine] Zeroing complete. Automated forward run started.');
+              broadcast({ type: 'lidar_test_status', state: lidarTestState, msg: 'Zeroing complete. Automated forward run started...' });
+              startDriveKeepaliveLoop();
+            }
+            
+            if (lidarTestState === 'ZEROING' && resObj.metrics.status === 'error') {
+              abortLidarTest(resObj.metrics.rejectionReason || 'Zeroing failed.');
+            }
+            
+            updatePathController();
+          }
+        } catch (e) {
+          console.error('[Test Polling] Failed to parse pose response:', e.message);
+        }
+      });
+    }).on('error', (err) => {
+      console.error('[Test Polling] LiDAR sidecar not reachable:', err.message);
+      if (lidarTestState !== 'ZEROING') {
+        abortLidarTest('LiDAR sidecar disconnected or unreachable.');
+      }
+    });
+  }, 100);
+}
+
+function stopTestPosePolling() {
+  if (testPoseInterval) {
+    clearInterval(testPoseInterval);
+    testPoseInterval = null;
+  }
+}
+
+
+// GET /api/lidar/test/start - start a test session with the python sidecar
+app.get('/api/lidar/test/start', (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  http.get(LIDAR_TEST_START_URL + qs, (sRes) => {
+    let body = '';
+    sRes.on('data', (c) => { body += c; });
+    sRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch (e) {
+        res.status(502).json({ ok: false, error: 'Bad response from LiDAR sidecar' });
+      }
+    });
+  }).on('error', (err) => {
+    res.status(503).json({ ok: false, error: `LiDAR sidecar not reachable: ${err.message}` });
+  });
+});
+
+// GET /api/lidar/test/pose - get pose from python sidecar
+app.get('/api/lidar/test/pose', (req, res) => {
+  http.get(LIDAR_TEST_POSE_URL, (sRes) => {
+    let body = '';
+    sRes.on('data', (c) => { body += c; });
+    sRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch (e) {
+        res.status(502).json({ error: 'Bad response from LiDAR sidecar' });
+      }
+    });
+  }).on('error', (err) => {
+    res.status(503).json({ error: `LiDAR sidecar not reachable: ${err.message}` });
+  });
+});
+
+// GET /api/lidar/test/stop - stop test session with python sidecar
+app.get('/api/lidar/test/stop', (req, res) => {
+  http.get(LIDAR_TEST_STOP_URL, (sRes) => {
+    let body = '';
+    sRes.on('data', (c) => { body += c; });
+    sRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch (e) {
+        res.status(502).json({ ok: false, error: 'Bad response from LiDAR sidecar' });
+      }
+    });
+  }).on('error', (err) => {
+    res.status(503).json({ ok: false, error: `LiDAR sidecar not reachable: ${err.message}` });
+  });
+});
+
+
 // GET /api/lidar/status - proxy the latest LiDAR status from the python sidecar
 app.get('/api/lidar/status', (req, res) => {
-  httpGet.get(LIDAR_STATUS_URL, (sRes) => {
+  http.get(LIDAR_STATUS_URL, (sRes) => {
     let body = '';
     sRes.on('data', (c) => { body += c; });
     sRes.on('end', () => {
@@ -2056,7 +2948,7 @@ app.get('/api/lidar/status', (req, res) => {
 
 // GET /api/lidar/scan - proxy the latest complete LiDAR scan rotation from the python sidecar
 app.get('/api/lidar/scan', (req, res) => {
-  httpGet.get(LIDAR_SCAN_URL, (sRes) => {
+  http.get(LIDAR_SCAN_URL, (sRes) => {
     let body = '';
     sRes.on('data', (c) => { body += c; });
     sRes.on('end', () => {
