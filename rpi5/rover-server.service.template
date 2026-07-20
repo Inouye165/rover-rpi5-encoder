@@ -1,15 +1,20 @@
 [Unit]
 Description=Rover Node.js Cockpit Server
 After=network.target
+Wants=rover-lidar.service
 
 [Service]
 Type=simple
 User={{USER}}
+SupplementaryGroups=dialout
 WorkingDirectory={{WORKING_DIR}}
+EnvironmentFile={{WORKING_DIR}}/.env
 ExecStart={{NODE_PATH}} server.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
