@@ -4,3 +4,4 @@ rpi5/*.template text eol=lf
 rpi5/*.rules text eol=lf
 *.py text eol=lf
 *.js text eol=lf
+ros2/scripts/*.sh text eol=lf

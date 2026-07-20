@@ -33,7 +33,9 @@ sudo -n docker run --rm \
     /bin/bash -c "
       set -euo pipefail
       colcon build --symlink-install --executor sequential
+      set +u
       source install/setup.bash
+      set -u
       colcon test --executor sequential
       colcon test-result --verbose
     "

@@ -26,10 +26,9 @@ def test_launch_description():
     
     node = entities[0]
     assert isinstance(node, Node)
-    assert node.package == 'rover_bringup'
+    assert node.node_package == 'rover_bringup'
     
-    exec_name = getattr(node, 'executable', getattr(node, 'node_executable', None))
-    assert exec_name == 'rover_system_health'
+    assert node.node_executable == 'rover_system_health'
     
     # Ensure no forbidden navigation or motor packages are defined
     forbidden_packages = [
@@ -38,4 +37,4 @@ def test_launch_description():
     ]
     for entity in entities:
         if isinstance(entity, Node):
-            assert entity.package not in forbidden_packages
+            assert entity.node_package not in forbidden_packages
