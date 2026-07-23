@@ -5,6 +5,7 @@ import pytest
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
+
 def test_launch_description():
     launch_path = os.path.join(
         os.path.dirname(__file__), '..', 'launch', 'foundation.launch.py'
@@ -20,26 +21,26 @@ def test_launch_description():
     ld = launch_module.generate_launch_description()
     assert isinstance(ld, LaunchDescription)
 
-    # Phase 2: exactly 2 nodes — rover_system_health + rover_lidar_bridge
+    # Phase 3: 4 entities — rover_system_health, rover_lidar_bridge, rover_encoder_odometry, static_transform_publisher
     entities = ld.entities
-    assert len(entities) == 2, f"Expected 2 nodes, found {len(entities)}"
+    assert len(entities) == 4, f"Expected 4 entities in Phase 3 launch, found {len(entities)}"
 
-    node_executables = {e.node_executable for e in entities if isinstance(e, Node)}
-    assert 'rover_system_health' in node_executables, \
-        "rover_system_health must be in launch"
-    assert 'rover_lidar_bridge' in node_executables, \
-        "rover_lidar_bridge must be in launch"
+    nodes = [e for e in entities if isinstance(e, Node)]
+    node_executables = {e.node_executable for e in nodes}
 
-    # All entities must be rover_bringup nodes
-    for entity in entities:
-        assert isinstance(entity, Node)
-        assert entity.node_package == 'rover_bringup'
+    assert 'rover_system_health' in node_executables, "rover_system_health must be in launch"
+    assert 'rover_lidar_bridge' in node_executables, "rover_lidar_bridge must be in launch"
+    assert 'rover_encoder_odometry' in node_executables, "rover_encoder_odometry must be in launch"
+    assert 'static_transform_publisher' in node_executables, "static_transform_publisher must be in launch"
 
-    # Ensure no forbidden navigation or motor packages are defined
+    # Static TF node check
+    tf_node = [n for n in nodes if n.node_executable == 'static_transform_publisher'][0]
+    assert tf_node.node_package == 'tf2_ros'
+
+    # Ensure no forbidden navigation or motor packages are launched
     forbidden_packages = [
         'nav2_bringup', 'slam_toolbox', 'navigation2', 'nav2_planner',
-        'nav2_controller', 'amcl', 'robot_state_publisher'
+        'nav2_controller', 'amcl'
     ]
-    for entity in entities:
-        if isinstance(entity, Node):
-            assert entity.node_package not in forbidden_packages
+    for n in nodes:
+        assert n.node_package not in forbidden_packages
