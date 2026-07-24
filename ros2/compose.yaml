@@ -6,7 +6,7 @@ services:
     image: rover-ros2:jazzy
     container_name: rover-ros2
     network_mode: host
-    restart: "no"
+    restart: unless-stopped
     user: "1000:1000"
     environment:
       - ROS_DISTRO=${ROS_DISTRO:-jazzy}
