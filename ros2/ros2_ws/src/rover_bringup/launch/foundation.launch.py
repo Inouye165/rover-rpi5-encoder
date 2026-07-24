@@ -49,4 +49,16 @@ def generate_launch_description():
                 '--child-frame-id', 'laser_frame',
             ],
         ),
+        Node(
+            package='foxglove_bridge',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            output='screen',
+            parameters=[{
+                'port': 8765,
+                'address': '0.0.0.0',
+                'capabilities': ['connectionGraph', 'assets'],
+                'topic_whitelist': ['.*'],
+            }],
+        ),
     ])

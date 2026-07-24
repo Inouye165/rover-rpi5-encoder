@@ -77,6 +77,12 @@ else
     print_status "FAIL" "Host LiDAR API is UNREACHABLE!"
 fi
 
+if (echo > /dev/tcp/127.0.0.1/8765) &>/dev/null || curl -s -m 1 http://127.0.0.1:8765 &>/dev/null; then
+    print_status "PASS" "Foxglove Bridge WebSocket port 8765 is listening on localhost."
+else
+    print_status "FAIL" "Foxglove Bridge WebSocket port 8765 is NOT listening!"
+fi
+
 # 5. Container status
 echo "--- Container Status ---"
 container_id="$(sudo -n docker ps -q -f name=rover-ros2 -f status=running)"
@@ -100,9 +106,9 @@ if [ -n "$container_id" ]; then
 
     # 7. Node checks
     echo "--- Node Checks ---"
-    node_list="$(sudo -n docker exec rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list' 2>/dev/null | tr -d '\r' || true)"
+    node_list="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list' 2>/dev/null | tr -d '\r' || true)"
 
-    for req_node in "/rover_system_health" "/rover_lidar_bridge" "/rover_encoder_odometry"; do
+    for req_node in "/rover_system_health" "/rover_lidar_bridge" "/rover_encoder_odometry" "/foxglove_bridge"; do
         if echo "$node_list" | grep -q "$req_node"; then
             print_status "PASS" "Node $req_node is running."
         else
@@ -112,7 +118,7 @@ if [ -n "$container_id" ]; then
 
     # 8. Topic checks
     echo "--- Topic Checks ---"
-    topic_list="$(sudo -n docker exec rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list' 2>/dev/null | tr -d '\r' || true)"
+    topic_list="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list' 2>/dev/null | tr -d '\r' || true)"
 
     for req_topic in "/diagnostics" "/scan" "/odom" "/tf" "/tf_static"; do
         if grep -qx "$req_topic" <<< "$topic_list"; then
@@ -124,7 +130,7 @@ if [ -n "$container_id" ]; then
 
     # 9. /odom type and validation
     echo "--- /odom Type and Content Checks ---"
-    odom_type="$(sudo -n docker exec rover-ros2 /bin/bash -c \
+    odom_type="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
         "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic type /odom" \
         2>/dev/null | tr -d '\r' || echo "")"
     if [ "$odom_type" = "nav_msgs/msg/Odometry" ]; then
@@ -134,7 +140,7 @@ if [ -n "$container_id" ]; then
     fi
 
     # Echo one /odom message
-    odom_msg="$(sudo -n docker exec rover-ros2 /bin/bash -c \
+    odom_msg="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
         "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
          timeout 5 ros2 topic echo /odom --once 2>/dev/null" \
         || true)"
@@ -159,7 +165,7 @@ if [ -n "$container_id" ]; then
 
     # 10. TF Tree Validation (odom -> base_link and base_link -> laser_frame)
     echo "--- TF Tree Verification ---"
-    tf_odom="$(sudo -n docker exec rover-ros2 /bin/bash -c \
+    tf_odom="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
         "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
          timeout 5 ros2 run tf2_ros tf2_echo odom base_link 2>/dev/null" \
         || true)"
@@ -169,7 +175,7 @@ if [ -n "$container_id" ]; then
         print_status "FAIL" "Dynamic transform odom -> base_link is NOT active!"
     fi
 
-    tf_laser="$(sudo -n docker exec rover-ros2 /bin/bash -c \
+    tf_laser="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
         "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
          timeout 5 ros2 run tf2_ros tf2_echo base_link laser_frame 2>/dev/null" \
         || true)"

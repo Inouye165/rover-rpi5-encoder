@@ -756,13 +756,14 @@ class TestLaunchFile:
         assert isinstance(ld, LaunchDescription)
 
         nodes = [e for e in ld.entities if isinstance(e, Node)]
-        assert len(nodes) == 4, f"Expected 4 nodes in Phase 3 launch, found {len(nodes)}"
+        assert len(nodes) == 5, f"Expected 5 nodes in launch, found {len(nodes)}"
 
         executables = {n.node_executable for n in nodes}
         assert "rover_system_health" in executables
         assert "rover_lidar_bridge" in executables
         assert "rover_encoder_odometry" in executables
         assert "static_transform_publisher" in executables
+        assert "foxglove_bridge" in executables
 
     def test_foundation_launch_has_no_forbidden_packages(self):
         """Forbidden Nav2/SLAM packages must not appear in the launch file.

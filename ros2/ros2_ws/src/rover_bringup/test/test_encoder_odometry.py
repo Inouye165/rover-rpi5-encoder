@@ -77,6 +77,22 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertTrue(math.isfinite(last_msg.pose.pose.position.x))
         self.assertTrue(math.isfinite(last_msg.twist.twist.linear.x))
 
+    @patch('requests.Session.get')
+    def test_poll_and_publish_malformed_payload(self, mock_get):
+        # Mock HTTP response with malformed structure
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'ok': False, 'encoders': 'invalid_type'}
+        mock_get.return_value = mock_response
+
+        published_msgs = []
+        self.node.odom_pub.publish = lambda msg: published_msgs.append(msg)
+
+        # Polling should handle malformed payload gracefully without crashing
+        self.node._poll_and_publish()
+        self.assertEqual(len(published_msgs), 0)
+        self.assertEqual(self.node.consecutive_errors, 1)
+
     def test_node_source_has_no_serial_or_dev_access(self):
         """Safety audit: ensure node source does not open serial ports or /dev devices."""
         node_file = os.path.join(

@@ -50,6 +50,7 @@ class RoverEncoderOdometry(Node):
         self.declare_parameter('m2_sign', 1.0)
         self.declare_parameter('m3_sign', 1.0)
         self.declare_parameter('m4_sign', 1.0)
+        self.declare_parameter('wheel_mapping', ['m1', 'm2', 'm3', 'm4'])
         self.declare_parameter('stale_timeout_sec', 2.0)
         self.declare_parameter('reset_threshold_ticks', 100000)
         self.declare_parameter('disagreement_threshold_ticks', 100)
@@ -63,6 +64,10 @@ class RoverEncoderOdometry(Node):
         wheel_diameter = self.get_parameter('wheel_diameter_m').get_parameter_value().double_value
         track_width = self.get_parameter('track_width_m').get_parameter_value().double_value
         ticks_per_rev = self.get_parameter('ticks_per_revolution').get_parameter_value().double_value
+
+        self.wheel_mapping = list(self.get_parameter('wheel_mapping').get_parameter_value().string_array_value)
+        if len(self.wheel_mapping) < 4:
+            self.wheel_mapping = ['m1', 'm2', 'm3', 'm4']
 
         m1_sign = self.get_parameter('m1_sign').get_parameter_value().double_value
         m2_sign = self.get_parameter('m2_sign').get_parameter_value().double_value
@@ -126,10 +131,10 @@ class RoverEncoderOdometry(Node):
             encoders_data = payload.get('encoders', {})
             if isinstance(encoders_data, dict):
                 ticks = [
-                    encoders_data.get('m1', 0),
-                    encoders_data.get('m2', 0),
-                    encoders_data.get('m3', 0),
-                    encoders_data.get('m4', 0),
+                    encoders_data.get(self.wheel_mapping[0], 0),
+                    encoders_data.get(self.wheel_mapping[1], 0),
+                    encoders_data.get(self.wheel_mapping[2], 0),
+                    encoders_data.get(self.wheel_mapping[3], 0),
                 ]
             elif isinstance(encoders_data, list) and len(encoders_data) >= 4:
                 ticks = [int(encoders_data[0]), int(encoders_data[1]), int(encoders_data[2]), int(encoders_data[3])]
