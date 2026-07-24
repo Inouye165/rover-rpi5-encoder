@@ -729,6 +729,7 @@ function parseTelemetryPacket(extType, data) {
   } else if (extType === TYPE_ENCODER) {
     // ff fb 13 0d -- four int32 LE wheel encoder counts (M1..M4)
     if (data.length >= 16) {
+      encoderPacketCount++;
       const m1 = data.readInt32LE(0);  // LF
       const m2 = data.readInt32LE(4);  // RF
       const m3 = data.readInt32LE(8);  // LR
@@ -2081,6 +2082,27 @@ app.get('/api/status', (req, res) => {
     port: COM_PORT,
     lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
     armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false
+  });
+});
+
+app.get('/api/encoders', (req, res) => {
+  const serialConnected = (serialPort && serialPort.isOpen) === true;
+  const now = Date.now();
+  const lastPacketAgeMs = lastTelemetryReceivedTime ? (now - lastTelemetryReceivedTime) : null;
+
+  res.json({
+    ok: true,
+    schema_version: '1.0',
+    serialConnected,
+    timestamp: lastTelemetryReceivedTime || null,
+    lastPacketAgeMs,
+    sequence: encoderPacketCount,
+    encoders: {
+      m1: currentTicks[0],
+      m2: currentTicks[1],
+      m3: currentTicks[2],
+      m4: currentTicks[3]
+    }
   });
 });
 

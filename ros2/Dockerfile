@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-xacro \
     ros-jazzy-tf2-tools \
     ros-jazzy-tf2-ros \
+    ros-jazzy-foxglove-bridge \
     ros-jazzy-diagnostic-updater \
     python3-colcon-common-extensions \
     python3-rosdep \

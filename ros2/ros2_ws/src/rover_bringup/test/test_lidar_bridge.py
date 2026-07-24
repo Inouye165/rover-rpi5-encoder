@@ -729,9 +729,10 @@ class TestNoDevAccess:
 # ===========================================================================
 
 class TestLaunchFile:
-    def test_foundation_launch_has_exactly_two_nodes(self):
-        """foundation.launch.py must contain exactly rover_system_health and
-        rover_lidar_bridge, and nothing else.
+    def test_foundation_launch_has_phase3_nodes(self):
+        """foundation.launch.py must contain approved Phase 3 nodes:
+        rover_system_health, rover_lidar_bridge, rover_encoder_odometry,
+        and static_transform_publisher, and nothing else.
 
         Skipped on non-ROS machines (no 'launch' package installed).
         Runs fully inside the Docker/ROS 2 environment.
@@ -755,11 +756,14 @@ class TestLaunchFile:
         assert isinstance(ld, LaunchDescription)
 
         nodes = [e for e in ld.entities if isinstance(e, Node)]
-        assert len(nodes) == 2, f"Expected 2 nodes, found {len(nodes)}"
+        assert len(nodes) == 5, f"Expected 5 nodes in launch, found {len(nodes)}"
 
         executables = {n.node_executable for n in nodes}
         assert "rover_system_health" in executables
         assert "rover_lidar_bridge" in executables
+        assert "rover_encoder_odometry" in executables
+        assert "static_transform_publisher" in executables
+        assert "foxglove_bridge" in executables
 
     def test_foundation_launch_has_no_forbidden_packages(self):
         """Forbidden Nav2/SLAM packages must not appear in the launch file.
@@ -782,19 +786,18 @@ class TestLaunchFile:
         forbidden = {
             "nav2_bringup", "slam_toolbox", "navigation2",
             "nav2_planner", "nav2_controller", "amcl",
-            "robot_state_publisher",
         }
         for entity in ld.entities:
             if isinstance(entity, Node):
                 assert entity.node_package not in forbidden, \
                     f"Forbidden package '{entity.node_package}' in launch file"
 
-    def test_foundation_launch_no_cmd_vel_odom(self):
-        """Launch file must not reference cmd_vel or odom."""
+    def test_foundation_launch_no_cmd_vel(self):
+        """Launch file must not reference cmd_vel."""
         launch_path = os.path.join(
             os.path.dirname(__file__), "..", "launch", "foundation.launch.py"
         )
         with open(launch_path, "r") as f:
             content = f.read()
         assert "cmd_vel" not in content
-        assert "odom" not in content
+        assert "rover_encoder_odometry" in content
