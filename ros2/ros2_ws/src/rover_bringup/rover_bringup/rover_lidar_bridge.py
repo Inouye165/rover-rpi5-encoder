@@ -284,9 +284,10 @@ class RoverLidarBridgeNode(Node):
         timestamp_str = data.get("timestamp")
         scan_hz = float(data.get("scanHz", 0.0))
 
-        # Compute header stamp
-        now_sec = int(time.time())
-        stamp_sec, stamp_nanosec = _iso_to_stamp(timestamp_str, now_sec)
+        # Compute header stamp using ROS node clock for nanosecond resolution and TF sync
+        now_msg = self.get_clock().now().to_msg()
+        stamp_sec = now_msg.sec
+        stamp_nanosec = now_msg.nanosec
 
         # ---- Build and publish LaserScan ----
         msg = build_laserscan(

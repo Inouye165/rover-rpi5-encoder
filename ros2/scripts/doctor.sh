@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# doctor.sh - ROS 2 Doctor for Yahboom Rover (Phase 2: LiDAR /scan Bridge)
+# doctor.sh - ROS 2 Doctor for Yahboom Rover (Phase 3: Encoder Odometry & TF)
 # ==============================================================================
 set -euo pipefail
 
@@ -22,7 +22,7 @@ print_status() {
 }
 
 echo "============================================="
-echo "        ROS 2 PHASE 2 DOCTOR                 "
+echo "        ROS 2 PHASE 3 DOCTOR                 "
 echo "============================================="
 
 # 1. Host architecture
@@ -65,10 +65,22 @@ else
     print_status "FAIL" "Host Cockpit API is UNREACHABLE!"
 fi
 
+if curl -s -m 1 http://127.0.0.1:3000/api/encoders &>/dev/null; then
+    print_status "PASS" "Host Encoder Telemetry API is reachable at http://127.0.0.1:3000/api/encoders"
+else
+    print_status "FAIL" "Host Encoder Telemetry API is UNREACHABLE!"
+fi
+
 if curl -s -m 1 http://127.0.0.1:3002/status &>/dev/null; then
     print_status "PASS" "Host LiDAR API is reachable at http://127.0.0.1:3002/status"
 else
     print_status "FAIL" "Host LiDAR API is UNREACHABLE!"
+fi
+
+if (echo > /dev/tcp/127.0.0.1/8765) &>/dev/null || curl -s -m 1 http://127.0.0.1:8765 &>/dev/null; then
+    print_status "PASS" "Foxglove Bridge WebSocket port 8765 is listening on localhost."
+else
+    print_status "FAIL" "Foxglove Bridge WebSocket port 8765 is NOT listening!"
 fi
 
 # 5. Container status
@@ -92,113 +104,105 @@ if [ -n "$container_id" ]; then
         print_status "FAIL" "ros2 CLI does NOT work inside the container!"
     fi
 
-    # 7. Package installation checks
-    for pkg in "nav2_bringup" "slam_toolbox" "nav2_msgs"; do
-        if sudo -n docker exec rover-ros2 /bin/bash -c "source /opt/ros/jazzy/setup.bash && ros2 pkg prefix $pkg" &>/dev/null; then
-            print_status "PASS" "ROS 2 package '$pkg' is installed."
+    # 7. Node checks
+    echo "--- Node Checks ---"
+    node_list="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list' 2>/dev/null | tr -d '\r' || true)"
+
+    for req_node in "/rover_system_health" "/rover_lidar_bridge" "/rover_encoder_odometry" "/foxglove_bridge"; do
+        if echo "$node_list" | grep -q "$req_node"; then
+            print_status "PASS" "Node $req_node is running."
         else
-            print_status "FAIL" "ROS 2 package '$pkg' is NOT installed!"
+            print_status "FAIL" "Node $req_node is NOT running!"
         fi
     done
 
-    # 8. Node checks
-    echo "--- Node Checks ---"
-    node_list="$(sudo -n docker exec rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list' 2>/dev/null | tr -d '\r' || true)"
-
-    if grep -qx '/rover_system_health' <<< "$node_list"; then
-        print_status "PASS" "rover_system_health node is running."
-    else
-        print_status "FAIL" "rover_system_health node is NOT running!"
-    fi
-
-    if grep -qx '/rover_lidar_bridge' <<< "$node_list"; then
-        print_status "PASS" "rover_lidar_bridge node is running."
-    else
-        print_status "FAIL" "rover_lidar_bridge node is NOT running!"
-    fi
-
-    # 9. Topic checks
+    # 8. Topic checks
     echo "--- Topic Checks ---"
-    topic_list="$(sudo -n docker exec rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list' 2>/dev/null | tr -d '\r' || true)"
+    topic_list="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list' 2>/dev/null | tr -d '\r' || true)"
 
-    if grep -qx '/diagnostics' <<< "$topic_list"; then
-        print_status "PASS" "Diagnostic topic (/diagnostics) exists."
-    else
-        print_status "FAIL" "Diagnostic topic does NOT exist!"
-    fi
+    for req_topic in "/diagnostics" "/scan" "/odom" "/tf" "/tf_static"; do
+        if grep -qx "$req_topic" <<< "$topic_list"; then
+            print_status "PASS" "Topic $req_topic exists."
+        else
+            print_status "FAIL" "Topic $req_topic does NOT exist!"
+        fi
+    done
 
-    # Phase 2: /scan is now REQUIRED
-    if grep -qx '/scan' <<< "$topic_list"; then
-        print_status "PASS" "/scan topic is published (required for Phase 2)."
-    else
-        print_status "FAIL" "/scan topic is NOT published!"
-    fi
-
-    # 10. /scan type verification
-    echo "--- /scan Type and Content Checks ---"
-    scan_type="$(sudo -n docker exec rover-ros2 /bin/bash -c \
-        "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic type /scan" \
+    # 9. /odom type and validation
+    echo "--- /odom Type and Content Checks ---"
+    odom_type="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
+        "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic type /odom" \
         2>/dev/null | tr -d '\r' || echo "")"
-    if [ "$scan_type" = "sensor_msgs/msg/LaserScan" ]; then
-        print_status "PASS" "/scan type is sensor_msgs/msg/LaserScan."
+    if [ "$odom_type" = "nav_msgs/msg/Odometry" ]; then
+        print_status "PASS" "/odom type is nav_msgs/msg/Odometry."
     else
-        print_status "FAIL" "/scan type is NOT sensor_msgs/msg/LaserScan (got: '$scan_type')!"
+        print_status "FAIL" "/odom type is NOT nav_msgs/msg/Odometry (got: '$odom_type')!"
     fi
 
-    # Receive one /scan message with a 5-second bounded timeout
-    scan_msg="$(sudo -n docker exec rover-ros2 /bin/bash -c \
+    # Echo one /odom message
+    odom_msg="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
         "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
-         timeout 5 ros2 topic echo /scan --once 2>/dev/null" \
+         timeout 5 ros2 topic echo /odom --once 2>/dev/null" \
         || true)"
 
-    if [ -n "$scan_msg" ]; then
-        print_status "PASS" "Received at least one /scan message within 5 seconds."
+    if [ -n "$odom_msg" ]; then
+        print_status "PASS" "Received at least one /odom message within 5 seconds."
 
-        # Verify nonempty frame_id
-        if echo "$scan_msg" | grep -q 'frame_id:'; then
-            frame_id_val="$(echo "$scan_msg" | grep 'frame_id:' | head -1 | sed "s/.*frame_id: *//" | tr -d "'\"")"
-            if [ -n "$frame_id_val" ] && [ "$frame_id_val" != "''" ] && [ "$frame_id_val" != '""' ]; then
-                print_status "PASS" "/scan header.frame_id is nonempty ('$frame_id_val')."
-            else
-                print_status "FAIL" "/scan header.frame_id is empty!"
-            fi
+        if echo "$odom_msg" | grep -q "frame_id: '*odom'*"; then
+            print_status "PASS" "/odom header.frame_id is 'odom'."
         else
-            print_status "FAIL" "/scan message missing frame_id field!"
+            print_status "FAIL" "/odom header.frame_id is NOT 'odom'!"
         fi
 
-        # Verify nonempty ranges list with at least one finite value in [range_min, range_max]
-        if echo "$scan_msg" | grep -q 'ranges:'; then
-            # Extract all numeric tokens from the ranges block; skip inf/-inf/nan
-            finite_count=$(echo "$scan_msg" \
-                | sed -n '/^ranges:/,/^[a-z]/p' \
-                | grep -oE '[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?' \
-                | awk 'BEGIN{c=0} {v=$1+0; if(v>0.09 && v<12.01){c++}} END{print c}')
-            if [ "${finite_count:-0}" -gt 0 ]; then
-                print_status "PASS" "/scan ranges contains $finite_count finite reading(s) in [range_min, range_max]."
-            else
-                print_status "FAIL" "/scan ranges has no finite values in [range_min, range_max] (all-inf or out-of-range scan)!"
-            fi
+        if echo "$odom_msg" | grep -q "child_frame_id: '*base_link'*"; then
+            print_status "PASS" "/odom child_frame_id is 'base_link'."
         else
-            print_status "FAIL" "/scan message missing ranges field!"
+            print_status "FAIL" "/odom child_frame_id is NOT 'base_link'!"
         fi
     else
-        print_status "FAIL" "No /scan message received within 5 seconds!"
+        print_status "FAIL" "No /odom message received within 5 seconds!"
     fi
 
-    # 11. Phase 2 Forbidden Topics check (/odom and /cmd_vel must NOT be published)
-    echo "--- Forbidden Topics Verification ---"
-    for forbidden in "/odom" "/cmd_vel"; do
-        if grep -qx "$forbidden" <<< "$topic_list"; then
-            print_status "FAIL" "Forbidden topic '$forbidden' is published!"
+    # 10. TF Tree Validation (odom -> base_link and base_link -> laser_frame)
+    echo "--- TF Tree Verification ---"
+    tf_odom="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
+        "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
+         timeout 5 ros2 run tf2_ros tf2_echo odom base_link 2>/dev/null" \
+        || true)"
+    if echo "$tf_odom" | grep -q "Translation:"; then
+        print_status "PASS" "Dynamic transform odom -> base_link is active."
+    else
+        print_status "FAIL" "Dynamic transform odom -> base_link is NOT active!"
+    fi
+
+    tf_laser="$(sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 /bin/bash -c \
+        "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && \
+         timeout 5 ros2 run tf2_ros tf2_echo base_link laser_frame 2>/dev/null" \
+        || true)"
+    if echo "$tf_laser" | grep -q "Translation:"; then
+        print_status "PASS" "Static transform base_link -> laser_frame is active."
+    else
+        print_status "FAIL" "Static transform base_link -> laser_frame is NOT active!"
+    fi
+
+    # 11. Forbidden Topics & Nodes Verification (/cmd_vel must NOT be published)
+    echo "--- Forbidden Topics & Nodes Verification ---"
+    if grep -qx "/cmd_vel" <<< "$topic_list"; then
+        print_status "FAIL" "Forbidden topic '/cmd_vel' IS published!"
+    else
+        print_status "PASS" "Forbidden topic '/cmd_vel' is NOT published."
+    fi
+
+    for forbidden_node in "/slam_toolbox" "/nav2_container" "/bt_navigator"; do
+        if grep -qx "$forbidden_node" <<< "$node_list"; then
+            print_status "FAIL" "Forbidden node '$forbidden_node' IS running!"
         else
-            print_status "PASS" "Forbidden topic '$forbidden' is NOT published."
+            print_status "PASS" "Forbidden node '$forbidden_node' is NOT running."
         fi
     done
 
     # 12. USB / Hardware Isolation checks
     echo "--- Hardware Isolation & Mount Checks ---"
-
-    # Check docker inspect for /dev mounts
     dev_mounts=$(sudo -n docker inspect -f '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' rover-ros2 2>/dev/null | grep -E '^/dev' || true)
     if [ -n "$dev_mounts" ]; then
         print_status "FAIL" "Container mounts /dev or a subdirectory: $dev_mounts"
@@ -206,17 +210,16 @@ if [ -n "$container_id" ]; then
         print_status "PASS" "Container metadata confirms no /dev mounts are configured."
     fi
 
-    # Check file existence inside container
     for dev in "/dev/rover-esp32" "/dev/rover-lidar" "/dev/ttyUSB0" "/dev/ttyUSB1"; do
         if sudo -n docker exec rover-ros2 ls "$dev" &>/dev/null; then
             print_status "FAIL" "Device file '$dev' is visible inside the container!"
         else
-            print_status "PASS" "Device file '$dev' is isolated (not visible inside the container)."
+            print_status "PASS" "Device file '$dev' is isolated (not visible inside container)."
         fi
     done
 
 else
-    print_status "FAIL" "Container 'rover-ros2' is NOT running! Skipping container internal checks."
+    print_status "FAIL" "Container 'rover-ros2' is NOT running!"
 fi
 
 echo "============================================="
