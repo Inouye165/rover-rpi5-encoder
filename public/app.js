@@ -1677,33 +1677,151 @@ btnClearLogs.addEventListener('click', () => {
 // Start Up Connect
 connectWebSocket();
 
-// --- Tab Switching Logic ---
-const tabButtons = document.querySelectorAll('.tab-btn');
-const tabContents = document.querySelectorAll('.tab-content');
+// --- Tab Switching Logic (Stage 2 Navigation Shell & Legacy Parity) ---
+const topTabButtons = document.querySelectorAll('.tab-navigation-bar .tab-btn');
+const topTabContents = document.querySelectorAll('.tab-content');
+const legacySubButtons = document.querySelectorAll('.legacy-tab-bar .legacy-sub-btn');
 
-tabButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
-    const targetTab = btn.dataset.tab;
-    
-    // Toggle active tab buttons
-    tabButtons.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    
-    // Toggle active tab contents
-    tabContents.forEach(content => {
-      if (content.id === targetTab) {
-        content.classList.add('active');
-      } else {
-        content.classList.remove('active');
-      }
-    });
-    
-    // If canvas is shown, resize it
-    if (targetTab === 'tab-imu') {
-      resizeCanvas();
+let activeTopTabId = 'tab-drive-v2';
+let activeLegacySubTabId = 'tab-dashboard';
+
+function updateLidarTabState() {
+  const isLidarActive = (
+    (activeTopTabId === 'tab-legacy' && (activeLegacySubTabId === 'tab-lidar' || activeLegacySubTabId === 'tab-encoder')) ||
+    activeTopTabId === 'tab-sensors-v2' ||
+    activeTopTabId === 'tab-lidar' ||
+    activeTopTabId === 'tab-encoder'
+  );
+
+  if (isLidarActive) {
+    lidarActiveTab = (activeTopTabId === 'tab-legacy') ? activeLegacySubTabId : activeTopTabId;
+    if (typeof startLidarPolling === 'function') startLidarPolling();
+    if (activeTopTabId === 'tab-sensors-v2' || activeLegacySubTabId === 'tab-lidar' || activeTopTabId === 'tab-lidar') {
+      if (typeof pollLidar === 'function') pollLidar();
+      requestAnimationFrame(() => {
+        if (typeof latestLidarScan !== 'undefined' && latestLidarScan && typeof drawPolarScan === 'function') {
+          drawPolarScan(latestLidarScan);
+        }
+      });
+    }
+  } else {
+    lidarActiveTab = activeTopTabId;
+    if (typeof stopLidarPolling === 'function') stopLidarPolling();
+  }
+}
+
+function activateTopTab(targetTabId) {
+  activeTopTabId = targetTabId;
+
+  // Toggle active states and ARIA attributes on top-level buttons
+  topTabButtons.forEach(btn => {
+    const isTarget = (btn.dataset.tab === targetTabId);
+    btn.classList.toggle('active', isTarget);
+    btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+    btn.setAttribute('tabindex', isTarget ? '0' : '-1');
+  });
+
+  // Toggle visibility of top-level tab contents
+  // Note: legacy tabs (tab-dashboard, tab-imu, etc.) live inside tab-legacy
+  const topLevelTabIds = ['tab-drive-v2', 'tab-autonomy-v2', 'tab-sensors-v2', 'tab-calibration-v2', 'tab-diagnostics-v2', 'tab-legacy'];
+  topLevelTabIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.toggle('active', id === targetTabId);
     }
   });
+
+  // If tab-legacy is selected, ensure the active legacy sub-tab is displayed inside it
+  if (targetTabId === 'tab-legacy') {
+    activateLegacySubTab(activeLegacySubTabId);
+  } else {
+    updateLidarTabState();
+  }
+
+  // Handle special triggers (canvas resize, etc.)
+  if (targetTabId === 'tab-imu' || (targetTabId === 'tab-legacy' && activeLegacySubTabId === 'tab-imu')) {
+    if (typeof resizeCanvas === 'function') resizeCanvas();
+  }
+}
+
+function activateLegacySubTab(legacyTabId) {
+  activeLegacySubTabId = legacyTabId;
+
+  // Toggle sub-navigation button active states
+  legacySubButtons.forEach(btn => {
+    const isTarget = (btn.dataset.legacyTab === legacyTabId);
+    btn.classList.toggle('active', isTarget);
+    btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+    btn.setAttribute('tabindex', isTarget ? '0' : '-1');
+  });
+
+  // Show selected legacy tab content inside tab-legacy container holder
+  const legacyTabIds = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar'];
+  legacyTabIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.toggle('active', id === legacyTabId);
+    }
+  });
+
+  updateLidarTabState();
+
+  if (legacyTabId === 'tab-imu' && typeof resizeCanvas === 'function') {
+    resizeCanvas();
+  }
+}
+
+// Bind Top-Level Navigation Buttons
+topTabButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    activateTopTab(btn.dataset.tab);
+  });
 });
+
+// Bind Secondary Legacy Sub-Navigation Buttons
+legacySubButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    activateLegacySubTab(btn.dataset.legacyTab);
+  });
+});
+
+// Bind Legacy Redirect Quick Buttons (e.g., "Open Current Legacy Drive Controls")
+document.querySelectorAll('.legacy-redirect-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const legacyTarget = btn.dataset.legacyTarget || 'tab-dashboard';
+    activateTopTab('tab-legacy');
+    activateLegacySubTab(legacyTarget);
+  });
+});
+
+// Keyboard Navigation for Navigation Bar (Arrow Left/Right, Home, End)
+const navBar = document.querySelector('.tab-navigation-bar');
+if (navBar) {
+  navBar.addEventListener('keydown', (e) => {
+    const buttons = Array.from(topTabButtons);
+    const currentIndex = buttons.indexOf(document.activeElement);
+    if (currentIndex === -1) return;
+
+    let newIndex = currentIndex;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      newIndex = (currentIndex + 1) % buttons.length;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      newIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+    } else if (e.key === 'Home') {
+      newIndex = 0;
+    } else if (e.key === 'End') {
+      newIndex = buttons.length - 1;
+    } else {
+      return;
+    }
+
+    e.preventDefault();
+    buttons[newIndex].focus();
+    activateTopTab(buttons[newIndex].dataset.tab);
+  });
+}
+
 
 // --- Odometry / Dead Reckoning Kinematics Simulation ---
 // Tracks X/Y positions and heading over time based on speed telemetry
@@ -2985,24 +3103,12 @@ function renderSampleTable(scan) {
   tbody.innerHTML = html;
 }
 
-// Watch tab switching for LiDAR polling triggers
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    lidarActiveTab = btn.dataset.tab;
-    if (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') {
-      startLidarPolling();
-    } else {
-      stopLidarPolling();
-    }
-  });
-});
-
-// Watch visibility changes
+// Watch visibility changes for LiDAR polling triggers
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopLidarPolling();
-  } else if (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') {
-    startLidarPolling();
+  } else {
+    updateLidarTabState();
   }
 });
 
@@ -3123,10 +3229,66 @@ function updateCalibrationDbUI(db) {
     if (prevTrack) prevTrack.textContent = '--';
   }
   
-  // 4. History Logs Table
+  // 4. Repeatability Session Statistics & Recommended Run HUD
+  const logs = db.testLogs || [];
+  const elPassRate = document.getElementById('rep-val-passrate');
+  const elCount = document.getElementById('rep-val-count');
+  const elDistMean = document.getElementById('rep-val-dist-mean');
+  const elDistStd = document.getElementById('rep-val-dist-std');
+  const elYawMean = document.getElementById('rep-val-yaw-mean');
+  const elYawStd = document.getElementById('rep-val-yaw-std');
+  const elRecFwd = document.getElementById('rep-rec-fwd');
+  const elRecLeft = document.getElementById('rep-rec-left');
+  const elRecRight = document.getElementById('rep-rec-right');
+  const elRecTotal = document.getElementById('rep-rec-total');
+
+  if (logs.length === 0) {
+    if (elPassRate) elPassRate.textContent = 'Pass Rate: --%';
+    if (elCount) elCount.textContent = '0';
+    if (elDistMean) elDistMean.textContent = '--';
+    if (elDistStd) elDistStd.textContent = '--';
+    if (elYawMean) elYawMean.textContent = '--';
+    if (elYawStd) elYawStd.textContent = '--';
+    if (elRecFwd) elRecFwd.textContent = '0/5';
+    if (elRecLeft) elRecLeft.textContent = '0/5';
+    if (elRecRight) elRecRight.textContent = '0/5';
+    if (elRecTotal) elRecTotal.textContent = '0/15';
+  } else {
+    const totalCount = logs.length;
+    const passedCount = logs.filter(l => l.pass === true).length;
+    const passRate = ((passedCount / totalCount) * 100).toFixed(1);
+
+    const fwdLogs = logs.filter(l => (l.test || l.testType) === 'forward_1m');
+    const fwdDistErrors = fwdLogs.map(l => l.distanceError !== undefined ? l.distanceError : (l.reportedDistance || 0));
+    const fwdDistMean = fwdDistErrors.length > 0 ? (fwdDistErrors.reduce((a, b) => a + b, 0) / fwdDistErrors.length) : 0;
+    const fwdDistStd = fwdDistErrors.length > 0 ? Math.sqrt(fwdDistErrors.reduce((a, b) => a + Math.pow(b - fwdDistMean, 2), 0) / fwdDistErrors.length) : 0;
+
+    const turnLogs = logs.filter(l => (l.test || l.testType) === 'turn_left_90' || (l.test || l.testType) === 'turn_right_90');
+    const turnYawErrors = turnLogs.map(l => l.yawErrorDegrees !== undefined ? l.yawErrorDegrees : (l.reportedYawDegrees || 0));
+    const turnYawMean = turnYawErrors.length > 0 ? (turnYawErrors.reduce((a, b) => a + b, 0) / turnYawErrors.length) : 0;
+    const turnYawStd = turnYawErrors.length > 0 ? Math.sqrt(turnYawErrors.reduce((a, b) => a + Math.pow(b - turnYawMean, 2), 0) / turnYawErrors.length) : 0;
+
+    // Recommended counters ONLY count target_reached (pass=true) successful runs
+    const fwdSuccessCount = fwdLogs.filter(l => l.stopReason === 'target_reached' || l.pass === true).length;
+    const leftSuccessCount = logs.filter(l => (l.test || l.testType) === 'turn_left_90' && (l.stopReason === 'target_reached' || l.pass === true)).length;
+    const rightSuccessCount = logs.filter(l => (l.test || l.testType) === 'turn_right_90' && (l.stopReason === 'target_reached' || l.pass === true)).length;
+    const totalSuccessCount = fwdSuccessCount + leftSuccessCount + rightSuccessCount;
+
+    if (elPassRate) elPassRate.textContent = `Pass Rate: ${passRate}%`;
+    if (elCount) elCount.textContent = `${totalCount}`;
+    if (elDistMean) elDistMean.textContent = fwdLogs.length > 0 ? `${fwdDistMean >= 0 ? '+' : ''}${fwdDistMean.toFixed(4)}m` : '--';
+    if (elDistStd) elDistStd.textContent = fwdLogs.length > 0 ? `±${fwdDistStd.toFixed(4)}m` : '--';
+    if (elYawMean) elYawMean.textContent = turnLogs.length > 0 ? `${turnYawMean >= 0 ? '+' : ''}${turnYawMean.toFixed(2)}°` : '--';
+    if (elYawStd) elYawStd.textContent = turnLogs.length > 0 ? `±${turnYawStd.toFixed(2)}°` : '--';
+    if (elRecFwd) elRecFwd.textContent = `${fwdSuccessCount}/5${fwdSuccessCount >= 5 ? ' ✓' : ''}`;
+    if (elRecLeft) elRecLeft.textContent = `${leftSuccessCount}/5${leftSuccessCount >= 5 ? ' ✓' : ''}`;
+    if (elRecRight) elRecRight.textContent = `${rightSuccessCount}/5${rightSuccessCount >= 5 ? ' ✓' : ''}`;
+    if (elRecTotal) elRecTotal.textContent = `${totalSuccessCount}/15${totalSuccessCount >= 15 && fwdSuccessCount >= 5 && leftSuccessCount >= 5 && rightSuccessCount >= 5 ? ' ✓ COMPLETE' : ''}`;
+  }
+
+  // 5. History Logs Table
   const tbody = document.getElementById('cal-history-table-body');
   if (tbody) {
-    const logs = db.testLogs || [];
     if (logs.length === 0) {
       tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No logs available in database.</td></tr>`;
     } else {
@@ -3140,18 +3302,42 @@ function updateCalibrationDbUI(db) {
           summary = Object.entries(log.results)
             .map(([key, val]) => `${key}: ${typeof val === 'number' ? val.toFixed(4) : val}`)
             .join(', ');
+        } else {
+          const passBadge = log.pass === true ? '<span style="color:#10b981; font-weight:bold;">[PASS]</span>' : (log.pass === false ? '<span style="color:#ef4444; font-weight:bold;">[FAULT]</span>' : '');
+          const distStr = log.reportedDistance !== undefined ? `${log.reportedDistance.toFixed(3)}m` : '--';
+          const yawStr = log.reportedYawDegrees !== undefined ? `${log.reportedYawDegrees.toFixed(1)}°` : '--';
+          const reasonStr = log.stopReason ? log.stopReason : (log.fault || '--');
+          summary = `${passBadge} Dist: ${distStr}, Yaw: ${yawStr}, Reason: ${reasonStr}`;
         }
+        const testName = log.test || log.testType || 'unknown';
         return `
           <tr style="border-bottom: 1px solid var(--border);">
             <td style="padding: 8px 10px; font-family: monospace; white-space: nowrap;">${dateStr}</td>
-            <td style="padding: 8px 10px; font-weight: bold; color: var(--cyan-glow);">${log.testType}</td>
-            <td style="padding: 8px 10px;">${log.surfaceType}</td>
-            <td style="padding: 8px 10px; font-family: monospace;">${log.firmwareVersion}</td>
+            <td style="padding: 8px 10px; font-weight: bold; color: var(--cyan-glow);">${testName}</td>
+            <td style="padding: 8px 10px;">${log.surfaceType || 'unknown'}</td>
+            <td style="padding: 8px 10px; font-family: monospace;">${log.firmwareVersion || '1.3.0'}</td>
             <td style="padding: 8px 10px; color: var(--text-muted); font-size: 11px;">${summary}</td>
           </tr>
         `;
       }).join('');
     }
+  }
+}
+
+function clearRepeatabilityHistory() {
+  if (confirm('Are you sure you want to clear repeatability session history?')) {
+    fetch('/api/calibration/repeatability/clear', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.ok) {
+          logSystem('[Calibration] Repeatability history cleared.');
+          if (calibrationDatabase) {
+            calibrationDatabase.testLogs = [];
+            updateCalibrationDbUI(calibrationDatabase);
+          }
+        }
+      })
+      .catch(err => console.error('Error clearing history:', err));
   }
 }
 

@@ -259,6 +259,9 @@ function loadCalibrationDb() {
       const data = fs.readFileSync(CALIBRATION_DB_FILE, 'utf8');
       calibrationDb = JSON.parse(data);
       console.log('[Config DB] Calibration database loaded successfully.');
+      if (!Array.isArray(calibrationDb.testLogs)) {
+        calibrationDb.testLogs = [];
+      }
       if (calibrationDb.currentConfig) {
         if (calibrationDb.currentConfig.wheelDiameter) {
           WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
@@ -283,10 +286,23 @@ function loadCalibrationDb() {
         console.log(`[Config DB] Loaded REV trims from DB: L=${activeRevTrim.left.toFixed(4)} R=${activeRevTrim.right.toFixed(4)}`);
       }
     } else {
+      calibrationDb.testLogs = Array.isArray(calibrationDb.testLogs) ? calibrationDb.testLogs : [];
       saveCalibrationDb();
     }
   } catch (err) {
     console.error('[Config DB] Failed to load calibration database, using defaults:', err.message);
+    if (!calibrationDb || typeof calibrationDb !== 'object') {
+      calibrationDb = {
+        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.170 },
+        proposedConfig: { wheelDiameter: null, effectiveTrackWidth: null },
+        previousConfig: { wheelDiameter: null, effectiveTrackWidth: null },
+        fwdTrim: { left: 1.0, right: 1.0 },
+        revTrim: { left: 1.0, right: 1.0 },
+        testLogs: []
+      };
+    } else if (!Array.isArray(calibrationDb.testLogs)) {
+      calibrationDb.testLogs = [];
+    }
   }
 }
 
@@ -295,10 +311,17 @@ function saveCalibrationDb() {
     calibrationDb.floorTesting = floorTesting;
     calibrationDb.fwdTrim = { left: activeFwdTrim.left, right: activeFwdTrim.right };
     calibrationDb.revTrim = { left: activeRevTrim.left, right: activeRevTrim.right };
-    fs.writeFileSync(CALIBRATION_DB_FILE, JSON.stringify(calibrationDb, null, 2), 'utf8');
-    console.log('[Config DB] Calibration database saved successfully.');
+    if (!Array.isArray(calibrationDb.testLogs)) {
+      calibrationDb.testLogs = [];
+    }
+    const tempFile = CALIBRATION_DB_FILE + '.tmp';
+    fs.writeFileSync(tempFile, JSON.stringify(calibrationDb, null, 2), 'utf8');
+    fs.renameSync(tempFile, CALIBRATION_DB_FILE);
+    console.log('[Config DB] Calibration database saved successfully via atomic replacement.');
+    return true;
   } catch (err) {
     console.error('[Config DB] Failed to save calibration database:', err.message);
+    return false;
   }
 }
 
@@ -2213,27 +2236,6 @@ app.post('/api/calibration/verify_ready', (req, res) => {
   }
 });
 
-app.get('/api/calibration/results', (req, res) => {
-  if (latestCalibrationStatus) {
-    res.json({
-      ok: true,
-      simulated: latestCalibrationStatus.isSimulation,
-      saved_to_nvs: latestCalibrationStatus.isSimulation ? false : (latestCalibrationStatus.cal_state === 5),
-      forward: latestCalibrationStatus.cal_fwd,
-      reverse: latestCalibrationStatus.cal_rev,
-      sessionId: latestCalibrationStatus.sessionId
-    });
-  } else {
-    res.status(404).json({ ok: false, error: 'No calibration results available.' });
-  }
-});
-
-app.get('/api/calibration/export', (req, res) => {
-  res.setHeader('Content-disposition', 'attachment; filename=calibration_db.json');
-  res.setHeader('Content-type', 'application/json');
-  res.send(JSON.stringify(calibrationDb, null, 2));
-});
-
 // ────────────────────────────────────────────────────────────
 // Experimental Closed-Loop Automatic Calibration State Machine
 // ────────────────────────────────────────────────────────────
@@ -2326,23 +2328,144 @@ function broadcastAutoCalibStatus() {
   });
 }
 
+function safeNum(val, defaultVal = null) {
+  if (val === null || val === undefined) return defaultVal;
+  const num = Number(val);
+  if (Number.isNaN(num) || !Number.isFinite(num)) return defaultVal;
+  return num;
+}
+
+function sanitizeForCsv(val) {
+  if (val === null || val === undefined) return '';
+  let str = String(val);
+  // Formula injection protection for =, +, -, @
+  if (str.length > 0 && ['=', '+', '-', '@'].includes(str.charAt(0))) {
+    str = "'" + str;
+  }
+  // RFC 4180 quote escaping
+  if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+    str = '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+function computeMetricStats(vals = []) {
+  const validVals = vals.map(v => safeNum(v)).filter(v => v !== null);
+  const n = validVals.length;
+  if (n === 0) {
+    return { mean: null, min: null, max: null, stdDev: null };
+  }
+  if (n === 1) {
+    const v = validVals[0];
+    return {
+      mean: parseFloat(v.toFixed(4)),
+      min: parseFloat(v.toFixed(4)),
+      max: parseFloat(v.toFixed(4)),
+      stdDev: 0.0
+    };
+  }
+  const sum = validVals.reduce((a, b) => a + b, 0);
+  const mean = sum / n;
+  const min = Math.min(...validVals);
+  const max = Math.max(...validVals);
+  // Population standard deviation (N divisor)
+  const variance = validVals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+  const stdDev = Math.sqrt(variance);
+  return {
+    mean: parseFloat(mean.toFixed(4)),
+    min: parseFloat(min.toFixed(4)),
+    max: parseFloat(max.toFixed(4)),
+    stdDev: parseFloat(stdDev.toFixed(4))
+  };
+}
+
+function computeRepeatabilityStats(logs = []) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const count = safeLogs.length;
+
+  const fwdLogs = safeLogs.filter(l => l && (l.test || l.testType) === 'forward_1m');
+  const leftLogs = safeLogs.filter(l => l && (l.test || l.testType) === 'turn_left_90');
+  const rightLogs = safeLogs.filter(l => l && (l.test || l.testType) === 'turn_right_90');
+
+  // PHASE 1 STRICT QUALIFICATION RULE: stopReason === 'target_reached' && pass === true
+  const isQualified = l => l && l.stopReason === 'target_reached' && l.pass === true;
+
+  const fwdSuccessCount = fwdLogs.filter(isQualified).length;
+  const leftSuccessCount = leftLogs.filter(isQualified).length;
+  const rightSuccessCount = rightLogs.filter(isQualified).length;
+  const totalSuccessCount = fwdSuccessCount + leftSuccessCount + rightSuccessCount;
+
+  const calcGroupStats = (groupLogs, targetYawDeg = 0) => {
+    const gCount = groupLogs.length;
+    const gPassed = groupLogs.filter(l => l && l.pass === true).length;
+    const gPassRate = gCount > 0 ? parseFloat(((gPassed / gCount) * 100).toFixed(1)) : 0.0;
+    const distErrors = groupLogs.map(l => l.distanceError !== undefined ? l.distanceError : (l.reportedDistance || 0));
+    const yawErrors = groupLogs.map(l => l.yawErrorDegrees !== undefined ? l.yawErrorDegrees : (l.reportedYawDegrees || 0));
+
+    const normMagErrors = groupLogs.map(l => {
+      const rawYaw = safeNum(l.reportedYawDegrees, 0);
+      if (targetYawDeg !== 0) {
+        return Math.abs(rawYaw) - Math.abs(targetYawDeg);
+      }
+      return Math.abs(rawYaw);
+    });
+
+    return {
+      count: gCount,
+      passedCount: gPassed,
+      passRate: gPassRate,
+      distanceError: computeMetricStats(distErrors),
+      yawError: computeMetricStats(yawErrors),
+      normalizedYawMagnitude: computeMetricStats(normMagErrors)
+    };
+  };
+
+  const fwdStats = calcGroupStats(fwdLogs, 0);
+  const leftStats = calcGroupStats(leftLogs, 90);
+  const rightStats = calcGroupStats(rightLogs, -90);
+
+  const totalPassed = safeLogs.filter(l => l && l.pass === true).length;
+  const overallPassRate = count > 0 ? parseFloat(((totalPassed / count) * 100).toFixed(1)) : 0.0;
+
+  return {
+    count,
+    passedCount: totalPassed,
+    passRate: overallPassRate,
+    byTest: {
+      forward_1m: fwdStats,
+      turn_left_90: leftStats,
+      turn_right_90: rightStats
+    },
+    recommended: {
+      forward_1m: { count: fwdSuccessCount, target: 5, complete: fwdSuccessCount >= 5 },
+      turn_left_90: { count: leftSuccessCount, target: 5, complete: leftSuccessCount >= 5 },
+      turn_right_90: { count: rightSuccessCount, target: 5, complete: rightSuccessCount >= 5 },
+      total: { count: totalSuccessCount, target: 15, complete: totalSuccessCount >= 15 && fwdSuccessCount >= 5 && leftSuccessCount >= 5 && rightSuccessCount >= 5 }
+    }
+  };
+}
+
 function stopAutoCalibration(reason, detail) {
   if (!autoCalibState.active && autoCalibState.phase !== 'RUNNING') return;
 
-  // Immediately set zero motor speeds and send disarm command
+  // 1. Immediately set zero motor speeds and send disarm command
   sendMotorSpeeds(0, 0, 0, 0);
   if (serialPort && serialPort.isOpen) {
     const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
     serialPort.write(disarmPkt);
   }
-  cmdSource = 'NONE';  // Release calibration command-source lock on every exit path
 
+  // 2. Release command source lock
+  cmdSource = 'NONE';
+
+  // 3. Mark inactive & calculate phase/errors
   autoCalibState.active = false;
   autoCalibState.armed = false;
   autoCalibState.phase = (reason === 'target_reached') ? 'COMPLETE' : 'FAULT';
   autoCalibState.stopReason = reason;
   autoCalibState.fault = (reason !== 'target_reached') ? (detail || reason) : null;
   autoCalibState.motorCommand = [0, 0, 0, 0];
+
   if (autoCalibState.currentPose) {
     autoCalibState.finalPose = { ...autoCalibState.currentPose };
   } else {
@@ -2375,7 +2498,7 @@ function stopAutoCalibration(reason, detail) {
   }
   autoCalibState.pass = passed;
 
-  // Save the result for the UI
+  // 4. Save lastResult for UI
   autoCalibState.lastResult = {
     test: autoCalibState.test,
     phase: autoCalibState.phase,
@@ -2392,6 +2515,38 @@ function stopAutoCalibration(reason, detail) {
     startPose: autoCalibState.startPose ? { ...autoCalibState.startPose } : null,
     finalPose: autoCalibState.finalPose ? { ...autoCalibState.finalPose } : null
   };
+
+  // Record session history entry
+  const nowTs = Date.now();
+  const historyRecord = {
+    id: `run-${nowTs}-${Math.floor(Math.random() * 1000)}`,
+    timestamp: nowTs,
+    isoDate: new Date(nowTs).toISOString(),
+    test: autoCalibState.test,
+    testType: autoCalibState.test,
+    phase: autoCalibState.phase,
+    stopReason: autoCalibState.stopReason,
+    fault: autoCalibState.fault,
+    pass: autoCalibState.pass,
+    reportedDistance: autoCalibState.reportedDistance,
+    reportedYawDegrees: autoCalibState.reportedYawDegrees,
+    distanceError: autoCalibState.distanceError,
+    yawErrorDegrees: autoCalibState.yawErrorDegrees,
+    elapsedMs: autoCalibState.elapsedMs,
+    telemetryAgeMs: autoCalibState.telemetryAgeMs,
+    odomAgeMs: autoCalibState.odomAgeMs,
+    startPose: autoCalibState.startPose ? { ...autoCalibState.startPose } : null,
+    finalPose: autoCalibState.finalPose ? { ...autoCalibState.finalPose } : null,
+    surfaceType: 'unknown',
+    firmwareVersion: '1.3.0-phase5'
+  };
+
+  if (!calibrationDb.testLogs) {
+    calibrationDb.testLogs = [];
+  }
+  calibrationDb.testLogs.push(historyRecord);
+  saveCalibrationDb();
+  broadcast({ type: 'calibration_db', db: calibrationDb });
 
   // Transition back to IDLE so normal drive interlocks are completely clear
   autoCalibState.phase = 'IDLE';
@@ -2668,6 +2823,116 @@ app.get('/api/calibration/auto/status', async (req, res) => {
   autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
   autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
   res.json({ ok: true, status: autoCalibState });
+});
+
+app.get('/api/calibration/repeatability/history', (req, res) => {
+  const history = calibrationDb.testLogs || [];
+  const stats = computeRepeatabilityStats(history);
+  res.json({
+    ok: true,
+    history,
+    stats
+  });
+});
+
+app.post('/api/calibration/repeatability/clear', (req, res) => {
+  calibrationDb.testLogs = [];
+  saveCalibrationDb();
+  broadcast({ type: 'calibration_db', db: calibrationDb });
+  res.json({ ok: true, message: 'Repeatability session history cleared.', history: [], stats: computeRepeatabilityStats([]) });
+});
+
+app.delete('/api/calibration/repeatability/history', (req, res) => {
+  calibrationDb.testLogs = [];
+  saveCalibrationDb();
+  broadcast({ type: 'calibration_db', db: calibrationDb });
+  res.json({ ok: true, message: 'Repeatability session history cleared.', history: [], stats: computeRepeatabilityStats([]) });
+});
+
+app.get('/api/calibration/repeatability/export/json', (req, res) => {
+  const history = Array.isArray(calibrationDb.testLogs) ? calibrationDb.testLogs : [];
+  const stats = computeRepeatabilityStats(history);
+  const payload = {
+    $schema: 'http://yahboom-rover.local/schemas/repeatability-history-v1.json',
+    version: '1.3.0-phase5',
+    exportedAt: new Date().toISOString(),
+    statistics: stats,
+    history: history
+  };
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', 'attachment; filename=repeatability_history.json');
+  res.send(JSON.stringify(payload, null, 2));
+});
+
+app.get('/api/calibration/repeatability/export/csv', (req, res) => {
+  const history = Array.isArray(calibrationDb.testLogs) ? calibrationDb.testLogs : [];
+  const headers = [
+    'timestamp',
+    'isoDate',
+    'test',
+    'phase',
+    'stopReason',
+    'fault',
+    'pass',
+    'reportedDistance',
+    'reportedYawDegrees',
+    'distanceError',
+    'yawErrorDegrees',
+    'turnTranslation',
+    'elapsedMs',
+    'telemetryAgeMs',
+    'odomAgeMs',
+    'startPose_x',
+    'startPose_y',
+    'startPose_yawDeg',
+    'finalPose_x',
+    'finalPose_y',
+    'finalPose_yawDeg',
+    'surfaceType',
+    'firmwareVersion'
+  ];
+
+  let csvRows = [headers.join(',')];
+  for (const log of history) {
+    if (!log) continue;
+    const startX = log.startPose ? safeNum(log.startPose.x, '') : '';
+    const startY = log.startPose ? safeNum(log.startPose.y, '') : '';
+    const startYaw = log.startPose ? safeNum(log.startPose.yawDeg, '') : '';
+    const finalX = log.finalPose ? safeNum(log.finalPose.x, '') : '';
+    const finalY = log.finalPose ? safeNum(log.finalPose.y, '') : '';
+    const finalYaw = log.finalPose ? safeNum(log.finalPose.yawDeg, '') : '';
+
+    const row = [
+      log.timestamp ? safeNum(log.timestamp, '') : '',
+      sanitizeForCsv(log.isoDate || new Date(log.timestamp || 0).toISOString()),
+      sanitizeForCsv(log.test || log.testType || ''),
+      sanitizeForCsv(log.phase || ''),
+      sanitizeForCsv(log.stopReason || ''),
+      sanitizeForCsv(log.fault || ''),
+      log.pass === true ? 'true' : (log.pass === false ? 'false' : ''),
+      safeNum(log.reportedDistance, ''),
+      safeNum(log.reportedYawDegrees, ''),
+      safeNum(log.distanceError, ''),
+      safeNum(log.yawErrorDegrees, ''),
+      safeNum(log.turnTranslation, ''),
+      safeNum(log.elapsedMs, ''),
+      safeNum(log.telemetryAgeMs, ''),
+      safeNum(log.odomAgeMs, ''),
+      startX,
+      startY,
+      startYaw,
+      finalX,
+      finalY,
+      finalYaw,
+      sanitizeForCsv(log.surfaceType || 'unknown'),
+      sanitizeForCsv(log.firmwareVersion || '1.3.0-phase5')
+    ];
+    csvRows.push(row.join(','));
+  }
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename=repeatability_history.csv');
+  res.send(csvRows.join('\n'));
 });
 
 
