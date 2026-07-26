@@ -1,4 +1,5 @@
 from html.parser import HTMLParser
+import sys
 
 class TabParser(HTMLParser):
     def __init__(self):
@@ -32,6 +33,26 @@ parser = TabParser()
 with open("public/index.html", "r", encoding="utf-8") as f:
     parser.feed(f.read())
 
+primary_v2 = [t for t in parser.tabs if t['id'].endswith('-v2')]
+temp_legacy = [t for t in parser.tabs if t['id'] == 'tab-legacy']
+legacy_tabs = [t for t in parser.tabs if not t['id'].endswith('-v2') and t['id'] != 'tab-legacy']
+
 print("Tabs found:")
 for t in parser.tabs:
     print(f"- {t['id']}: start {t['line']}, end {t.get('end_line', 'unclosed')}, depth {t['depth']}")
+
+print(f"\nStage 2 Summary: {len(primary_v2)} Primary V2 Tabs, {len(temp_legacy)} Temporary Legacy Container, {len(legacy_tabs)} Preserved Legacy Tabs.")
+
+if len(primary_v2) != 5:
+    print(f"ERROR: Expected 5 primary V2 tabs, found {len(primary_v2)}")
+    sys.exit(1)
+
+if len(temp_legacy) != 1:
+    print(f"ERROR: Expected 1 temporary legacy container, found {len(temp_legacy)}")
+    sys.exit(1)
+
+if len(legacy_tabs) != 7:
+    print(f"ERROR: Expected 7 preserved legacy tabs, found {len(legacy_tabs)}")
+    sys.exit(1)
+
+print("SUCCESS: Stage 2 Tab Navigation validation passed!")

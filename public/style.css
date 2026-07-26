@@ -1585,3 +1585,166 @@ body {
   border-radius: 12px;
   padding: 20px;
 }
+
+/* ────────────────────────────────────────────────────────────
+   Stage 2 Navigation Shell & Destination Container Styles
+   ──────────────────────────────────────────────────────────── */
+
+/* Navigation Accessibility & Focus States */
+.tab-navigation-bar button:focus-visible,
+.legacy-tab-bar button:focus-visible {
+  outline: 2px solid var(--cyan-glow);
+  outline-offset: 2px;
+}
+
+/* Temporary Legacy Tab Button Styling */
+.tab-btn.legacy-btn {
+  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(168, 85, 247, 0.1);
+  color: #c084fc;
+}
+
+.tab-btn.legacy-btn.active {
+  background: linear-gradient(135deg, #a855f7 0%, #7e22ce 100%);
+  color: #ffffff;
+  box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+}
+
+/* Destination Shell Containers */
+.v2-shell-container {
+  padding: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.v2-shell-header {
+  background: rgba(17, 24, 39, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px 25px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.v2-shell-title-box h2 {
+  margin: 0 0 6px 0;
+  font-size: 1.4rem;
+  color: var(--cyan-glow);
+}
+
+.v2-shell-title-box p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.v2-migration-badge {
+  background: rgba(0, 240, 255, 0.15);
+  color: #00f0ff;
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  font-weight: bold;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.legacy-redirect-btn {
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.legacy-redirect-btn:hover {
+  background: rgba(168, 85, 247, 0.3);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+}
+
+/* Placeholder Cards Grid */
+.v2-placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.v2-placeholder-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s ease;
+}
+
+.v2-placeholder-card:hover {
+  border-color: var(--cyan-glow);
+}
+
+.v2-placeholder-card .card-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--cyan-glow);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: bold;
+}
+
+.v2-placeholder-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-main);
+}
+
+.v2-placeholder-card p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Secondary Legacy Sub-Navigation Bar inside tab-legacy */
+.legacy-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.legacy-sub-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.legacy-sub-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+.legacy-sub-btn.active {
+  background: var(--primary-grad);
+  border-color: var(--cyan-glow);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.3);
+}

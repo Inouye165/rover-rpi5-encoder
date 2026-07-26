@@ -52,18 +52,261 @@
     </header>
 
     <!-- Tab Navigation -->
-    <nav class="tab-navigation-bar">
-      <button class="tab-btn active" data-tab="tab-dashboard">🎮 Cockpit Dashboard</button>
-      <button class="tab-btn" data-tab="tab-imu">🧭 IMU & Position Tracking</button>
-      <button class="tab-btn" data-tab="tab-encoder">🔍 Encoder & Rotate Testing</button>
-      <button class="tab-btn" data-tab="tab-ros2">🤖 ROS 2 & Odometry Testing</button>
-      <button class="tab-btn" data-tab="tab-calibrate">🛡️ Calibration & Safety</button>
-      <button class="tab-btn" data-tab="tab-motion-cal">🎛️ Motion Cal & Backtrack</button>
-      <button class="tab-btn" data-tab="tab-lidar">📡 LiDAR Monitor</button>
+    <nav class="tab-navigation-bar" role="tablist" aria-label="Cockpit Top Navigation">
+      <button class="tab-btn active" id="nav-drive" data-tab="tab-drive-v2" role="tab" aria-selected="true" aria-controls="tab-drive-v2" tabindex="0">🎮 Drive</button>
+      <button class="tab-btn" id="nav-autonomy" data-tab="tab-autonomy-v2" role="tab" aria-selected="false" aria-controls="tab-autonomy-v2" tabindex="-1">🤖 Autonomy</button>
+      <button class="tab-btn" id="nav-sensors" data-tab="tab-sensors-v2" role="tab" aria-selected="false" aria-controls="tab-sensors-v2" tabindex="-1">📡 Sensors</button>
+      <button class="tab-btn" id="nav-calibration" data-tab="tab-calibration-v2" role="tab" aria-selected="false" aria-controls="tab-calibration-v2" tabindex="-1">🛡️ Calibration</button>
+      <button class="tab-btn" id="nav-diagnostics" data-tab="tab-diagnostics-v2" role="tab" aria-selected="false" aria-controls="tab-diagnostics-v2" tabindex="-1">💻 Diagnostics</button>
+      <button class="tab-btn legacy-btn" id="nav-legacy" data-tab="tab-legacy" role="tab" aria-selected="false" aria-controls="tab-legacy" tabindex="-1">🛠️ Legacy Tools</button>
     </nav>
 
-    <!-- Tab Contents -->
-    <div id="tab-dashboard" class="tab-content active">
+    <!-- Tab Contents: V2 Destination Shells -->
+    <div id="tab-drive-v2" class="tab-content active" role="tabpanel" aria-labelledby="nav-drive">
+      <div class="v2-shell-container">
+        <div class="v2-shell-header">
+          <div class="v2-shell-title-box">
+            <h2>🎮 Drive Control Room</h2>
+            <p>Primary operational cockpit for manual rover teleoperation, live drive status, camera feed, and safety oversight.</p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-dashboard">Open Current Legacy Drive Controls (Dashboard)</button>
+          </div>
+        </div>
+
+        <div class="v2-placeholder-grid">
+          <div class="v2-placeholder-card" id="drive-status-summary">
+            <span class="card-label">Placeholder Region: drive-status-summary</span>
+            <h3>Telemetry & Safety Status</h3>
+            <p>Destination for live connection status summary, gamepad telemetry, armed/disarmed indicator, and E-stop status.</p>
+          </div>
+          <div class="v2-placeholder-card" id="drive-manual-control">
+            <span class="card-label">Placeholder Region: drive-manual-control</span>
+            <h3>Manual Drive Controls</h3>
+            <p>Destination for primary direction pad, velocity sliders, and joystick teleoperation mapping.</p>
+          </div>
+          <div class="v2-placeholder-card" id="drive-camera">
+            <span class="card-label">Placeholder Region: drive-camera</span>
+            <h3>RPi Camera Stream</h3>
+            <p>Destination for live camera stream viewport and fullscreen display toggle.</p>
+          </div>
+          <div class="v2-placeholder-card" id="drive-faults">
+            <span class="card-label">Placeholder Region: drive-faults</span>
+            <h3>Concise Fault Banner</h3>
+            <p>Destination for active safety fault codes and physical lock status diagnostics.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-autonomy-v2" class="tab-content" role="tabpanel" aria-labelledby="nav-autonomy">
+      <div class="v2-shell-container">
+        <div class="v2-shell-header">
+          <div class="v2-shell-title-box">
+            <h2>🤖 Autonomy & Navigation Stack</h2>
+            <p>Monitor ROS 2 navigation stack, SLAM mapping, localization state, Nav2 lifecycle, goal progress, and Foxglove access.</p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy ROS 2 Area</button>
+          </div>
+        </div>
+
+        <div class="v2-placeholder-grid">
+          <div class="v2-placeholder-card" id="autonomy-stack-health">
+            <span class="card-label">Placeholder Region: autonomy-stack-health</span>
+            <h3>ROS 2 Stack Health</h3>
+            <p>Destination for system bringup service health and node status monitors.</p>
+          </div>
+          <div class="v2-placeholder-card" id="autonomy-localization">
+            <span class="card-label">Placeholder Region: autonomy-localization</span>
+            <h3>Localization State</h3>
+            <p>Destination for active pose estimator X/Y/Yaw coordinates and covariance confidence.</p>
+          </div>
+          <div class="v2-placeholder-card" id="autonomy-slam">
+            <span class="card-label">Placeholder Region: autonomy-slam</span>
+            <h3>SLAM Mapping State</h3>
+            <p>Destination for active map status, grid resolution, and map update rates.</p>
+          </div>
+          <div class="v2-placeholder-card" id="autonomy-nav2">
+            <span class="card-label">Placeholder Region: autonomy-nav2</span>
+            <h3>Nav2 Lifecycle State</h3>
+            <p>Destination for Nav2 planner, controller, and recovery server lifecycle status.</p>
+          </div>
+          <div class="v2-placeholder-card" id="autonomy-goal">
+            <span class="card-label">Placeholder Region: autonomy-goal</span>
+            <h3>Navigation Goal & Progress</h3>
+            <p>Destination for goal target status, distance-to-goal tracking, and cancel action controls.</p>
+          </div>
+          <div class="v2-placeholder-card" id="autonomy-foxglove">
+            <span class="card-label">Placeholder Region: autonomy-foxglove</span>
+            <h3>Foxglove Web Visualizer</h3>
+            <p>Destination for Foxglove Studio WebSocket bridge access details (Port 8765).</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-sensors-v2" class="tab-content" role="tabpanel" aria-labelledby="nav-sensors">
+      <div class="v2-shell-container">
+        <div class="v2-shell-header">
+          <div class="v2-shell-title-box">
+            <h2>📡 Sensor Payloads & Telemetry</h2>
+            <p>Real-time inspection of RPLIDAR C1 360° scans, 3D IMU attitude, wheel odometry trajectories, and sensor health.</p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-lidar">Open Current Legacy LiDAR Monitor</button>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-imu">Open Current Legacy IMU & Position Tracking</button>
+          </div>
+        </div>
+
+        <div class="v2-placeholder-grid">
+          <div class="v2-placeholder-card" id="sensors-summary">
+            <span class="card-label">Placeholder Region: sensors-summary</span>
+            <h3>Sensor Health Overview</h3>
+            <p>Destination for per-sensor update rates (Hz) and operational status metrics.</p>
+          </div>
+          <div class="v2-placeholder-card" id="sensors-lidar">
+            <span class="card-label">Placeholder Region: sensors-lidar</span>
+            <h3>LiDAR 360° Scan Display</h3>
+            <p>Destination for RPLIDAR C1 polar canvas display and range controls.</p>
+          </div>
+          <div class="v2-placeholder-card" id="sensors-imu">
+            <span class="card-label">Placeholder Region: sensors-imu</span>
+            <h3>3D IMU Attitude & Sensors</h3>
+            <p>Destination for 3D chassis model and 6-axis accelerometer/gyroscope readouts.</p>
+          </div>
+          <div class="v2-placeholder-card" id="sensors-odometry">
+            <span class="card-label">Placeholder Region: sensors-odometry</span>
+            <h3>Wheel Odometry Tracker</h3>
+            <p>Destination for 2D position trajectory canvas and wheel speed telemetry.</p>
+          </div>
+          <div class="v2-placeholder-card" id="sensors-future">
+            <span class="card-label">Placeholder Region: sensors-future</span>
+            <h3>Future Payload Expansion</h3>
+            <p>Destination for future ultrasonic distance sensors, cliff sensors, and depth cameras.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-calibration-v2" class="tab-content" role="tabpanel" aria-labelledby="nav-calibration">
+      <div class="v2-shell-container">
+        <div class="v2-shell-header">
+          <div class="v2-shell-title-box">
+            <h2>🛡️ Kinematic Calibration & Commissioning</h2>
+            <p>Unified calibration workflow for wheel verification, closed-loop 1 m / 90° tests, repeatability verification, and advanced tuning.</p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-calibrate">Open Current Legacy Calibration & Safety</button>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-motion-cal">Open Current Legacy Motion Cal Area</button>
+          </div>
+        </div>
+
+        <div class="v2-placeholder-grid">
+          <div class="v2-placeholder-card" id="calibration-primary-workflow">
+            <span class="card-label">Placeholder Region: calibration-primary-workflow</span>
+            <h3>Primary Calibration Workflow</h3>
+            <p>Destination for wheel verification, Auto 1 m Forward, Auto 90° Left, and Auto 90° Right test buttons.</p>
+          </div>
+          <div class="v2-placeholder-card" id="calibration-live-progress">
+            <span class="card-label">Placeholder Region: calibration-live-progress</span>
+            <h3>Live Test Progress HUD</h3>
+            <p>Destination for real-time distance/yaw progress tracking and safety HUD during auto tests.</p>
+          </div>
+          <div class="v2-placeholder-card" id="calibration-latest-result">
+            <span class="card-label">Placeholder Region: calibration-latest-result</span>
+            <h3>Latest Test Result</h3>
+            <p>Destination for target errors, elapsed duration, and completion status result cards.</p>
+          </div>
+          <div class="v2-placeholder-card" id="calibration-repeatability">
+            <span class="card-label">Placeholder Region: calibration-repeatability</span>
+            <h3>Repeatability & Statistics</h3>
+            <p>Destination for Phase 5 repeatability counters, pass rate %, mean error, and history logs.</p>
+          </div>
+          <div class="v2-placeholder-card" id="calibration-advanced">
+            <span class="card-label">Placeholder Region: calibration-advanced</span>
+            <h3>Advanced Calibration & Maintenance</h3>
+            <p>Destination for 2m/360° manual tools, raised-wheel maintenance testing, and LiDAR straight-line wizard.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-diagnostics-v2" class="tab-content" role="tabpanel" aria-labelledby="nav-diagnostics">
+      <div class="v2-shell-container">
+        <div class="v2-shell-header">
+          <div class="v2-shell-title-box">
+            <h2>💻 System Diagnostics & Terminal</h2>
+            <p>Deep-dive system diagnostics, service rate monitors, serial link parameters, raw driver logs, and command terminal.</p>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy Diagnostics / ROS 2 Area</button>
+          </div>
+        </div>
+
+        <div class="v2-placeholder-grid">
+          <div class="v2-placeholder-card" id="diagnostics-services">
+            <span class="card-label">Placeholder Region: diagnostics-services</span>
+            <h3>Service Status Overview</h3>
+            <p>Destination for Node.js server status, Python sidecars, and system background tasks.</p>
+          </div>
+          <div class="v2-placeholder-card" id="diagnostics-firmware">
+            <span class="card-label">Placeholder Region: diagnostics-firmware</span>
+            <h3>Firmware & Protocol Identity</h3>
+            <p>Destination for ESP32 firmware build timestamp, git hash, and binary protocol identity.</p>
+          </div>
+          <div class="v2-placeholder-card" id="diagnostics-serial">
+            <span class="card-label">Placeholder Region: diagnostics-serial</span>
+            <h3>Serial Link Diagnostics</h3>
+            <p>Destination for COM port configuration, baud rate, and packet throughput metrics.</p>
+          </div>
+          <div class="v2-placeholder-card" id="diagnostics-ros">
+            <span class="card-label">Placeholder Region: diagnostics-ros</span>
+            <h3>ROS Topic & TF Rates</h3>
+            <p>Destination for ROS 2 topic publishing frequency and TF transform latency monitors.</p>
+          </div>
+          <div class="v2-placeholder-card" id="diagnostics-logs">
+            <span class="card-label">Placeholder Region: diagnostics-logs</span>
+            <h3>Live Driver Logs</h3>
+            <p>Destination for real-time driver log stream and console clear action.</p>
+          </div>
+          <div class="v2-placeholder-card" id="diagnostics-developer">
+            <span class="card-label">Placeholder Region: diagnostics-developer</span>
+            <h3>Developer & Packet Tools</h3>
+            <p>Destination for raw hex serial command prompt and calibration database raw JSON inspector.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Temporary Legacy Tools Access Container -->
+    <div id="tab-legacy" class="tab-content" role="tabpanel" aria-labelledby="nav-legacy">
+      <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 12px; padding: 15px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <div>
+          <h3 style="margin: 0 0 4px 0; color: #c084fc; font-size: 1.1rem;">🛠️ Temporary Legacy Tools & Historical Interfaces</h3>
+          <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">Access all seven original cockpit tabs during Stage 2 migration. All legacy controls and IDs remain 100% active.</p>
+        </div>
+        <span class="v2-migration-badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border-color: rgba(168, 85, 247, 0.4);">STAGE 2 LEGACY PARITY</span>
+      </div>
+
+      <nav class="legacy-tab-bar" role="tablist" aria-label="Legacy Sub-Navigation">
+        <button class="legacy-sub-btn active" data-legacy-tab="tab-dashboard" role="tab" aria-selected="true" aria-controls="tab-dashboard">🎮 Cockpit Dashboard</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-imu" role="tab" aria-selected="false" aria-controls="tab-imu">🧭 IMU & Position Tracking</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-encoder" role="tab" aria-selected="false" aria-controls="tab-encoder">🔍 Encoder & Rotate Testing</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-ros2" data-tab="tab-ros2" role="tab" aria-selected="false" aria-controls="tab-ros2">🤖 ROS 2 & Odometry Testing</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-calibrate" role="tab" aria-selected="false" aria-controls="tab-calibrate">🛡️ Calibration & Safety</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-motion-cal" role="tab" aria-selected="false" aria-controls="tab-motion-cal">🎛️ Motion Cal & Backtrack</button>
+        <button class="legacy-sub-btn" data-legacy-tab="tab-lidar" role="tab" aria-selected="false" aria-controls="tab-lidar">📡 LiDAR Monitor</button>
+      </nav>
+
+      <div class="legacy-tab-container-holder">
+        <!-- Tab Contents -->
+        <div id="tab-dashboard" class="tab-content active">
       <!-- Main Grid Dashboard -->
       <main class="dashboard-grid">
 
@@ -1942,10 +2185,33 @@
               </div>
             </div>
 
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
               <button class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="applyRecommendedCalibration()">Apply Recommended Calibration</button>
               <button class="btn" style="flex: 0.8; background: #4b5563; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Previous Calibration</button>
-              <a href="/api/calibration/export" target="_blank" class="btn" style="flex: 1; background: #374151; font-weight: bold; text-align: center; display: inline-block; padding: 10px 0; border-radius: 6px; color: #fff; text-decoration: none;">Export Test Results</a>
+              <a href="/api/calibration/repeatability/export/json" target="_blank" class="btn" style="flex: 1; background: #0284c7; font-weight: bold; text-align: center; display: inline-block; padding: 10px 0; border-radius: 6px; color: #fff; text-decoration: none;">📥 Export JSON</a>
+              <a href="/api/calibration/repeatability/export/csv" target="_blank" class="btn" style="flex: 1; background: #059669; font-weight: bold; text-align: center; display: inline-block; padding: 10px 0; border-radius: 6px; color: #fff; text-decoration: none;">📊 Export CSV</a>
+              <button class="btn" style="flex: 0.8; background: #dc2626; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="clearRepeatabilityHistory()">🗑️ Clear History</button>
+            </div>
+
+            <!-- Repeatability Session Statistics & Recommended Run HUD -->
+            <div id="repeatability-stats-hud" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; font-family: monospace; font-size: 12px;">
+              <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                <span>📊 Repeatability Session Statistics</span>
+                <span id="rep-val-passrate" style="color: #10b981;">Pass Rate: --%</span>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; font-size: 11px;">
+                <div>Total Runs: <span id="rep-val-count" style="font-weight: bold; color: #fff;">0</span></div>
+                <div>Dist Mean Err: <span id="rep-val-dist-mean" style="font-weight: bold; color: #38bdf8;">--</span></div>
+                <div>Dist Std Dev: <span id="rep-val-dist-std" style="font-weight: bold; color: #38bdf8;">--</span></div>
+                <div>Yaw Mean Err: <span id="rep-val-yaw-mean" style="font-weight: bold; color: #a855f7;">--</span></div>
+                <div>Norm Yaw Std: <span id="rep-val-yaw-std" style="font-weight: bold; color: #a855f7;">--</span></div>
+              </div>
+              <div style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; font-size: 11px; display: flex; gap: 12px; flex-wrap: wrap;">
+                <div>Fwd 1m: <span id="rep-rec-fwd" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                <div>Left 90°: <span id="rep-rec-left" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                <div>Right 90°: <span id="rep-rec-right" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                <div>Total Rec: <span id="rep-rec-total" style="font-weight: bold; color: var(--cyan-glow);">0/15</span></div>
+              </div>
             </div>
 
             <!-- History Logs Table -->
@@ -2058,6 +2324,8 @@
         </section>
       </main>
     </div>
+    </div> <!-- End legacy-tab-container-holder -->
+    </div> <!-- End tab-legacy -->
 
 
     <!-- Bottom: Live Logs and Custom Command Line Terminal -->

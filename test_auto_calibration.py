@@ -224,6 +224,78 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertEqual(stale, [],
             "updateAutoCalibUI must not reference bare 'btn-arm'")
 
+    # -----------------------------------------------------------------------
+    # Tests 31–36: Phase 5 Repeatability History & Reporting Tests
+    # -----------------------------------------------------------------------
+
+    def test_31_repeatability_history_logging_in_stop_auto_calibration(self):
+        """31. Verify stopAutoCalibration() records run in calibrationDb.testLogs."""
+        self.assertIn("calibrationDb.testLogs.push(historyRecord)", self.server_code,
+            "stopAutoCalibration() must append completed run to calibrationDb.testLogs")
+        self.assertIn("saveCalibrationDb()", self.server_code,
+            "stopAutoCalibration() must save calibration database")
+
+    def test_32_compute_repeatability_stats_helper_present(self):
+        """32. Verify computeRepeatabilityStats helper computes stats and recommended counters."""
+        self.assertIn("function computeRepeatabilityStats(", self.server_code)
+        self.assertIn("normalizedYawMagnitude", self.server_code)
+        self.assertIn("recommended", self.server_code)
+
+    def test_33_repeatability_api_endpoints_present(self):
+        """33. Verify repeatability history & clear HTTP endpoints are present."""
+        self.assertIn("/api/calibration/repeatability/history", self.server_code)
+        self.assertIn("/api/calibration/repeatability/clear", self.server_code)
+
+    def test_34_repeatability_json_csv_export_endpoints(self):
+        """34. Verify JSON and CSV export endpoints are present."""
+        self.assertIn("/api/calibration/repeatability/export/json", self.server_code)
+        self.assertIn("/api/calibration/repeatability/export/csv", self.server_code)
+
+    def test_35_repeatability_ui_hud_in_index_html(self):
+        """35. Verify repeatability statistics & recommended run HUD in index.html."""
+        self.assertIn("repeatability-stats-hud", self.html_code)
+        self.assertIn("rep-val-passrate", self.html_code)
+        self.assertIn("rep-rec-total", self.html_code)
+
+    def test_37_strict_recommendation_qualification_rule(self):
+        """37. Verify qualification rule requires both stopReason === 'target_reached' AND pass === true."""
+        self.assertIn("l.stopReason === 'target_reached' && l.pass === true", self.server_code,
+            "Qualification rule must strictly require stopReason === 'target_reached' && pass === true")
+
+    def test_38_safe_csv_sanitize_and_formula_injection_prevention(self):
+        """38. Verify sanitizeForCsv function and formula injection protection in server.js."""
+        self.assertIn("function sanitizeForCsv(", self.server_code)
+        self.assertIn("['=', '+', '-', '@']", self.server_code)
+
+    def test_39_atomic_save_calibration_db(self):
+        """39. Verify saveCalibrationDb uses atomic file replacement via .tmp extension."""
+        self.assertIn(".tmp'", self.server_code)
+        self.assertIn("fs.renameSync(", self.server_code)
+
+    def test_40_separate_per_test_statistics(self):
+        """40. Verify stats are calculated separately under byTest without combining distance & turn metrics."""
+        self.assertIn("byTest:", self.server_code)
+        self.assertIn("turn_left_90: leftStats", self.server_code)
+
+    def test_41_cleanup_order_in_stop_auto_calibration(self):
+        """41. Verify safety cleanup order: motor stop & disarm & cmdSource reset BEFORE history recording."""
+        code = self.server_code.replace('\r\n', '\n')
+        fn_start = code.index("function stopAutoCalibration(reason, detail) {")
+        fn_end   = code.index("\nasync function runAutoCalibTick(", fn_start)
+        fn_body  = code[fn_start:fn_end]
+
+        idx_motor = fn_body.index("sendMotorSpeeds(0, 0, 0, 0)")
+        idx_cmd   = fn_body.index("cmdSource = 'NONE'")
+        idx_hist  = fn_body.index("calibrationDb.testLogs.push(historyRecord)")
+
+        self.assertLess(idx_motor, idx_hist, "sendMotorSpeeds(0,0,0,0) must occur before history logging")
+        self.assertLess(idx_cmd, idx_hist, "cmdSource = 'NONE' must occur before history logging")
+
+    def test_42_json_schema_metadata(self):
+        """42. Verify JSON export includes $schema and version metadata."""
+        self.assertIn("$schema", self.server_code)
+        self.assertIn("repeatability-history-v1.json", self.server_code)
+
 
 if __name__ == '__main__':
     unittest.main()
