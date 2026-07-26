@@ -8,7 +8,7 @@ let gpDeadmanPressed = false;
 
 // Calibration variables
 let currentWheelDiameter = 0.065; // synchronized from ESP32 parameters
-let currentTrackWidth = 0.170;    // synchronized from ESP32 parameters
+let currentTrackWidth = 0.382;    // synchronized from ESP32 parameters
 let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 'out_and_back'
 let testTimer = null;
 let testStartOdom = null;
@@ -301,12 +301,28 @@ function sendUploadConfig() {
 }
 
 // Handle Server Messages
+
+// Safe DOM helpers injected to prevent WebSocket crashes
+const setDisabled = (id, value) => { const el = document.getElementById(id); if (el) el.disabled = value; };
+const setText = (id, value) => { const el = document.getElementById(id); if (el) { el.innerText = value; el.textContent = value; } };
+const setHTML = (id, value) => { const el = document.getElementById(id); if (el) el.innerHTML = value; };
+const setStyle = (id, prop, value) => { const el = document.getElementById(id); if (el) el.style[prop] = value; };
+const setValue = (id, value) => { const el = document.getElementById(id); if (el) el.value = value; };
+const setClass = (id, value) => { const el = document.getElementById(id); if (el) el.className = value; };
+const setChecked = (id, value) => { const el = document.getElementById(id); if (el) el.checked = value; };
+
 function handleServerMessage(msg) {
   switch (msg.type) {
+    case 'auto_calib_status':
+      if (typeof updateAutoCalibUI === 'function') {
+        updateAutoCalibUI(msg.status);
+      }
+      break;
+
     case 'status':
       if (msg.key === 'serial') {
         if (msg.port) {
-          comPortInput.value = msg.port;
+          if (comPortInput) comPortInput.value = msg.port;
         }
         if (msg.val === 'connected') {
           updateBadge(serialStatus, 'ok', `Serial: Connected (${msg.port})`);
@@ -323,42 +339,42 @@ function handleServerMessage(msg) {
 
     case 'battery': {
       if (msg.voltage <= 2.0) {
-        batteryFill.style.width = '0%';
-        batteryValue.textContent = 'Unknown';
-        batteryFill.style.background = '#64748b'; // gray
+        if (batteryFill) batteryFill.style.width = '0%';
+        if (batteryValue) batteryValue.textContent = 'Unknown';
+        if (batteryFill) batteryFill.style.background = '#64748b'; // gray
       } else {
         // Map 6.0V - 8.4V battery pack (2S LiPo usually) to percentage
         const minV = 6.0;
         const maxV = 8.4;
         const pct = Math.min(100, Math.max(0, ((msg.voltage - minV) / (maxV - minV)) * 100));
-        batteryFill.style.width = `${pct}%`;
-        batteryValue.textContent = `${msg.voltage.toFixed(2)} V`;
+        if (batteryFill) batteryFill.style.width = `${pct}%`;
+        if (batteryValue) batteryValue.textContent = `${msg.voltage.toFixed(2)} V`;
         
         // Update battery colors based on voltage levels
         if (msg.voltage > 7.4) {
-          batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
+          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
         } else if (msg.voltage > 6.8) {
-          batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
+          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
         } else {
-          batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
+          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
         }
       }
       break;
     }
 
     case 'encoder_total': {
-      totalValM1.textContent = msg.m1;
-      totalValM2.textContent = msg.m2;
-      totalValM3.textContent = msg.m3;
-      totalValM4.textContent = msg.m4;
+      if (totalValM1) totalValM1.textContent = msg.m1;
+      if (totalValM2) totalValM2.textContent = msg.m2;
+      if (totalValM3) totalValM3.textContent = msg.m3;
+      if (totalValM4) totalValM4.textContent = msg.m4;
 
       // Update diagnostics page ticks if they exist
       const testTicksM1 = document.getElementById('test-ticks-m1');
       if (testTicksM1) {
-        testTicksM1.textContent = msg.m1 - encoderOffsets[0];
-        document.getElementById('test-ticks-m2').textContent = msg.m2 - encoderOffsets[1];
-        document.getElementById('test-ticks-m3').textContent = msg.m3 - encoderOffsets[2];
-        document.getElementById('test-ticks-m4').textContent = msg.m4 - encoderOffsets[3];
+        if (testTicksM1) testTicksM1.textContent = msg.m1 - encoderOffsets[0];
+        setText('test-ticks-m2', msg.m2 - encoderOffsets[1]);
+        setText('test-ticks-m3', msg.m3 - encoderOffsets[2]);
+        setText('test-ticks-m4', msg.m4 - encoderOffsets[3]);
       }
 
       // Initialize straight drive test offsets if not yet set
@@ -375,10 +391,10 @@ function handleServerMessage(msg) {
       // Update straight drive test area ticks
       const straightTicksM1 = document.getElementById('straight-ticks-m1');
       if (straightTicksM1) {
-        straightTicksM1.textContent = relM1;
-        document.getElementById('straight-ticks-m2').textContent = relM2;
-        document.getElementById('straight-ticks-m3').textContent = relM3;
-        document.getElementById('straight-ticks-m4').textContent = relM4;
+        if (straightTicksM1) straightTicksM1.textContent = relM1;
+        setText('straight-ticks-m2', relM2);
+        setText('straight-ticks-m3', relM3);
+        setText('straight-ticks-m4', relM4);
       }
 
       // Update symmetry metrics
@@ -407,31 +423,31 @@ function handleServerMessage(msg) {
           const mph3 = rpm3 * rpmToMph;
           const mph4 = rpm4 * rpmToMph;
 
-          speedValM1.innerHTML = `${Math.abs(mph1).toFixed(2)} <small>mph</small>`;
-          speedValM2.innerHTML = `${Math.abs(mph2).toFixed(2)} <small>mph</small>`;
-          speedValM3.innerHTML = `${Math.abs(mph3).toFixed(2)} <small>mph</small>`;
-          speedValM4.innerHTML = `${Math.abs(mph4).toFixed(2)} <small>mph</small>`;
+          if (speedValM1) speedValM1.innerHTML = `${Math.abs(mph1).toFixed(2)} <small>mph</small>`;
+          if (speedValM2) speedValM2.innerHTML = `${Math.abs(mph2).toFixed(2)} <small>mph</small>`;
+          if (speedValM3) speedValM3.innerHTML = `${Math.abs(mph3).toFixed(2)} <small>mph</small>`;
+          if (speedValM4) speedValM4.innerHTML = `${Math.abs(mph4).toFixed(2)} <small>mph</small>`;
 
-          realValM1.textContent = rpm1.toFixed(1);
-          realValM2.textContent = rpm2.toFixed(1);
-          realValM3.textContent = rpm3.toFixed(1);
-          realValM4.textContent = rpm4.toFixed(1);
+          if (realValM1) realValM1.textContent = rpm1.toFixed(1);
+          if (realValM2) realValM2.textContent = rpm2.toFixed(1);
+          if (realValM3) realValM3.textContent = rpm3.toFixed(1);
+          if (realValM4) realValM4.textContent = rpm4.toFixed(1);
 
           // Update diagnostics page RPM values
           const testRpmM1 = document.getElementById('test-rpm-m1');
           if (testRpmM1) {
-            testRpmM1.textContent = rpm1.toFixed(1);
-            document.getElementById('test-rpm-m2').textContent = rpm2.toFixed(1);
-            document.getElementById('test-rpm-m3').textContent = rpm3.toFixed(1);
-            document.getElementById('test-rpm-m4').textContent = rpm4.toFixed(1);
+            if (testRpmM1) testRpmM1.textContent = rpm1.toFixed(1);
+            setText('test-rpm-m2', rpm2.toFixed(1));
+            setText('test-rpm-m3', rpm3.toFixed(1));
+            setText('test-rpm-m4', rpm4.toFixed(1));
           }
           // Update straight test area RPM
           const straightRpmM1 = document.getElementById('straight-rpm-m1');
           if (straightRpmM1) {
-            straightRpmM1.textContent = rpm1.toFixed(1);
-            document.getElementById('straight-rpm-m2').textContent = rpm2.toFixed(1);
-            document.getElementById('straight-rpm-m3').textContent = rpm3.toFixed(1);
-            document.getElementById('straight-rpm-m4').textContent = rpm4.toFixed(1);
+            if (straightRpmM1) straightRpmM1.textContent = rpm1.toFixed(1);
+            setText('straight-rpm-m2', rpm2.toFixed(1));
+            setText('straight-rpm-m3', rpm3.toFixed(1));
+            setText('straight-rpm-m4', rpm4.toFixed(1));
           }
 
           if (autoTestActive && autotestInitialized) {
@@ -453,19 +469,19 @@ function handleServerMessage(msg) {
     case 'motor_speeds': {
       const testPwmM1 = document.getElementById('test-pwm-m1');
       if (testPwmM1 && Array.isArray(msg.speeds)) {
-        testPwmM1.textContent = msg.speeds[0];
-        document.getElementById('test-pwm-m2').textContent = msg.speeds[1];
-        document.getElementById('test-pwm-m3').textContent = msg.speeds[2];
-        document.getElementById('test-pwm-m4').textContent = msg.speeds[3];
+        if (testPwmM1) testPwmM1.textContent = msg.speeds[0];
+        setText('test-pwm-m2', msg.speeds[1]);
+        setText('test-pwm-m3', msg.speeds[2]);
+        setText('test-pwm-m4', msg.speeds[3]);
       }
       break;
     }
 
     case 'encoder_realtime':
-      realValM1.textContent = msg.m1;
-      realValM2.textContent = msg.m2;
-      realValM3.textContent = msg.m3;
-      realValM4.textContent = msg.m4;
+      if (realValM1) realValM1.textContent = msg.m1;
+      if (realValM2) realValM2.textContent = msg.m2;
+      if (realValM3) realValM3.textContent = msg.m3;
+      if (realValM4) realValM4.textContent = msg.m4;
       break;
 
     case 'speed':
@@ -474,10 +490,10 @@ function handleServerMessage(msg) {
       m3Speed = msg.m3;
       m4Speed = msg.m4;
 
-      speedValM1.innerHTML = `${msg.m1.toFixed(1)} <small>mm/s</small>`;
-      speedValM2.innerHTML = `${msg.m2.toFixed(1)} <small>mm/s</small>`;
-      speedValM3.innerHTML = `${msg.m3.toFixed(1)} <small>mm/s</small>`;
-      speedValM4.innerHTML = `${msg.m4.toFixed(1)} <small>mm/s</small>`;
+      if (speedValM1) speedValM1.innerHTML = `${msg.m1.toFixed(1)} <small>mm/s</small>`;
+      if (speedValM2) speedValM2.innerHTML = `${msg.m2.toFixed(1)} <small>mm/s</small>`;
+      if (speedValM3) speedValM3.innerHTML = `${msg.m3.toFixed(1)} <small>mm/s</small>`;
+      if (speedValM4) speedValM4.innerHTML = `${msg.m4.toFixed(1)} <small>mm/s</small>`;
       
       // Update animations
       updateWheelAnimation(cardM1, msg.m1);
@@ -490,7 +506,7 @@ function handleServerMessage(msg) {
       if (encoderActivity) {
         const c = msg.counts || [];
         const movementState = msg.hasNonZero ? `COUNTS: ${c.join(', ')}` : 'all zero';
-        encoderActivity.textContent = `Encoder pkts: ${msg.packets} (${movementState})`;
+        if (encoderActivity) encoderActivity.textContent = `Encoder pkts: ${msg.packets} (${movementState})`;
       }
       break;
 
@@ -499,9 +515,9 @@ function handleServerMessage(msg) {
       imuRoll = msg.roll;
       imuPitch = msg.pitch;
       imuYaw = msg.yaw;
-      document.getElementById('imu-roll').textContent = `${msg.roll.toFixed(1)}°`;
-      document.getElementById('imu-pitch').textContent = `${msg.pitch.toFixed(1)}°`;
-      document.getElementById('imu-yaw').textContent = `${msg.yaw.toFixed(1)}°`;
+      setText('imu-roll', `${msg.roll.toFixed(1)}°`);
+      setText('imu-pitch', `${msg.pitch.toFixed(1)}°`);
+      setText('imu-yaw', `${msg.yaw.toFixed(1)}°`);
       odomTheta = msg.yaw * Math.PI / 180;
       update3DModelRotation(msg.pitch, msg.roll, msg.yaw);
       break;
@@ -569,18 +585,18 @@ function handleServerMessage(msg) {
       const btState = document.getElementById('backtrack-state-lbl');
       const btProgress = document.getElementById('backtrack-progress-bar');
       if (btState) {
-        btState.innerText = msg.status.toUpperCase();
-        btState.style.color = (msg.status === 'completed') ? '#10b981' : ((msg.status === 'aborted') ? '#ef4444' : '#f59e0b');
+        if (btState) btState.innerText = msg.status.toUpperCase();
+        if (btState) btState.style.color = (msg.status === 'completed') ? '#10b981' : ((msg.status === 'aborted') ? '#ef4444' : '#f59e0b');
       }
       if (btProgress && msg.index !== undefined && msg.total !== undefined) {
         const percent = ((msg.total - msg.index) / msg.total * 100).toFixed(1);
-        btProgress.style.width = `${percent}%`;
-        btProgress.innerText = `${percent}%`;
+        if (btProgress) btProgress.style.width = `${percent}%`;
+        if (btProgress) btProgress.innerText = `${percent}%`;
       }
       if (msg.status === 'completed' || msg.status === 'aborted') {
         if (btProgress) {
-          btProgress.style.width = '0%';
-          btProgress.innerText = '';
+          if (btProgress) btProgress.style.width = '0%';
+          if (btProgress) btProgress.innerText = '';
         }
       }
       break;
@@ -589,23 +605,23 @@ function handleServerMessage(msg) {
       const prState = document.getElementById('path-recording-lbl');
       const prBreadcrumbs = document.getElementById('path-breadcrumbs-lbl');
       if (prState) {
-        prState.innerText = msg.recording ? 'RECORDING' : 'Idle';
-        prState.style.color = msg.recording ? '#ef4444' : '#6b7280';
+        if (prState) prState.innerText = msg.recording ? 'RECORDING' : 'Idle';
+        if (prState) prState.style.color = msg.recording ? '#ef4444' : '#6b7280';
       }
       if (prBreadcrumbs) {
-        prBreadcrumbs.innerText = msg.pathLength;
+        if (prBreadcrumbs) prBreadcrumbs.innerText = msg.pathLength;
       }
       break;
 
     case 'limits_status':
       const flLabel = document.getElementById('limits-testing-lbl');
       if (flLabel) {
-        flLabel.innerText = msg.floorTesting ? 'FLOOR TESTING (0.17 m/s)' : 'UNCLAMPED (0.80 m/s)';
-        flLabel.style.color = msg.floorTesting ? '#f59e0b' : '#10b981';
+        if (flLabel) flLabel.innerText = msg.floorTesting ? 'FLOOR TESTING (0.17 m/s)' : 'UNCLAMPED (0.80 m/s)';
+        if (flLabel) flLabel.style.color = msg.floorTesting ? '#f59e0b' : '#10b981';
       }
       const flChk = document.getElementById('limits-floor-testing');
       if (flChk) {
-        flChk.checked = msg.floorTesting;
+        if (flChk) flChk.checked = msg.floorTesting;
       }
       break;
 
@@ -616,17 +632,17 @@ function handleServerMessage(msg) {
       imuRoll = msg.roll;
       
       // Update UI readouts
-      document.getElementById('imu-roll').textContent = `${msg.roll.toFixed(1)}°`;
-      document.getElementById('imu-pitch').textContent = `${msg.pitch.toFixed(1)}°`;
-      document.getElementById('imu-yaw').textContent = `${msg.yaw.toFixed(1)}°`;
+      setText('imu-roll', `${msg.roll.toFixed(1)}°`);
+      setText('imu-pitch', `${msg.pitch.toFixed(1)}°`);
+      setText('imu-yaw', `${msg.yaw.toFixed(1)}°`);
       
-      document.getElementById('imu-ax').innerHTML = `${msg.ax.toFixed(2)} <small>g</small>`;
-      document.getElementById('imu-ay').innerHTML = `${msg.ay.toFixed(2)} <small>g</small>`;
-      document.getElementById('imu-az').innerHTML = `${msg.az.toFixed(2)} <small>g</small>`;
+      setHTML('imu-ax', `${msg.ax.toFixed(2)} <small>g</small>`);
+      setHTML('imu-ay', `${msg.ay.toFixed(2)} <small>g</small>`);
+      setHTML('imu-az', `${msg.az.toFixed(2)} <small>g</small>`);
       
-      document.getElementById('imu-gx').innerHTML = `${msg.gx.toFixed(1)} <small>°/s</small>`;
-      document.getElementById('imu-gy').innerHTML = `${msg.gy.toFixed(1)} <small>°/s</small>`;
-      document.getElementById('imu-gz').innerHTML = `${msg.gz.toFixed(1)} <small>°/s</small>`;
+      setHTML('imu-gx', `${msg.gx.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gy', `${msg.gy.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gz', `${msg.gz.toFixed(1)} <small>°/s</small>`);
       
       // Override odometry heading with IMU yaw
       odomTheta = msg.yaw * Math.PI / 180;
@@ -706,9 +722,9 @@ function handleServerMessage(msg) {
         const legType = (msg.step % 2 === 1) ? 'FWD' : 'BWD';
         
         if (btnAutoTest) {
-          btnAutoTest.textContent = `Abort [${stageName} ${legType} ${repeatNum}/3]`;
-          btnAutoTest.style.background = 'linear-gradient(135deg, #ff0055, #ff0000)';
-          btnAutoTest.style.boxShadow = '0 0 10px rgba(255, 0, 85, 0.4)';
+          if (btnAutoTest) btnAutoTest.textContent = `Abort [${stageName} ${legType} ${repeatNum}/3]`;
+          if (btnAutoTest) btnAutoTest.style.background = 'linear-gradient(135deg, #ff0055, #ff0000)';
+          if (btnAutoTest) btnAutoTest.style.boxShadow = '0 0 10px rgba(255, 0, 85, 0.4)';
         }
 
         if (!autotestInitialized) {
@@ -747,9 +763,9 @@ function handleServerMessage(msg) {
         autotestInitialized = false;
 
         if (btnAutoTest) {
-          btnAutoTest.textContent = 'Auto Test (3ft)';
-          btnAutoTest.style.background = 'linear-gradient(135deg, #00f0ff, #0072ff)';
-          btnAutoTest.style.boxShadow = '0 0 10px rgba(0, 240, 255, 0.3)';
+          if (btnAutoTest) btnAutoTest.textContent = 'Auto Test (3ft)';
+          if (btnAutoTest) btnAutoTest.style.background = 'linear-gradient(135deg, #00f0ff, #0072ff)';
+          if (btnAutoTest) btnAutoTest.style.boxShadow = '0 0 10px rgba(0, 240, 255, 0.3)';
         }
 
         if (statusEl) statusEl.textContent = `Status: ${msg.msg || 'Test finished.'}`;
@@ -757,11 +773,11 @@ function handleServerMessage(msg) {
         if (closeBtn) closeBtn.style.display = 'inline-block';
         if (abortBtn) abortBtn.style.display = 'none';
         if (panelCopyBtn && clientTestLogs.length > 0) {
-          panelCopyBtn.style.display = 'inline-block';
+          if (panelCopyBtn) panelCopyBtn.style.display = 'inline-block';
         }
 
         if (modal && msg.msg && msg.msg.includes('ABORTED')) {
-          modal.style.display = 'none';
+          if (modal) modal.style.display = 'none';
         }
       }
       if (msg.msg) {
@@ -843,30 +859,30 @@ function handleServerMessage(msg) {
       
       // Update protocol and session fields if present
       if (protoDisplay && msg.protoMajor !== undefined) {
-        protoDisplay.innerText = `Protocol: v${msg.protoMajor}.${msg.protoMinor}`;
+        if (protoDisplay) protoDisplay.innerText = `Protocol: v${msg.protoMajor}.${msg.protoMinor}`;
       }
       if (sessDisplay && msg.sessionId !== undefined) {
-        sessDisplay.innerText = `Session: ${msg.sessionId}`;
+        if (sessDisplay) sessDisplay.innerText = `Session: ${msg.sessionId}`;
       }
       
       // Update safety lock badge
       if (lockBadge) {
         if (motorLockStatus) {
-          lockBadge.innerText = '🔒 Safety Lock: Active';
-          lockBadge.style.background = 'rgba(16, 185, 129, 0.2)';
-          lockBadge.style.color = '#10b981';
-          lockBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          if (lockBadge) lockBadge.innerText = '🔒 Safety Lock: Active';
+          if (lockBadge) lockBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+          if (lockBadge) lockBadge.style.color = '#10b981';
+          if (lockBadge) lockBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
         } else {
-          lockBadge.innerText = '⚠️ Safety Lock: Missing';
-          lockBadge.style.background = 'rgba(239, 68, 68, 0.2)';
-          lockBadge.style.color = '#ef4444';
-          lockBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          if (lockBadge) lockBadge.innerText = '⚠️ Safety Lock: Missing';
+          if (lockBadge) lockBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+          if (lockBadge) lockBadge.style.color = '#ef4444';
+          if (lockBadge) lockBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
         }
       }
       
       // Update mode badge
       if (modeBadge && isSimulation !== undefined) {
-        modeBadge.innerText = isSimulation ? 'Mode: Simulation Only' : 'Mode: Real-Drive';
+        if (modeBadge) modeBadge.innerText = isSimulation ? 'Mode: Simulation Only' : 'Mode: Real-Drive';
       }
       
       // Update thresholds table
@@ -874,8 +890,8 @@ function handleServerMessage(msg) {
       for (let i = 0; i < 4; i++) {
         const fwdVal = fwd[i];
         const revVal = rev[i];
-        document.getElementById(`pi-val-${motors[i]}-fwd`).innerText = fwdVal > 0 ? `${fwdVal} PWM` : "--";
-        document.getElementById(`pi-val-${motors[i]}-rev`).innerText = revVal > 0 ? `${revVal} PWM` : "--";
+        setText('pi-val-${motors[i]}-fwd', fwdVal > 0 ? `${fwdVal} PWM` : "--");
+        setText('pi-val-${motors[i]}-rev', revVal > 0 ? `${revVal} PWM` : "--");
       }
       
       if (cState > 0) {
@@ -900,8 +916,8 @@ function handleServerMessage(msg) {
         if (pwmDetailLbl) pwmDetailLbl.innerText = `${cPwm} PWM`;
         if (deltaLbl) deltaLbl.innerText = `${encoderDelta || 0} ticks`;
         if (movementLbl) {
-          movementLbl.innerText = movementDetected ? "YES (>= 8 ticks)" : "NO";
-          movementLbl.style.color = movementDetected ? "#10b981" : "#f59e0b";
+          if (movementLbl) movementLbl.innerText = movementDetected ? "YES (>= 8 ticks)" : "NO";
+          if (movementLbl) movementLbl.style.color = movementDetected ? "#10b981" : "#f59e0b";
         }
       } else {
         if (calPanel) calPanel.style.display = 'none';
@@ -922,26 +938,26 @@ function handleServerMessage(msg) {
       const badge = document.getElementById('maint-status-badge');
       if (badge) {
         if (active) {
-          badge.innerText = `Active (Motor ${activeMotorNum})`;
-          badge.style.background = 'rgba(59, 130, 246, 0.2)';
-          badge.style.color = '#3b82f6';
-          badge.style.border = '1px solid rgba(59, 130, 246, 0.4)';
+          if (badge) badge.innerText = `Active (Motor ${activeMotorNum})`;
+          if (badge) badge.style.background = 'rgba(59, 130, 246, 0.2)';
+          if (badge) badge.style.color = '#3b82f6';
+          if (badge) badge.style.border = '1px solid rgba(59, 130, 246, 0.4)';
         } else {
-          badge.innerText = 'Locked';
-          badge.style.background = 'rgba(239, 68, 68, 0.2)';
-          badge.style.color = '#fca5a5';
-          badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          if (badge) badge.innerText = 'Locked';
+          if (badge) badge.style.background = 'rgba(239, 68, 68, 0.2)';
+          if (badge) badge.style.color = '#fca5a5';
+          if (badge) badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
         }
       }
       
-      document.getElementById('tele-maint-session').innerText = msg.sessionId || '--';
-      document.getElementById('tele-maint-active').innerText = active ? 'ACTIVE' : 'Inactive';
-      document.getElementById('tele-maint-active').style.color = active ? '#10b981' : '#ef4444';
-      document.getElementById('tele-maint-deadman').innerText = deadmanActive ? 'Active' : 'Offline';
-      document.getElementById('tele-maint-deadman').style.color = deadmanActive ? '#10b981' : '#f59e0b';
-      document.getElementById('tele-maint-timeout').innerText = active ? `${(remainingTimeout / 1000).toFixed(1)}s` : '--';
-      document.getElementById('tele-maint-target').innerText = testPwm || '0';
-      document.getElementById('tele-maint-actual').innerText = actualPwm || '0';
+      setText('tele-maint-session', msg.sessionId || '--');
+      setText('tele-maint-active', active ? 'ACTIVE' : 'Inactive');
+      setStyle('tele-maint-active', 'color', active ? '#10b981' : '#ef4444');
+      setText('tele-maint-deadman', deadmanActive ? 'Active' : 'Offline');
+      setStyle('tele-maint-deadman', 'color', deadmanActive ? '#10b981' : '#f59e0b');
+      setText('tele-maint-timeout', active ? `${(remainingTimeout / 1000).toFixed(1)}s` : '--');
+      setText('tele-maint-target', testPwm || '0');
+      setText('tele-maint-actual', actualPwm || '0');
       
       let delta = 0;
       let total = 0;
@@ -951,35 +967,35 @@ function handleServerMessage(msg) {
         total = totalElems[activeMotor] ? totalElems[activeMotor].textContent : '0';
         delta = speedElems[activeMotor] ? speedElems[activeMotor].textContent : '0';
       }
-      document.getElementById('tele-maint-enc-delta').innerText = delta;
-      document.getElementById('tele-maint-enc-total').innerText = total;
+      setText('tele-maint-enc-delta', delta);
+      setText('tele-maint-enc-total', total);
       
       const slider = document.getElementById('maint-pwm-slider');
       const stepFwd = document.getElementById('btn-maint-fwd-step');
       const stepRev = document.getElementById('btn-maint-rev-step');
       
       if (active) {
-        slider.disabled = false;
-        stepFwd.disabled = false;
-        stepRev.disabled = false;
-        stepFwd.style.background = 'rgba(59, 130, 246, 0.2)';
-        stepFwd.style.color = '#93c5fd';
-        stepFwd.style.cursor = 'pointer';
-        stepRev.style.background = 'rgba(239, 68, 68, 0.2)';
-        stepRev.style.color = '#fca5a5';
-        stepRev.style.cursor = 'pointer';
+        if (slider) slider.disabled = false;
+        if (stepFwd) stepFwd.disabled = false;
+        if (stepRev) stepRev.disabled = false;
+        if (stepFwd) stepFwd.style.background = 'rgba(59, 130, 246, 0.2)';
+        if (stepFwd) stepFwd.style.color = '#93c5fd';
+        if (stepFwd) stepFwd.style.cursor = 'pointer';
+        if (stepRev) stepRev.style.background = 'rgba(239, 68, 68, 0.2)';
+        if (stepRev) stepRev.style.color = '#fca5a5';
+        if (stepRev) stepRev.style.cursor = 'pointer';
       } else {
-        slider.disabled = true;
-        slider.value = 0;
-        document.getElementById('maint-pwm-display').innerText = '0';
-        stepFwd.disabled = true;
-        stepRev.disabled = true;
-        stepFwd.style.background = '#374151';
-        stepFwd.style.color = '#9ca3af';
-        stepFwd.style.cursor = 'not-allowed';
-        stepRev.style.background = '#374151';
-        stepRev.style.color = '#9ca3af';
-        stepRev.style.cursor = 'not-allowed';
+        if (slider) slider.disabled = true;
+        if (slider) slider.value = 0;
+        setText('maint-pwm-display', '0');
+        if (stepFwd) stepFwd.disabled = true;
+        if (stepRev) stepRev.disabled = true;
+        if (stepFwd) stepFwd.style.background = '#374151';
+        if (stepFwd) stepFwd.style.color = '#9ca3af';
+        if (stepFwd) stepFwd.style.cursor = 'not-allowed';
+        if (stepRev) stepRev.style.background = '#374151';
+        if (stepRev) stepRev.style.color = '#9ca3af';
+        if (stepRev) stepRev.style.cursor = 'not-allowed';
       }
       break;
     }
@@ -1000,55 +1016,55 @@ function handleServerMessage(msg) {
       const badge = document.getElementById('normal-drive-badge');
       if (badge) {
         if (armed) {
-          badge.innerText = 'Armed';
-          badge.style.background = 'rgba(16, 185, 129, 0.2)';
-          badge.style.color = '#10b981';
-          badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          if (badge) badge.innerText = 'Armed';
+          if (badge) badge.style.background = 'rgba(16, 185, 129, 0.2)';
+          if (badge) badge.style.color = '#10b981';
+          if (badge) badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
         } else {
-          badge.innerText = 'Disarmed';
-          badge.style.background = 'rgba(239, 68, 68, 0.2)';
-          badge.style.color = '#fca5a5';
-          badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          if (badge) badge.innerText = 'Disarmed';
+          if (badge) badge.style.background = 'rgba(239, 68, 68, 0.2)';
+          if (badge) badge.style.color = '#fca5a5';
+          if (badge) badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
         }
       }
       
       const elState = document.getElementById('tele-drive-state');
       if (elState) {
-        elState.innerText = armed ? 'ARMED' : 'Disarmed';
-        elState.style.color = armed ? '#10b981' : '#fca5a5';
+        if (elState) elState.innerText = armed ? 'ARMED' : 'Disarmed';
+        if (elState) elState.style.color = armed ? '#10b981' : '#fca5a5';
       }
       
       const modes = ['LOCKED', 'MAINTENANCE', 'CALIBRATION', 'NORMAL_DRIVE', 'EMERGENCY_STOP', 'FAULTED'];
       const elMode = document.getElementById('tele-drive-mode');
       if (elMode) {
-        elMode.innerText = modes[mode] || `UNKNOWN (${mode})`;
-        elMode.style.color = (mode === 3) ? '#10b981' : ((mode === 4 || mode === 5) ? '#ef4444' : '#f59e0b');
+        if (elMode) elMode.innerText = modes[mode] || `UNKNOWN (${mode})`;
+        if (elMode) elMode.style.color = (mode === 3) ? '#10b981' : ((mode === 4 || mode === 5) ? '#ef4444' : '#f59e0b');
       }
       
       const elPhys = document.getElementById('tele-drive-phys-lock');
       if (elPhys) {
         if (lockStatus) {
-          elPhys.innerText = 'CLAMP ACTIVE';
-          elPhys.style.color = '#ef4444';
+          if (elPhys) elPhys.innerText = 'CLAMP ACTIVE';
+          if (elPhys) elPhys.style.color = '#ef4444';
         } else {
-          elPhys.innerText = 'DISABLED (LIVE)';
-          elPhys.style.color = '#10b981';
+          if (elPhys) elPhys.innerText = 'DISABLED (LIVE)';
+          if (elPhys) elPhys.style.color = '#10b981';
         }
       }
       
       const sources = ['NONE', 'WEB_JOYSTICK', 'USB_SERIAL', 'ROS', 'POSITION', 'CALIBRATION'];
       const elSource = document.getElementById('tele-drive-source');
       if (elSource) {
-        elSource.innerText = sources[source] || `UNKNOWN (${source})`;
+        if (elSource) elSource.innerText = sources[source] || `UNKNOWN (${source})`;
       }
       
       const elAge = document.getElementById('tele-drive-age');
       if (elAge) {
-        elAge.innerText = (cmdAge === 999999) ? 'N/A' : `${cmdAge} ms`;
+        if (elAge) elAge.innerText = (cmdAge === 999999) ? 'N/A' : `${cmdAge} ms`;
         if (cmdAge !== 999999 && cmdAge > 500) {
-          elAge.style.color = '#ef4444';
+          if (elAge) elAge.style.color = '#ef4444';
         } else {
-          elAge.style.color = '';
+          if (elAge) elAge.style.color = '';
         }
       }
       
@@ -1067,20 +1083,20 @@ function handleServerMessage(msg) {
       // Update Gamepad Live Input HUD (Arm and ESTOP)
       const gpArm = document.getElementById('gp-live-arm');
       if (gpArm) {
-        gpArm.innerText = armed ? 'ARMED' : 'DISARMED';
-        gpArm.style.color = armed ? '#10b981' : '#6b7280';
+        if (gpArm) gpArm.innerText = armed ? 'ARMED' : 'DISARMED';
+        if (gpArm) gpArm.style.color = armed ? '#10b981' : '#6b7280';
       }
       const gpEstop = document.getElementById('gp-live-estop');
       if (gpEstop) {
         if (mode === 4) {
-          gpEstop.innerText = 'ESTOP ACTIVE';
-          gpEstop.style.color = '#ef4444';
+          if (gpEstop) gpEstop.innerText = 'ESTOP ACTIVE';
+          if (gpEstop) gpEstop.style.color = '#ef4444';
         } else if (mode === 5) {
-          gpEstop.innerText = 'FAULTED';
-          gpEstop.style.color = '#ef4444';
+          if (gpEstop) gpEstop.innerText = 'FAULTED';
+          if (gpEstop) gpEstop.style.color = '#ef4444';
         } else {
-          gpEstop.innerText = 'NOMINAL';
-          gpEstop.style.color = '#10b981';
+          if (gpEstop) gpEstop.innerText = 'NOMINAL';
+          if (gpEstop) gpEstop.style.color = '#10b981';
         }
       }
       
@@ -1106,13 +1122,13 @@ function handleServerMessage(msg) {
       if (inputL) inputL.value = msg.leftTrim.toFixed(3);
       if (inputR) inputR.value = msg.rightTrim.toFixed(3);
       if (labelActive) {
-        labelActive.textContent = `L: ${msg.leftTrim.toFixed(3)} | R: ${msg.rightTrim.toFixed(3)}`;
-        labelActive.style.color = '#10b981';
+        if (labelActive) labelActive.textContent = `L: ${msg.leftTrim.toFixed(3)} | R: ${msg.rightTrim.toFixed(3)}`;
+        if (labelActive) labelActive.style.color = '#10b981';
       }
 
       const activeFwdText = document.getElementById('active-fwd-trims');
       if (activeFwdText) {
-        activeFwdText.textContent = `${msg.leftTrim.toFixed(4)} / ${msg.rightTrim.toFixed(4)}`;
+        if (activeFwdText) activeFwdText.textContent = `${msg.leftTrim.toFixed(4)} / ${msg.rightTrim.toFixed(4)}`;
       }
       break;
     }
@@ -1124,7 +1140,7 @@ function handleServerMessage(msg) {
     case 'rover_trims_rev_sync': {
       const activeRevText = document.getElementById('active-rev-trims');
       if (activeRevText) {
-        activeRevText.textContent = `${msg.leftTrimRev.toFixed(4)} / ${msg.rightTrimRev.toFixed(4)}`;
+        if (activeRevText) activeRevText.textContent = `${msg.leftTrimRev.toFixed(4)} / ${msg.rightTrimRev.toFixed(4)}`;
       }
       logSystem(`[Config Sync] Synced active Reverse Trims: ${msg.leftTrimRev.toFixed(4)} / ${msg.rightTrimRev.toFixed(4)}`);
       break;
@@ -1139,19 +1155,19 @@ function handleServerMessage(msg) {
         if (msg.speedTier && msg.totalPass) {
           progressLabel = `${msg.speedTier} Pass ${msg.totalPass}/${msg.totalPasses}`;
         }
-        badge.textContent = progressLabel;
-        badge.style.background = '';
-        badge.style.color = '';
-        badge.style.borderColor = '';
+        if (badge) badge.textContent = progressLabel;
+        if (badge) badge.style.background = '';
+        if (badge) badge.style.color = '';
+        if (badge) badge.style.borderColor = '';
         
         if (msg.state === 'IDLE') {
           stopTestScanPolling();
-          badge.style.background = 'rgba(107, 114, 128, 0.2)';
-          badge.style.color = '#9ca3af';
-          badge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
-          badge.textContent = 'IDLE';
-          document.getElementById('btn-start-lidar-test').style.display = 'block';
-          document.getElementById('btn-stop-lidar-test').style.display = 'none';
+          if (badge) badge.style.background = 'rgba(107, 114, 128, 0.2)';
+          if (badge) badge.style.color = '#9ca3af';
+          if (badge) badge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
+          if (badge) badge.textContent = 'IDLE';
+          setStyle('btn-start-lidar-test', 'display', 'block');
+          setStyle('btn-stop-lidar-test', 'display', 'none');
           
           if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
             saveCurrentPathToHistory(lastTelemetrySpeedTier);
@@ -1160,25 +1176,25 @@ function handleServerMessage(msg) {
             drawLidarTestCanvas();
           }
         } else if (msg.state === 'ZEROING' || msg.state === 'RETURNING_HOME_WAIT') {
-          badge.style.background = 'rgba(245, 158, 11, 0.2)';
-          badge.style.color = '#f59e0b';
-          badge.style.border = '1px solid rgba(245, 158, 11, 0.4)';
-          document.getElementById('btn-start-lidar-test').style.display = 'none';
-          document.getElementById('btn-stop-lidar-test').style.display = 'block';
+          if (badge) badge.style.background = 'rgba(245, 158, 11, 0.2)';
+          if (badge) badge.style.color = '#f59e0b';
+          if (badge) badge.style.border = '1px solid rgba(245, 158, 11, 0.4)';
+          setStyle('btn-start-lidar-test', 'display', 'none');
+          setStyle('btn-stop-lidar-test', 'display', 'block');
         } else if (msg.state === 'FORWARD_RUNNING' || msg.state === 'RETURNING_HOME') {
-          badge.style.background = 'rgba(6, 182, 212, 0.2)';
-          badge.style.color = '#06b6d4';
-          badge.style.border = '1px solid rgba(6, 182, 212, 0.4)';
-          document.getElementById('btn-start-lidar-test').style.display = 'none';
-          document.getElementById('btn-stop-lidar-test').style.display = 'block';
+          if (badge) badge.style.background = 'rgba(6, 182, 212, 0.2)';
+          if (badge) badge.style.color = '#06b6d4';
+          if (badge) badge.style.border = '1px solid rgba(6, 182, 212, 0.4)';
+          setStyle('btn-start-lidar-test', 'display', 'none');
+          setStyle('btn-stop-lidar-test', 'display', 'block');
         } else if (msg.state === 'COMPLETE') {
           stopTestScanPolling();
-          badge.style.background = 'rgba(16, 185, 129, 0.2)';
-          badge.style.color = '#10b981';
-          badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-          badge.textContent = 'COMPLETE ✓';
-          document.getElementById('btn-start-lidar-test').style.display = 'block';
-          document.getElementById('btn-stop-lidar-test').style.display = 'none';
+          if (badge) badge.style.background = 'rgba(16, 185, 129, 0.2)';
+          if (badge) badge.style.color = '#10b981';
+          if (badge) badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          if (badge) badge.textContent = 'COMPLETE ✓';
+          setStyle('btn-start-lidar-test', 'display', 'block');
+          setStyle('btn-stop-lidar-test', 'display', 'none');
           
           if (lidarOdomPath.length > 0 || lidarPosePath.length > 0) {
             saveCurrentPathToHistory(lastTelemetrySpeedTier);
@@ -1213,7 +1229,7 @@ function handleServerMessage(msg) {
       if (ySpan) ySpan.textContent = msg.lidarPose.y.toFixed(3) + 'm';
       if (yawSpan) yawSpan.textContent = (msg.lidarPose.yaw * 180 / Math.PI).toFixed(2) + '°';
       if (confSpan) {
-        confSpan.textContent = (msg.metrics.confidence * 100).toFixed(1) + '%';
+        if (confSpan) confSpan.textContent = (msg.metrics.confidence * 100).toFixed(1) + '%';
         const confDiv = confSpan.parentNode;
         if (msg.metrics.rejectionReason) {
           confDiv.style.borderColor = '#ef4444';
@@ -1244,16 +1260,16 @@ function handleServerMessage(msg) {
       
       if (lblLeft && barLeft) {
         const leftPower = isMoving ? (msg.leftPowerPct || 0) : 0;
-        lblLeft.textContent = `${leftPower}% (${dirText})`;
-        barLeft.style.width = `${leftPower}%`;
-        lblLeft.style.color = leftPower > 70 ? '#ff0055' : (leftPower > 40 ? '#f59e0b' : '#10b981');
+        if (lblLeft) lblLeft.textContent = `${leftPower}% (${dirText})`;
+        if (barLeft) barLeft.style.width = `${leftPower}%`;
+        if (lblLeft) lblLeft.style.color = leftPower > 70 ? '#ff0055' : (leftPower > 40 ? '#f59e0b' : '#10b981');
       }
       
       if (lblRight && barRight) {
         const rightPower = isMoving ? (msg.rightPowerPct || 0) : 0;
-        lblRight.textContent = `${rightPower}% (${dirText})`;
-        barRight.style.width = `${rightPower}%`;
-        lblRight.style.color = rightPower > 70 ? '#ff0055' : (rightPower > 40 ? '#f59e0b' : '#10b981');
+        if (lblRight) lblRight.textContent = `${rightPower}% (${dirText})`;
+        if (barRight) barRight.style.width = `${rightPower}%`;
+        if (lblRight) lblRight.style.color = rightPower > 70 ? '#ff0055' : (rightPower > 40 ? '#f59e0b' : '#10b981');
       }
 
       // Update Live Control Effort UI
@@ -1267,18 +1283,18 @@ function handleServerMessage(msg) {
         effortPct = Math.max(-50, Math.min(50, effortPct));
         
         if (effortPct >= 0) {
-          barEffort.style.left = '50%';
-          barEffort.style.width = `${effortPct}%`;
-          barEffort.style.background = 'linear-gradient(90deg, #a855f7, #00f0ff)';
+          if (barEffort) barEffort.style.left = '50%';
+          if (barEffort) barEffort.style.width = `${effortPct}%`;
+          if (barEffort) barEffort.style.background = 'linear-gradient(90deg, #a855f7, #00f0ff)';
         } else {
-          barEffort.style.left = `${50 + effortPct}%`;
-          barEffort.style.width = `${Math.abs(effortPct)}%`;
-          barEffort.style.background = 'linear-gradient(90deg, #ff0055, #a855f7)';
+          if (barEffort) barEffort.style.left = `${50 + effortPct}%`;
+          if (barEffort) barEffort.style.width = `${Math.abs(effortPct)}%`;
+          if (barEffort) barEffort.style.background = 'linear-gradient(90deg, #ff0055, #a855f7)';
         }
         
         const effortDir = effort > 0.005 ? 'STEER LEFT' : (effort < -0.005 ? 'STEER RIGHT' : 'CENTER');
-        lblEffort.textContent = isMoving ? `${effort.toFixed(3)} rad/s (${effortDir})` : '0.000 rad/s (CENTER)';
-        lblEffort.style.color = isMoving ? (Math.abs(effort) > 0.2 ? '#ff0055' : (Math.abs(effort) > 0.08 ? '#f59e0b' : '#00f0ff')) : '#00f0ff';
+        if (lblEffort) lblEffort.textContent = isMoving ? `${effort.toFixed(3)} rad/s (${effortDir})` : '0.000 rad/s (CENTER)';
+        if (lblEffort) lblEffort.style.color = isMoving ? (Math.abs(effort) > 0.2 ? '#ff0055' : (Math.abs(effort) > 0.08 ? '#f59e0b' : '#00f0ff')) : '#00f0ff';
       }
       break;
     }
@@ -1295,13 +1311,13 @@ function handleServerMessage(msg) {
       const applyBtn = document.getElementById('btn-apply-proposed');
       if (applyBtn) {
         if (msg.acceptedPasses >= 1) {
-          applyBtn.disabled = false;
-          applyBtn.style.opacity = '1';
-          applyBtn.style.cursor = 'pointer';
+          if (applyBtn) applyBtn.disabled = false;
+          if (applyBtn) applyBtn.style.opacity = '1';
+          if (applyBtn) applyBtn.style.cursor = 'pointer';
         } else {
-          applyBtn.disabled = true;
-          applyBtn.style.opacity = '0.6';
-          applyBtn.style.cursor = 'not-allowed';
+          if (applyBtn) applyBtn.disabled = true;
+          if (applyBtn) applyBtn.style.opacity = '0.6';
+          if (applyBtn) applyBtn.style.cursor = 'not-allowed';
         }
       }
       break;
@@ -3456,6 +3472,192 @@ async function triggerRealCalibrateStart() {
 }
 
 // ── Maintenance Mode ──
+async function runSingleMotorTest(motorIndex, direction) {
+  const chk = document.getElementById('maint-safety-chk');
+  if (chk && !chk.checked) {
+    alert('Please confirm that the rover is physically raised and supported with all wheels off the ground.');
+    showTestErrorBanner('Safety acknowledgement required: Confirm rover is physically raised off the floor.');
+    return;
+  }
+
+  const buttons = document.querySelectorAll('#btn-m1-fwd, #btn-m1-rev, #btn-m2-fwd, #btn-m2-rev, #btn-m3-fwd, #btn-m3-rev, #btn-m4-fwd, #btn-m4-rev');
+  buttons.forEach(b => { if (b) b.disabled = true; });
+
+  try {
+    logSystem(`[Maintenance Test] Starting single motor test: m${motorIndex + 1} ${direction}...`);
+    const res = await fetch('/api/maintenance/run_test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        safetyAck: true,
+        motorIndex: motorIndex,
+        direction: direction,
+        output: 50,
+        durationSec: 2.0
+      })
+    });
+    const data = await res.json();
+    if (data.ok && data.test_result) {
+      updateMaintenanceHUD(data.test_result);
+      logSystem(`[Maintenance Test] Test complete for ${data.test_result.motor_label}: Delta=${data.test_result.encoder_delta} ticks, Steady=${data.test_result.encoder_steady}, Isolation=${data.test_result.isolation_verified}`);
+    } else {
+      showTestErrorBanner(`Maintenance test failed: ${data.error || 'Unknown error'}`);
+      logSystem(`[Maintenance Test ERROR] ${data.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    console.error('Failed to run single motor maintenance test:', err);
+    showTestErrorBanner(`API / Network error: ${err.message}`);
+  } finally {
+    buttons.forEach(b => { if (b) b.disabled = false; });
+  }
+}
+
+async function stopAllMaintenance() {
+  try {
+    const res = await fetch('/api/maintenance/exit', { method: 'POST' });
+    const data = await res.json();
+    logSystem(`[Maintenance Test] STOP ALL triggered: ${JSON.stringify(data)}`);
+    showTestErrorBanner('🛑 EMERGENCY STOP ACTIVATED — All outputs locked.');
+  } catch (err) {
+    console.error('Failed to stop all maintenance:', err);
+  }
+}
+
+function showTestErrorBanner(msg) {
+  const banner = document.getElementById('maint-test-error-banner');
+  const msgEl = document.getElementById('maint-test-error-msg');
+  if (banner && msgEl) {
+    msgEl.innerText = msg;
+    banner.style.display = 'block';
+  }
+}
+
+function clearTestResult() {
+  const ids = [
+    'maint-test-motor', 'maint-test-label', 'maint-test-cmd', 'maint-test-time',
+    'maint-test-autostop', 'maint-test-armed', 'maint-test-delta-enc',
+    'maint-test-steady', 'maint-test-isolation'
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.innerText = '--';
+      el.style.color = '';
+    }
+  });
+
+  const motorKeys = ['m1', 'm2', 'm3', 'm4'];
+  motorKeys.forEach(m => {
+    ['enc-start-', 'enc-end-', 'enc-delta-', 'enc-iso-'].forEach(prefix => {
+      const el = document.getElementById(prefix + m);
+      if (el) {
+        el.innerText = '--';
+        el.style.color = '';
+      }
+    });
+  });
+
+  const banner = document.getElementById('maint-test-error-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function updateMaintenanceHUD(res) {
+  if (!res) return;
+
+  const mMotor = document.getElementById('maint-test-motor');
+  const mLabel = document.getElementById('maint-test-label');
+  const mCmd = document.getElementById('maint-test-cmd');
+  const mDelta = document.getElementById('maint-test-delta-enc');
+  const mTime = document.getElementById('maint-test-time');
+  const mAutoStop = document.getElementById('maint-test-autostop');
+  const mArmed = document.getElementById('maint-test-armed');
+  const mSteady = document.getElementById('maint-test-steady');
+  const mIso = document.getElementById('maint-test-isolation');
+  const banner = document.getElementById('maint-test-error-banner');
+  const errorMsg = document.getElementById('maint-test-error-msg');
+
+  if (mMotor) mMotor.innerText = res.selected_motor.toUpperCase();
+  if (mLabel) mLabel.innerText = res.motor_label;
+  if (mCmd) mCmd.innerText = `${res.commanded_pwm} PWM (${res.direction})`;
+  if (mTime) mTime.innerText = `${res.elapsed_test_time_sec}s`;
+  if (mAutoStop) {
+    mAutoStop.innerText = 'CONFIRMED (Motor PWM = 0)';
+    mAutoStop.style.color = '#10b981';
+  }
+  if (mArmed) {
+    mArmed.innerText = 'Disarmed';
+    mArmed.style.color = '#6b7280';
+  }
+
+  if (mDelta) {
+    const dVal = res.encoder_delta || 0;
+    mDelta.innerText = `${dVal > 0 ? '+' : ''}${dVal} ticks`;
+    mDelta.style.color = Math.abs(dVal) >= 10 ? '#10b981' : '#ef4444';
+  }
+
+  if (mSteady) {
+    mSteady.innerText = res.encoder_steady ? 'PASS (Active >= 10 ticks)' : 'FAIL (Inactive < 10 ticks)';
+    mSteady.style.color = res.encoder_steady ? '#10b981' : '#ef4444';
+  }
+
+  if (mIso) {
+    mIso.innerText = res.isolation_verified ? 'PASS (Isolation Verified)' : 'FAIL (Cross-motor movement > 5 ticks)';
+    mIso.style.color = res.isolation_verified ? '#10b981' : '#ef4444';
+  }
+
+  // Populate 4-wheel snapshot table
+  const motorKeys = ['m1', 'm2', 'm3', 'm4'];
+  const targetKey = res.selected_motor;
+  const unselectedDeltas = res.unselected_motor_deltas || {};
+
+  motorKeys.forEach((key, idx) => {
+    const elStart = document.getElementById(`enc-start-${key}`);
+    const elEnd = document.getElementById(`enc-end-${key}`);
+    const elDelta = document.getElementById(`enc-delta-${key}`);
+    const elIso = document.getElementById(`enc-iso-${key}`);
+
+    const startVal = key === targetKey ? res.starting_encoder_count : (res.start_encoders ? res.start_encoders[key] : 0);
+    const endVal = key === targetKey ? res.ending_encoder_count : (res.end_encoders ? res.end_encoders[key] : 0);
+    const deltaVal = key === targetKey ? res.encoder_delta : (unselectedDeltas[key] !== undefined ? unselectedDeltas[key] : 0);
+
+    if (elStart) elStart.innerText = startVal !== undefined ? startVal : '--';
+    if (elEnd) elEnd.innerText = endVal !== undefined ? endVal : '--';
+    if (elDelta) {
+      elDelta.innerText = `${deltaVal > 0 ? '+' : ''}${deltaVal}`;
+      if (key === targetKey) {
+        elDelta.style.color = Math.abs(deltaVal) >= 10 ? '#10b981' : '#ef4444';
+      } else {
+        elDelta.style.color = Math.abs(deltaVal) <= 5 ? '#a7f3d0' : '#ef4444';
+      }
+    }
+
+    if (elIso) {
+      if (key === targetKey) {
+        elIso.innerText = 'TARGET (Active)';
+        elIso.style.color = '#38bdf8';
+      } else {
+        const isPass = Math.abs(deltaVal) <= 5;
+        elIso.innerText = isPass ? 'PASS (<= 5 ticks)' : 'FAIL (> 5 ticks)';
+        elIso.style.color = isPass ? '#10b981' : '#ef4444';
+      }
+    }
+  });
+
+  // Diagnostic Error Banner check
+  const failures = [];
+  if (!res.encoder_steady) failures.push(`Target motor ${targetKey.toUpperCase()} did not move significantly (delta ${res.encoder_delta} < 10 ticks).`);
+  if (!res.isolation_verified) failures.push('Cross-motor movement detected: unselected motor moved beyond 5 ticks tolerance.');
+
+  if (failures.length > 0) {
+    if (banner && errorMsg) {
+      errorMsg.innerText = failures.join(' ');
+      banner.style.display = 'block';
+    }
+  } else {
+    if (banner) banner.style.display = 'none';
+  }
+}
+
 async function enterMaintenanceMode() {
   try {
     const res = await fetch('/api/maintenance/enter', {
@@ -3477,34 +3679,6 @@ async function exitMaintenanceMode() {
     logSystem(`[Maintenance] Exited: ${JSON.stringify(data)}`);
   } catch (err) {
     console.error('Failed to exit maintenance mode:', err);
-  }
-}
-
-async function stepMaintenanceOutput(value) {
-  try {
-    const res = await fetch('/api/maintenance/set_output', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speeds: [value, value, value, value] })
-    });
-    const data = await res.json();
-    logSystem(`[Maintenance] Step output set to ${value}: ${JSON.stringify(data)}`);
-  } catch (err) {
-    console.error('Failed to step maintenance output:', err);
-  }
-}
-
-async function stopMaintenanceOutput() {
-  try {
-    const res = await fetch('/api/maintenance/set_output', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speeds: [0, 0, 0, 0] })
-    });
-    const data = await res.json();
-    logSystem(`[Maintenance] Stopped: ${JSON.stringify(data)}`);
-  } catch (err) {
-    console.error('Failed to stop maintenance output:', err);
   }
 }
 
@@ -4258,4 +4432,166 @@ function openLowEndCalibration() {
     }
   }
 }
+
+// ────────────────────────────────────────────────────────────
+// Closed-Loop Automatic Calibration UI Logic
+// ────────────────────────────────────────────────────────────
+let pendingAutoCalibTest = null;
+let autoCalibPollingInterval = null;
+
+function promptAutoCalib(testType) {
+  pendingAutoCalibTest = testType;
+  const modal = document.getElementById('modal-auto-calib-confirm');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeAutoCalibModal() {
+  pendingAutoCalibTest = null;
+  const modal = document.getElementById('modal-auto-calib-confirm');
+  if (modal) modal.style.display = 'none';
+}
+
+async function confirmAndStartAutoCalib() {
+  if (!pendingAutoCalibTest) return;
+  const testType = pendingAutoCalibTest;
+  closeAutoCalibModal();
+
+  try {
+    const res = await fetch('/api/calibration/auto/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ test: testType })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert(`Failed to start test: ${data.error}`);
+    } else {
+      updateAutoCalibUI(data.status);
+      startAutoCalibPolling();
+    }
+  } catch (err) {
+    alert(`Error starting automatic calibration test: ${err.message}`);
+  }
+}
+
+async function abortAutoCalibrationTest() {
+  try {
+    const res = await fetch('/api/calibration/auto/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (data.status) {
+      updateAutoCalibUI(data.status);
+    }
+  } catch (err) {
+    console.error('Error aborting auto calibration test:', err.message);
+  }
+}
+
+function startAutoCalibPolling() {
+  if (autoCalibPollingInterval) clearInterval(autoCalibPollingInterval);
+  autoCalibPollingInterval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/calibration/auto/status');
+      const data = await res.json();
+      if (data.ok && data.status) {
+        updateAutoCalibUI(data.status);
+        if (!data.status.active) {
+          clearInterval(autoCalibPollingInterval);
+          autoCalibPollingInterval = null;
+        }
+      }
+    } catch (e) {}
+  }, 200);
+}
+
+function updateAutoCalibUI(status) {
+  if (!status) return;
+
+  const setText = (idOrClass, val) => {
+    document.querySelectorAll('#' + idOrClass + ', .' + idOrClass).forEach(el => {
+      el.textContent = val;
+    });
+  };
+
+  // Disable start buttons while test is active
+  document.querySelectorAll('#btn-auto-fwd-1m, .btn-auto-fwd-1m, #btn-auto-turn-left, .btn-auto-turn-left, #btn-auto-turn-right, .btn-auto-turn-right').forEach(btn => {
+    btn.disabled = !!status.active;
+  });
+
+  document.querySelectorAll('#auto-calib-active-banner, .auto-calib-active-banner').forEach(banner => {
+    banner.style.display = status.active ? 'block' : 'none';
+  });
+
+  document.querySelectorAll('#auto-calib-hud-phase, .auto-calib-hud-phase').forEach(hudPhase => {
+    hudPhase.textContent = status.phase || 'IDLE';
+    hudPhase.style.background = status.active ? '#ef4444' : (status.lastResult && status.lastResult.pass ? '#10b981' : (status.lastResult && status.lastResult.pass === false ? '#f59e0b' : 'rgba(255,255,255,0.1)'));
+  });
+
+  setText('auto-calib-val-test', status.test || 'None');
+  setText('auto-calib-val-elapsed', `${((status.elapsedMs || 0) / 1000.0).toFixed(1)} s`);
+  setText('auto-calib-val-dist', `${(status.reportedDistance || 0).toFixed(3)} m`);
+  setText('auto-calib-val-yaw', `${(status.reportedYawDegrees || 0).toFixed(1)}°`);
+  setText('auto-calib-val-ages', `${status.telemetryAgeMs || 0}ms / ${status.odomAgeMs || 0}ms`);
+  setText('auto-calib-val-cmd', status.motorCommand ? JSON.stringify(status.motorCommand) : '[0, 0, 0, 0]');
+  setText('auto-calib-val-reason', status.stopReason || 'None');
+
+  // Render Result Card if test finished (lastResult is present)
+  const res = status.lastResult;
+  const showCard = (res !== null);
+  document.querySelectorAll('#auto-calib-result-card, .auto-calib-result-card').forEach(resultCard => {
+    resultCard.style.display = showCard ? 'block' : 'none';
+  });
+
+  if (showCard) {
+    document.querySelectorAll('#auto-calib-result-badge, .auto-calib-result-badge').forEach(resBadge => {
+      if (res.pass === true) {
+        resBadge.textContent = 'PASS';
+        resBadge.style.background = '#10b981';
+        resBadge.style.color = '#fff';
+      } else {
+        resBadge.textContent = 'FAIL';
+        resBadge.style.background = '#ef4444';
+        resBadge.style.color = '#fff';
+      }
+    });
+
+    setText('res-test-type', status.test || '-');
+    if (status.startPose) {
+      setText('res-start-pose', `(${status.startPose.x.toFixed(3)}, ${status.startPose.y.toFixed(3)}, ${status.startPose.yawDeg.toFixed(1)}°)`);
+    }
+    if (status.finalPose) {
+      setText('res-ending-pose', `(${status.finalPose.x.toFixed(3)}, ${status.finalPose.y.toFixed(3)}, ${status.finalPose.yawDeg.toFixed(1)}°)`);
+    }
+    setText('res-measured-dist', `${(status.reportedDistance || 0).toFixed(3)} m`);
+    setText('res-measured-yaw', `${(status.reportedYawDegrees || 0).toFixed(1)}°`);
+    setText('res-target-errors', `Dist Err: ${status.distanceError > 0 ? '+' : ''}${status.distanceError || 0}m | Yaw Err: ${status.yawErrorDegrees > 0 ? '+' : ''}${status.yawErrorDegrees || 0}°`);
+    setText('res-elapsed-time', `${((status.elapsedMs || 0) / 1000.0).toFixed(1)} s`);
+    setText('res-stop-reason', `${status.stopReason || '-'} ${status.fault ? '(' + status.fault + ')' : ''}`);
+  }
+}
+
+// Query initial automatic calibration status on page load
+document.addEventListener('DOMContentLoaded', () => {
+  fetch('/api/calibration/auto/status')
+    .then(res => res.json())
+    .then(data => {
+      if (data && data.ok && data.status) {
+        updateAutoCalibUI(data.status);
+      }
+    })
+    .catch(() => {});
+
+  const btnClearResult = document.getElementById('btn-clear-calib-result');
+  if (btnClearResult) {
+    btnClearResult.addEventListener('click', () => {
+      fetch('/api/calibration/auto/clear_result', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.ok && data.status) updateAutoCalibUI(data.status);
+        });
+    });
+  }
+});
 

@@ -11,9 +11,12 @@
 # no /dev mounts in Docker.
 # ==============================================================================
 
+import json
 import math
 import os
+import threading
 import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -23,6 +26,73 @@ import requests
 from tf2_ros import TransformBroadcaster
 
 from rover_bringup.encoder_kinematics import EncoderKinematics, normalize_angle
+
+
+class OdomAPIHandler(BaseHTTPRequestHandler):
+    node_ref = None
+
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP access logging in ROS logs
+
+    def do_GET(self):
+        try:
+            if self.path in ['/api/odom', '/odom', '/status']:
+                if OdomAPIHandler.node_ref is None:
+                    body = json.dumps({"ok": False, "error": "Node uninitialized"}).encode('utf-8')
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+
+                node = OdomAPIHandler.node_ref
+                now_ts = time.time()
+                last_ts = getattr(node.kinematics, 'last_timestamp_sec', None)
+                if last_ts is not None and last_ts > 0:
+                    odom_age_ms = int((now_ts - last_ts) * 1000.0)
+                else:
+                    odom_age_ms = 0
+
+                consec_errs = getattr(node, 'consecutive_errors', 0)
+                is_ok = (consec_errs == 0) and (odom_age_ms < 2000)
+                health = "ok" if is_ok else ("degraded" if odom_age_ms < 5000 else "stale")
+
+                data = {
+                    "ok": is_ok,
+                    "timestamp": now_ts,
+                    "x": float(getattr(node.kinematics, 'x', 0.0)),
+                    "y": float(getattr(node.kinematics, 'y', 0.0)),
+                    "yaw": float(getattr(node.kinematics, 'yaw', 0.0)),
+                    "yaw_deg": float(math.degrees(getattr(node.kinematics, 'yaw', 0.0))),
+                    "v_x": float(getattr(node.kinematics, 'v_x', 0.0)),
+                    "w_z": float(getattr(node.kinematics, 'w_z', 0.0)),
+                    "odometry_age_ms": odom_age_ms,
+                    "node_health": health,
+                    "consecutive_errors": consec_errs,
+                }
+                body = json.dumps(data).encode('utf-8')
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+        except Exception as err:
+            try:
+                body = json.dumps({"ok": False, "error": str(err)}).encode('utf-8')
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                pass
+
+
 
 
 class RoverEncoderOdometry(Node):
@@ -44,8 +114,8 @@ class RoverEncoderOdometry(Node):
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('wheel_diameter_m', 0.065)
-        self.declare_parameter('track_width_m', 0.170)
-        self.declare_parameter('ticks_per_revolution', 937.2)
+        self.declare_parameter('track_width_m', 0.382)
+        self.declare_parameter('ticks_per_revolution', 1894.0)
         self.declare_parameter('m1_sign', 1.0)
         self.declare_parameter('m2_sign', 1.0)
         self.declare_parameter('m3_sign', 1.0)
@@ -78,6 +148,10 @@ class RoverEncoderOdometry(Node):
         disagree_thresh = self.get_parameter('disagreement_threshold_ticks').get_parameter_value().integer_value
         max_speed = self.get_parameter('max_plausible_wheel_speed_mps').get_parameter_value().double_value
 
+        default_odom_api_port = int(os.environ.get('ROVER_ODOM_HTTP_PORT', '3003'))
+        self.declare_parameter('odom_api_port', default_odom_api_port)
+        self.odom_api_port = self.get_parameter('odom_api_port').get_parameter_value().integer_value
+
         # Kinematics engine initialization
         self.kinematics = EncoderKinematics(
             wheel_radius_m=wheel_diameter / 2.0,
@@ -103,14 +177,29 @@ class RoverEncoderOdometry(Node):
         # Connection / Error state
         self.consecutive_errors = 0
 
+        # Start HTTP API server for host odometry queries
+        OdomAPIHandler.node_ref = self
+        self._start_http_server(self.odom_api_port)
+
         # Timer setup
         timer_period = 1.0 / max(1.0, self.publish_rate_hz)
         self.timer = self.create_timer(timer_period, self._poll_and_publish)
 
         self.get_logger().info(
             f"rover_encoder_odometry initialized. Polling '{self.telemetry_url}' at {self.publish_rate_hz} Hz. "
+            f"HTTP Odom API serving on port {self.odom_api_port}. "
             f"Wheel diameter: {wheel_diameter}m, track width: {track_width}m, ticks/rev: {ticks_per_rev} (provisional)."
         )
+
+    def _start_http_server(self, port: int):
+        try:
+            httpd = HTTPServer(('0.0.0.0', port), OdomAPIHandler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            self.get_logger().info(f"Odom HTTP API server listening on 0.0.0.0:{port}")
+        except Exception as err:
+            self.get_logger().error(f"Failed to start Odom HTTP API server on port {port}: {err}")
+
 
     def _poll_and_publish(self):
         """Timer callback: poll GET /api/encoders, update kinematics, publish /odom & TF."""
