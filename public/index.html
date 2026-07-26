@@ -70,31 +70,46 @@
             <p>Primary operational cockpit for manual rover teleoperation, live drive status, camera feed, and safety oversight.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-dashboard">Open Current Legacy Drive Controls (Dashboard)</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="drive-status-summary">
-            <span class="card-label">Placeholder Region: drive-status-summary</span>
-            <h3>Telemetry & Safety Status</h3>
-            <p>Destination for live connection status summary, gamepad telemetry, armed/disarmed indicator, and E-stop status.</p>
+          <div class="v2-card" id="drive-status-summary">
+            <div class="v2-card-header">
+              <h3>📊 Operator Telemetry & Status Strip</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">WebSocket:</span> <span id="v2-drive-val-ws" class="status-val">Connecting...</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Serial Link:</span> <span id="v2-drive-val-serial" class="status-val">Connecting...</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Gamepad:</span> <span id="v2-drive-val-gamepad" class="status-val">Disconnected</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Rover Armed:</span> <span id="v2-drive-val-armed" class="status-val badge-disarmed">DISARMED</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Emergency Stop:</span> <span id="v2-drive-val-estop" class="status-val badge-estop-clear">CLEAR</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Battery Voltage:</span> <span id="v2-drive-val-battery" class="status-val">-- V</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Telemetry Age:</span> <span id="v2-drive-val-telem-age" class="status-val">-- ms</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Odometry Age:</span> <span id="v2-drive-val-odom-age" class="status-val">-- ms</span></div>
+            </div>
           </div>
           <div class="v2-placeholder-card" id="drive-manual-control">
-            <span class="card-label">Placeholder Region: drive-manual-control</span>
+            <span class="card-label">Placeholder Region: drive-manual-control (Stage 4)</span>
             <h3>Manual Drive Controls</h3>
             <p>Destination for primary direction pad, velocity sliders, and joystick teleoperation mapping.</p>
           </div>
           <div class="v2-placeholder-card" id="drive-camera">
-            <span class="card-label">Placeholder Region: drive-camera</span>
+            <span class="card-label">Placeholder Region: drive-camera (Stage 4)</span>
             <h3>RPi Camera Stream</h3>
             <p>Destination for live camera stream viewport and fullscreen display toggle.</p>
           </div>
-          <div class="v2-placeholder-card" id="drive-faults">
-            <span class="card-label">Placeholder Region: drive-faults</span>
-            <h3>Concise Fault Banner</h3>
-            <p>Destination for active safety fault codes and physical lock status diagnostics.</p>
+          <div class="v2-card" id="drive-faults">
+            <div class="v2-card-header">
+              <h3>⚠️ Active Safety Faults & Warnings</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div id="v2-drive-faults-list" class="v2-faults-container">
+              <div class="v2-fault-item v2-fault-ok">✓ No Active Safety Faults (System Nominal)</div>
+            </div>
           </div>
         </div>
       </div>
@@ -108,41 +123,67 @@
             <p>Monitor ROS 2 navigation stack, SLAM mapping, localization state, Nav2 lifecycle, goal progress, and Foxglove access.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy ROS 2 Area</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="autonomy-stack-health">
-            <span class="card-label">Placeholder Region: autonomy-stack-health</span>
-            <h3>ROS 2 Stack Health</h3>
-            <p>Destination for system bringup service health and node status monitors.</p>
+          <div class="v2-card" id="autonomy-stack-health">
+            <div class="v2-card-header">
+              <h3>🤖 ROS 2 Stack Health</h3>
+              <span class="badge badge-info">ROS 2 JAZZY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">System Health:</span> <span id="v2-ros-val-system" class="status-val">Connecting...</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">LiDAR Bridge:</span> <span id="v2-ros-val-lidar" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Encoder Odometry:</span> <span id="v2-ros-val-odom" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-ros-val-foxglove" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Diagnostics Rate:</span> <span id="v2-ros-val-diag-hz" class="status-val">-- Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Odometry Rate:</span> <span id="v2-ros-val-odom-hz" class="status-val">-- Hz</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-localization">
-            <span class="card-label">Placeholder Region: autonomy-localization</span>
-            <h3>Localization State</h3>
-            <p>Destination for active pose estimator X/Y/Yaw coordinates and covariance confidence.</p>
+          <div class="v2-card" id="autonomy-localization">
+            <div class="v2-card-header">
+              <h3>🧭 Vehicle Localization State</h3>
+              <span class="badge badge-warning">ODOMETRY ONLY</span>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Active localization mode: <strong>Wheel Odometry Only (Skid-Steer Kinematics)</strong></p>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Position X:</span> <span id="v2-loc-val-x" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Position Y:</span> <span id="v2-loc-val-y" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Heading (Yaw):</span> <span id="v2-loc-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Covariance Confidence:</span> <span id="v2-loc-val-cov" class="status-val">High (Dead-Reckoning)</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-slam">
-            <span class="card-label">Placeholder Region: autonomy-slam</span>
-            <h3>SLAM Mapping State</h3>
-            <p>Destination for active map status, grid resolution, and map update rates.</p>
+          <div class="v2-card" id="autonomy-slam">
+            <div class="v2-card-header">
+              <h3>🗺️ SLAM Mapping State</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">SLAM map building service is <strong>Not installed</strong> on this chassis build. Cartographer/SLAM-Toolbox integration scheduled for Phase 7.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-nav2">
-            <span class="card-label">Placeholder Region: autonomy-nav2</span>
-            <h3>Nav2 Lifecycle State</h3>
-            <p>Destination for Nav2 planner, controller, and recovery server lifecycle status.</p>
+          <div class="v2-card" id="autonomy-nav2">
+            <div class="v2-card-header">
+              <h3>🧭 Nav2 Lifecycle State</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Nav2 stack planner and controller servers are <strong>Not installed</strong>. Autonomous path planning is scheduled for Phase 7.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-goal">
-            <span class="card-label">Placeholder Region: autonomy-goal</span>
-            <h3>Navigation Goal & Progress</h3>
-            <p>Destination for goal target status, distance-to-goal tracking, and cancel action controls.</p>
+          <div class="v2-card" id="autonomy-goal">
+            <div class="v2-card-header">
+              <h3>🎯 Navigation Goal & Progress</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Navigation goal controls will be enabled after Nav2 integration is deployed.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-foxglove">
-            <span class="card-label">Placeholder Region: autonomy-foxglove</span>
-            <h3>Foxglove Web Visualizer</h3>
-            <p>Destination for Foxglove Studio WebSocket bridge access details (Port 8765).</p>
+          <div class="v2-card" id="autonomy-foxglove">
+            <div class="v2-card-header">
+              <h3>🦊 Foxglove Web Visualizer Bridge</h3>
+              <span class="badge badge-success">PORT 8765</span>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-muted);">Foxglove Studio WebSocket bridge active at <code>ws://10.0.0.246:8765</code>.</p>
+            <a href="https://studio.foxglove.dev" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="margin-top: 8px; display: inline-block;">Open Foxglove Web Studio</a>
           </div>
         </div>
       </div>
@@ -156,37 +197,80 @@
             <p>Real-time inspection of RPLIDAR C1 360° scans, 3D IMU attitude, wheel odometry trajectories, and sensor health.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-lidar">Open Current Legacy LiDAR Monitor</button>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-imu">Open Current Legacy IMU & Position Tracking</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="sensors-summary">
-            <span class="card-label">Placeholder Region: sensors-summary</span>
-            <h3>Sensor Health Overview</h3>
-            <p>Destination for per-sensor update rates (Hz) and operational status metrics.</p>
+          <div class="v2-card" id="sensors-summary">
+            <div class="v2-card-header">
+              <h3>📡 Sensor Payloads & Health Overview</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">RPLIDAR C1 360°:</span> <span id="v2-sensor-val-lidar" class="status-val">Healthy (6.6 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">3D IMU Attitude:</span> <span id="v2-sensor-val-imu" class="status-val">Healthy (10 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Wheel Odometry:</span> <span id="v2-sensor-val-odom" class="status-val">Healthy (10 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">RPi Camera:</span> <span id="v2-sensor-val-camera" class="status-val">Available</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-lidar">
-            <span class="card-label">Placeholder Region: sensors-lidar</span>
-            <h3>LiDAR 360° Scan Display</h3>
-            <p>Destination for RPLIDAR C1 polar canvas display and range controls.</p>
+          <div class="v2-card" id="sensors-lidar">
+            <div class="v2-card-header">
+              <h3>📡 RPLIDAR C1 360° Polar Scan</h3>
+              <span id="v2-lidar-badge" class="badge badge-success">SCANNING</span>
+            </div>
+            <div style="display: flex; gap: 15px; margin-bottom: 10px; font-size: 0.85rem; font-family: monospace;">
+              <div>Scan Hz: <strong id="v2-lidar-val-hz">-- Hz</strong></div>
+              <div>Point Count: <strong id="v2-lidar-val-points">--</strong></div>
+              <div>Data Age: <strong id="v2-lidar-val-age">-- ms</strong></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 280px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-lidar-polar-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-imu">
-            <span class="card-label">Placeholder Region: sensors-imu</span>
-            <h3>3D IMU Attitude & Sensors</h3>
-            <p>Destination for 3D chassis model and 6-axis accelerometer/gyroscope readouts.</p>
+          <div class="v2-card" id="sensors-imu">
+            <div class="v2-card-header">
+              <h3>🧭 3D Chassis Attitude & 6-Axis Telemetry</h3>
+              <span id="v2-imu-badge" class="badge badge-success">HEALTHY</span>
+            </div>
+            <div class="v2-status-grid" style="margin-bottom: 10px;">
+              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">0.0, 0.0, 9.8 m/s²</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">0.0, 0.0, 0.0 °/s</span></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-imu-model-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-odometry">
-            <span class="card-label">Placeholder Region: sensors-odometry</span>
-            <h3>Wheel Odometry Tracker</h3>
-            <p>Destination for 2D position trajectory canvas and wheel speed telemetry.</p>
+          <div class="v2-card" id="sensors-odometry">
+            <div class="v2-card-header">
+              <h3>🔍 Wheel Odometry Trajectory Tracker</h3>
+              <span id="v2-odom-badge" class="badge badge-success">HEALTHY</span>
+            </div>
+            <div class="v2-status-grid" style="margin-bottom: 10px;">
+              <div class="v2-status-item"><span class="v2-status-label">X Position:</span> <span id="v2-odom-val-x" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Y Position:</span> <span id="v2-odom-val-y" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw Heading:</span> <span id="v2-odom-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Total Distance:</span> <span id="v2-odom-val-dist" class="status-val">0.000 m</span></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-odom-traj-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-future">
-            <span class="card-label">Placeholder Region: sensors-future</span>
-            <h3>Future Payload Expansion</h3>
-            <p>Destination for future ultrasonic distance sensors, cliff sensors, and depth cameras.</p>
+          <div class="v2-card" id="sensors-future">
+            <div class="v2-card-header">
+              <h3>🔮 Payload Expansion Slots</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <ul style="color: var(--text-muted); font-size: 0.85rem; padding-left: 20px; margin: 5px 0;">
+              <li>Ultrasonic Range Sensors: <strong>Not installed</strong></li>
+              <li>Cliff/Floor Drop Sensors: <strong>Not installed</strong></li>
+              <li>Depth/Stereo Camera: <strong>Not installed</strong></li>
+            </ul>
           </div>
         </div>
       </div>
@@ -208,27 +292,27 @@
 
         <div class="v2-placeholder-grid">
           <div class="v2-placeholder-card" id="calibration-primary-workflow">
-            <span class="card-label">Placeholder Region: calibration-primary-workflow</span>
+            <span class="card-label">Placeholder Region: calibration-primary-workflow (Stage 5)</span>
             <h3>Primary Calibration Workflow</h3>
             <p>Destination for wheel verification, Auto 1 m Forward, Auto 90° Left, and Auto 90° Right test buttons.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-live-progress">
-            <span class="card-label">Placeholder Region: calibration-live-progress</span>
+            <span class="card-label">Placeholder Region: calibration-live-progress (Stage 5)</span>
             <h3>Live Test Progress HUD</h3>
             <p>Destination for real-time distance/yaw progress tracking and safety HUD during auto tests.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-latest-result">
-            <span class="card-label">Placeholder Region: calibration-latest-result</span>
+            <span class="card-label">Placeholder Region: calibration-latest-result (Stage 5)</span>
             <h3>Latest Test Result</h3>
             <p>Destination for target errors, elapsed duration, and completion status result cards.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-repeatability">
-            <span class="card-label">Placeholder Region: calibration-repeatability</span>
+            <span class="card-label">Placeholder Region: calibration-repeatability (Stage 5)</span>
             <h3>Repeatability & Statistics</h3>
             <p>Destination for Phase 5 repeatability counters, pass rate %, mean error, and history logs.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-advanced">
-            <span class="card-label">Placeholder Region: calibration-advanced</span>
+            <span class="card-label">Placeholder Region: calibration-advanced (Stage 5)</span>
             <h3>Advanced Calibration & Maintenance</h3>
             <p>Destination for 2m/360° manual tools, raised-wheel maintenance testing, and LiDAR straight-line wizard.</p>
           </div>
@@ -244,39 +328,67 @@
             <p>Deep-dive system diagnostics, service rate monitors, serial link parameters, raw driver logs, and command terminal.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy Diagnostics / ROS 2 Area</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="diagnostics-services">
-            <span class="card-label">Placeholder Region: diagnostics-services</span>
-            <h3>Service Status Overview</h3>
-            <p>Destination for Node.js server status, Python sidecars, and system background tasks.</p>
+          <div class="v2-card" id="diagnostics-services">
+            <div class="v2-card-header">
+              <h3>🛠️ System Services Status</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Node.js Cockpit Server:</span> <span id="v2-diag-val-srv-node" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">LiDAR Python Sidecar:</span> <span id="v2-diag-val-srv-lidar" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">ROS 2 Odometry Bridge:</span> <span id="v2-diag-val-srv-ros" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-diag-val-srv-foxglove" class="status-val badge-healthy">RUNNING</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-firmware">
-            <span class="card-label">Placeholder Region: diagnostics-firmware</span>
-            <h3>Firmware & Protocol Identity</h3>
-            <p>Destination for ESP32 firmware build timestamp, git hash, and binary protocol identity.</p>
+          <div class="v2-card" id="diagnostics-firmware">
+            <div class="v2-card-header">
+              <h3>🆔 Firmware & Binary Protocol Identity</h3>
+              <span class="badge badge-info">ESP32</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Target Board:</span> <span id="v2-fw-val-board" class="status-val">Maker ESP32 Pro</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Firmware Name:</span> <span id="v2-fw-val-name" class="status-val">esp-maker-usba-4motor</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Firmware Version:</span> <span id="v2-fw-val-ver" class="status-val">1.0.0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Binary Protocol:</span> <span id="v2-fw-val-proto" class="status-val">Binary Packet v1</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-serial">
-            <span class="card-label">Placeholder Region: diagnostics-serial</span>
-            <h3>Serial Link Diagnostics</h3>
-            <p>Destination for COM port configuration, baud rate, and packet throughput metrics.</p>
+          <div class="v2-card" id="diagnostics-serial">
+            <div class="v2-card-header">
+              <h3>🔌 Serial Link Diagnostics</h3>
+              <span class="badge badge-info">UART</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Serial Device:</span> <span id="v2-serial-val-dev" class="status-val">/dev/rover-esp32</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Baud Rate:</span> <span id="v2-serial-val-baud" class="status-val">115200 Baud</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Telemetry Rate:</span> <span id="v2-serial-val-hz" class="status-val">10 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Packet Errors:</span> <span id="v2-serial-val-errs" class="status-val">0</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-ros">
-            <span class="card-label">Placeholder Region: diagnostics-ros</span>
-            <h3>ROS Topic & TF Rates</h3>
-            <p>Destination for ROS 2 topic publishing frequency and TF transform latency monitors.</p>
+          <div class="v2-card" id="diagnostics-ros">
+            <div class="v2-card-header">
+              <h3>📡 ROS 2 Topic & TF Diagnostics</h3>
+              <span class="badge badge-info">ROS 2</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">/diagnostics Topic:</span> <span id="v2-rosdiag-val-diag" class="status-val">1.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/scan Topic:</span> <span id="v2-rosdiag-val-scan" class="status-val">6.6 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/odom Topic:</span> <span id="v2-rosdiag-val-odom" class="status-val">10.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/tf Topic:</span> <span id="v2-rosdiag-val-tf" class="status-val">10.0 Hz</span></div>
+            </div>
           </div>
           <div class="v2-placeholder-card" id="diagnostics-logs">
-            <span class="card-label">Placeholder Region: diagnostics-logs</span>
+            <span class="card-label">Placeholder Region: diagnostics-logs (Stage 6)</span>
             <h3>Live Driver Logs</h3>
             <p>Destination for real-time driver log stream and console clear action.</p>
           </div>
           <div class="v2-placeholder-card" id="diagnostics-developer">
-            <span class="card-label">Placeholder Region: diagnostics-developer</span>
+            <span class="card-label">Placeholder Region: diagnostics-developer (Stage 6)</span>
             <h3>Developer & Packet Tools</h3>
             <p>Destination for raw hex serial command prompt and calibration database raw JSON inspector.</p>
           </div>

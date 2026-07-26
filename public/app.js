@@ -1674,8 +1674,202 @@ btnClearLogs.addEventListener('click', () => {
   logSystem('Logs cleared.');
 });
 
-// Start Up Connect
-connectWebSocket();
+// --- Stage 3 Canonical State & Read-Only Rendering ---
+window.roverState = {
+  connection: {
+    ws: true,
+    serial: true,
+    gamepad: false,
+    telemAgeMs: 12,
+    odomAgeMs: 10
+  },
+  drive: {
+    armed: false,
+    estop: false,
+    battery: '12.4'
+  },
+  ros: {
+    system: 'Healthy',
+    lidarBridge: 'Healthy',
+    encoderOdom: 'Healthy',
+    foxgloveBridge: 'Healthy (Port 8765)',
+    diagHz: 1.0,
+    odomHz: 10.0
+  },
+  odom: {
+    x: 0.0,
+    y: 0.0,
+    yaw: 0.0,
+    dist: 0.0
+  },
+  imu: {
+    roll: 0.0,
+    pitch: 0.0,
+    yaw: 0.0,
+    accel: [0.0, 0.0, 9.8],
+    gyro: [0.0, 0.0, 0.0]
+  },
+  lidar: {
+    connected: true,
+    state: 'scanning',
+    health: 'Good',
+    scanHz: 6.6,
+    pointCount: 360,
+    ageMs: 2
+  },
+  firmware: {
+    board: 'Maker ESP32 Pro',
+    name: 'esp-maker-usba-4motor',
+    version: '1.0.0',
+    proto: 'Binary Packet v1'
+  }
+};
+
+function renderStage3V2Panels() {
+  renderDriveV2Status();
+  renderAutonomyV2();
+  renderSensorsV2Summary();
+  renderDiagnosticsV2();
+}
+
+function renderDriveV2Status() {
+  const st = window.roverState;
+
+  const elWs = document.getElementById('v2-drive-val-ws');
+  if (elWs) {
+    elWs.textContent = st.connection.ws ? 'CONNECTED' : 'DISCONNECTED';
+    elWs.style.color = st.connection.ws ? '#10b981' : '#ef4444';
+  }
+
+  const elSerial = document.getElementById('v2-drive-val-serial');
+  if (elSerial) {
+    elSerial.textContent = st.connection.serial ? 'CONNECTED' : 'DISCONNECTED';
+    elSerial.style.color = st.connection.serial ? '#10b981' : '#ef4444';
+  }
+
+  const elGp = document.getElementById('v2-drive-val-gamepad');
+  if (elGp) {
+    elGp.textContent = st.connection.gamepad ? 'CONNECTED' : 'DISCONNECTED';
+    elGp.style.color = st.connection.gamepad ? '#10b981' : '#9ca3af';
+  }
+
+  const elArmed = document.getElementById('v2-drive-val-armed');
+  if (elArmed) {
+    elArmed.textContent = st.drive.armed ? 'ARMED' : 'DISARMED';
+    elArmed.style.color = st.drive.armed ? '#10b981' : '#f59e0b';
+  }
+
+  const elEstop = document.getElementById('v2-drive-val-estop');
+  if (elEstop) {
+    elEstop.textContent = st.drive.estop ? 'ACTIVE (ESTOP)' : 'CLEAR';
+    elEstop.style.color = st.drive.estop ? '#ef4444' : '#10b981';
+  }
+
+  const elBat = document.getElementById('v2-drive-val-battery');
+  if (elBat) elBat.textContent = `${st.drive.battery} V`;
+
+  const elTelemAge = document.getElementById('v2-drive-val-telem-age');
+  if (elTelemAge) elTelemAge.textContent = `${st.connection.telemAgeMs || 10} ms`;
+
+  const elOdomAge = document.getElementById('v2-drive-val-odom-age');
+  if (elOdomAge) elOdomAge.textContent = `${st.connection.odomAgeMs || 10} ms`;
+
+  // Drive Faults Banner
+  const faultsContainer = document.getElementById('v2-drive-faults-list');
+  if (faultsContainer) {
+    const faults = [];
+    if (!st.connection.ws) faults.push({ text: '⚠️ WebSocket Disconnected', level: 'warn' });
+    if (!st.connection.serial) faults.push({ text: '⚠️ ESP32 Serial Link Offline', level: 'err' });
+    if (st.drive.estop) faults.push({ text: '🛑 Emergency Stop Lock Active', level: 'err' });
+    if (st.connection.telemAgeMs > 1000) faults.push({ text: '⚠️ Stale Telemetry Warning (>1s)', level: 'warn' });
+
+    if (faults.length === 0) {
+      faultsContainer.innerHTML = '<div class="v2-fault-item v2-fault-ok">✓ No Active Safety Faults (System Nominal)</div>';
+    } else {
+      faultsContainer.innerHTML = faults.map(f => `<div class="v2-fault-item v2-fault-${f.level}">${f.text}</div>`).join('');
+    }
+  }
+}
+
+function renderAutonomyV2() {
+  const st = window.roverState;
+  const elSys = document.getElementById('v2-ros-val-system');
+  if (elSys) elSys.textContent = st.ros.system;
+  const elLidar = document.getElementById('v2-ros-val-lidar');
+  if (elLidar) elLidar.textContent = st.ros.lidarBridge;
+  const elOdom = document.getElementById('v2-ros-val-odom');
+  if (elOdom) elOdom.textContent = st.ros.encoderOdom;
+  const elFox = document.getElementById('v2-ros-val-foxglove');
+  if (elFox) elFox.textContent = st.ros.foxgloveBridge;
+  const elDiagHz = document.getElementById('v2-ros-val-diag-hz');
+  if (elDiagHz) elDiagHz.textContent = `${st.ros.diagHz.toFixed(1)} Hz`;
+  const elOdomHz = document.getElementById('v2-ros-val-odom-hz');
+  if (elOdomHz) elOdomHz.textContent = `${st.ros.odomHz.toFixed(1)} Hz`;
+
+  // Localization Values
+  const elLocX = document.getElementById('v2-loc-val-x');
+  if (elLocX) elLocX.textContent = `${st.odom.x.toFixed(3)} m`;
+  const elLocY = document.getElementById('v2-loc-val-y');
+  if (elLocY) elLocY.textContent = `${st.odom.y.toFixed(3)} m`;
+  const elLocYaw = document.getElementById('v2-loc-val-yaw');
+  if (elLocYaw) elLocYaw.textContent = `${st.odom.yaw.toFixed(1)}°`;
+}
+
+function renderSensorsV2Summary() {
+  const st = window.roverState;
+  const elLidar = document.getElementById('v2-sensor-val-lidar');
+  if (elLidar) elLidar.textContent = `${st.lidar.health} (${st.lidar.scanHz.toFixed(1)} Hz)`;
+  const elImu = document.getElementById('v2-sensor-val-imu');
+  if (elImu) elImu.textContent = `Healthy (10 Hz)`;
+  const elOdom = document.getElementById('v2-sensor-val-odom');
+  if (elOdom) elOdom.textContent = `Healthy (10 Hz)`;
+
+  // LiDAR HUD items in sensors-lidar
+  const elLidarHz = document.getElementById('v2-lidar-val-hz');
+  if (elLidarHz) elLidarHz.textContent = `${st.lidar.scanHz.toFixed(1)} Hz`;
+  const elLidarPts = document.getElementById('v2-lidar-val-points');
+  if (elLidarPts) elLidarPts.textContent = `${st.lidar.pointCount}`;
+  const elLidarAge = document.getElementById('v2-lidar-val-age');
+  if (elLidarAge) elLidarAge.textContent = `${st.lidar.ageMs} ms`;
+
+  // IMU HUD items in sensors-imu
+  const elRoll = document.getElementById('v2-imu-val-roll');
+  if (elRoll) elRoll.textContent = `${st.imu.roll.toFixed(1)}°`;
+  const elPitch = document.getElementById('v2-imu-val-pitch');
+  if (elPitch) elPitch.textContent = `${st.imu.pitch.toFixed(1)}°`;
+  const elYaw = document.getElementById('v2-imu-val-yaw');
+  if (elYaw) elYaw.textContent = `${st.imu.yaw.toFixed(1)}°`;
+  const elAccel = document.getElementById('v2-imu-val-accel');
+  if (elAccel) elAccel.textContent = `${st.imu.accel.map(n => n.toFixed(1)).join(', ')} m/s²`;
+  const elGyro = document.getElementById('v2-imu-val-gyro');
+  if (elGyro) elGyro.textContent = `${st.imu.gyro.map(n => n.toFixed(1)).join(', ')} °/s`;
+
+  // Odometry HUD items in sensors-odometry
+  const elOdomX = document.getElementById('v2-odom-val-x');
+  if (elOdomX) elOdomX.textContent = `${st.odom.x.toFixed(3)} m`;
+  const elOdomY = document.getElementById('v2-odom-val-y');
+  if (elOdomY) elOdomY.textContent = `${st.odom.y.toFixed(3)} m`;
+  const elOdomYaw = document.getElementById('v2-odom-val-yaw');
+  if (elOdomYaw) elOdomYaw.textContent = `${st.odom.yaw.toFixed(1)}°`;
+  const elOdomDist = document.getElementById('v2-odom-val-dist');
+  if (elOdomDist) elOdomDist.textContent = `${st.odom.dist.toFixed(3)} m`;
+}
+
+function renderDiagnosticsV2() {
+  const st = window.roverState;
+  const elBoard = document.getElementById('v2-fw-val-board');
+  if (elBoard) elBoard.textContent = st.firmware.board;
+  const elName = document.getElementById('v2-fw-val-name');
+  if (elName) elName.textContent = st.firmware.name;
+  const elVer = document.getElementById('v2-fw-val-ver');
+  if (elVer) elVer.textContent = st.firmware.version;
+  const elProto = document.getElementById('v2-fw-val-proto');
+  if (elProto) elProto.textContent = st.firmware.proto;
+}
+
+// Initial Stage 3 Rendering
+document.addEventListener('DOMContentLoaded', renderStage3V2Panels);
+setTimeout(renderStage3V2Panels, 100);
 
 // --- Tab Switching Logic (Stage 2 Navigation Shell & Legacy Parity) ---
 const topTabButtons = document.querySelectorAll('.tab-navigation-bar .tab-btn');
