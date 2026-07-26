@@ -61,7 +61,7 @@
       <button class="tab-btn legacy-btn" id="nav-legacy" data-tab="tab-legacy" role="tab" aria-selected="false" aria-controls="tab-legacy" tabindex="-1">🛠️ Legacy Tools</button>
     </nav>
 
-    <!-- Tab Contents: V2 Destination Shells -->
+    <!-- Top Level Destination Tab 1: Drive V2 -->
     <div id="tab-drive-v2" class="tab-content active" role="tabpanel" aria-labelledby="nav-drive">
       <div class="v2-shell-container">
         <div class="v2-shell-header">
@@ -70,32 +70,226 @@
             <p>Primary operational cockpit for manual rover teleoperation, live drive status, camera feed, and safety oversight.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-dashboard">Open Current Legacy Drive Controls (Dashboard)</button>
+            <span class="v2-migration-badge">Stage 4 — Manual Driving Active</span>
+            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-dashboard">Open Legacy Tools</button>
           </div>
         </div>
 
-        <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="drive-status-summary">
-            <span class="card-label">Placeholder Region: drive-status-summary</span>
-            <h3>Telemetry & Safety Status</h3>
-            <p>Destination for live connection status summary, gamepad telemetry, armed/disarmed indicator, and E-stop status.</p>
+        <!-- Desktop Viewports Grid: Camera (70%) + Compact LiDAR (30%) -->
+        <div class="v2-drive-viewport-grid">
+          <!-- RPi Camera Feed Viewport (65-75% visual area) -->
+          <div class="v2-card" id="drive-camera" style="flex: 7; min-width: 320px;">
+            <div class="v2-card-header">
+              <h3>📷 RPi Camera Feed</h3>
+              <div class="status-badge" id="camera-status-badge">
+                <span class="status-indicator off" id="camera-status-dot"></span> <span id="camera-status-text">OFFLINE</span>
+              </div>
+            </div>
+            <div class="camera-viewport-container" id="camera-viewport">
+              <div class="camera-hud-grid"></div>
+              <div class="camera-hud-reticle"></div>
+              <div class="camera-hud-scanline"></div>
+
+              <img id="camera-stream" src="" class="camera-stream-img" alt="Camera Feed Offline" style="display: none;">
+              <div class="camera-placeholder" id="camera-placeholder">
+                <div class="placeholder-icon">🎥</div>
+                <div class="placeholder-text">Camera Feed Offline</div>
+                <div class="placeholder-subtext">Click "Start Feed" to initialize the stream</div>
+              </div>
+            </div>
+            <div class="camera-controls" style="display: flex; gap: 10px; margin-top: 10px;">
+              <button class="btn btn-primary btn-block" id="btn-toggle-camera">Start Feed</button>
+              <button class="btn btn-secondary btn-block" id="btn-fullscreen-camera" disabled>Fullscreen</button>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="drive-manual-control">
-            <span class="card-label">Placeholder Region: drive-manual-control</span>
-            <h3>Manual Drive Controls</h3>
-            <p>Destination for primary direction pad, velocity sliders, and joystick teleoperation mapping.</p>
+
+          <!-- Compact LiDAR Driving Viewport (25-35% visual area) -->
+          <div class="v2-card" id="drive-compact-lidar" style="flex: 3; min-width: 260px;">
+            <div class="v2-card-header">
+              <h3>📡 LiDAR Local View</h3>
+              <span id="v2-compact-lidar-badge" class="badge badge-info">6.5 Hz</span>
+            </div>
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+              <canvas id="v2-compact-lidar-canvas" width="280" height="280" style="background: #0b0f19; border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; width: 100%; max-width: 280px; height: auto; aspect-ratio: 1/1;"></canvas>
+              <div style="font-size: 0.78rem; font-family: monospace; color: var(--text-muted); width: 100%; display: flex; justify-content: space-between;">
+                <span>Closest: <strong id="v2-compact-lidar-dist" style="color: #00f2fe;">-- m</strong></span>
+                <span id="v2-compact-lidar-status" style="color: #10b981;">✓ Clear</span>
+              </div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="drive-camera">
-            <span class="card-label">Placeholder Region: drive-camera</span>
-            <h3>RPi Camera Stream</h3>
-            <p>Destination for live camera stream viewport and fullscreen display toggle.</p>
+        </div>
+
+        <!-- Operator Telemetry & Status Strip -->
+        <div class="v2-card" id="drive-status-summary">
+          <div class="v2-card-header">
+            <h3>📊 Operator Telemetry & System Status</h3>
+            <span class="badge badge-info">LIVE STATUS</span>
           </div>
-          <div class="v2-placeholder-card" id="drive-faults">
-            <span class="card-label">Placeholder Region: drive-faults</span>
-            <h3>Concise Fault Banner</h3>
-            <p>Destination for active safety fault codes and physical lock status diagnostics.</p>
+          <div class="v2-status-grid">
+            <div class="v2-status-item"><span class="v2-status-label">WebSocket:</span> <span id="v2-drive-val-ws" class="status-val">Connecting...</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Serial Link:</span> <span id="v2-drive-val-serial" class="status-val">Connecting...</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Gamepad:</span> <span id="v2-drive-val-gamepad" class="status-val">Disconnected</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Rover Armed:</span> <span id="v2-drive-val-armed" class="status-val badge-disarmed">DISARMED</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Emergency Stop:</span> <span id="v2-drive-val-estop" class="status-val badge-estop-clear">CLEAR</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Battery Voltage:</span> <span id="v2-drive-val-battery" class="status-val">-- V</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Telemetry Age:</span> <span id="v2-drive-val-telem-age" class="status-val">-- ms</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Odometry Age:</span> <span id="v2-drive-val-odom-age" class="status-val">-- ms</span></div>
           </div>
+
+          <!-- Active Command Velocity HUD -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; font-family: monospace; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin-top: 6px;">
+            <div>Drive State: <span id="tele-drive-state" style="font-weight: bold; color: #fca5a5;">Disarmed</span></div>
+            <div>Driver Mode: <span id="tele-drive-mode" style="font-weight: bold;">--</span></div>
+            <div>Physical Lock: <span id="tele-drive-phys-lock" style="font-weight: bold; color: #9ca3af;">--</span></div>
+            <div>Active Source: <span id="tele-drive-source" style="font-weight: bold;">--</span></div>
+            <div>Command Age: <span id="tele-drive-age" style="font-weight: bold;">--</span></div>
+            <div>Req Linear: <span id="tele-drive-req-lin" style="font-weight: bold; color: var(--cyan-glow);">0.00 m/s</span></div>
+            <div>Req Angular: <span id="tele-drive-req-ang" style="font-weight: bold; color: var(--cyan-glow);">0.00 rad/s</span></div>
+            <div>Lim Linear: <span id="tele-drive-lim-lin" style="font-weight: bold; color: var(--accent);">0.00 m/s</span></div>
+            <div>Lim Angular: <span id="tele-drive-lim-ang" style="font-weight: bold; color: var(--accent);">0.00 rad/s</span></div>
+          </div>
+        </div>
+
+        <!-- Active Safety Warnings Banner -->
+        <div class="v2-card" id="drive-faults">
+          <div class="v2-card-header">
+            <h3>⚠️ Active Safety Faults & Warnings</h3>
+            <span class="badge badge-info">SAFETY OVERFLOW</span>
+          </div>
+          <div id="v2-drive-faults-list" class="v2-faults-container">
+            <div class="v2-fault-item v2-fault-ok">✓ No Active Safety Faults (System Nominal)</div>
+          </div>
+        </div>
+
+        <!-- Primary Manual Drive Controls Panel -->
+        <div class="v2-card" id="drive-manual-control">
+          <div class="v2-card-header">
+            <h3>🕹️ Manual Steering & Velocity Controls</h3>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <span id="normal-drive-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 4px 10px; border-radius: 12px; font-size: 11px;">Disarmed</span>
+              <span class="badge badge-warning">OPERATIONAL CONTROLS</span>
+            </div>
+          </div>
+
+          <!-- Top Arming & Safety Bar -->
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div style="display: flex; gap: 10px;">
+              <button id="btn-arm-drive" class="btn btn-primary" style="flex: 1; font-weight: bold; padding: 12px;">Arm Normal Drive</button>
+              <button id="btn-disarm-drive" class="btn btn-secondary" style="flex: 1; font-weight: bold; padding: 12px;">Disarm Normal Drive</button>
+            </div>
+            <!-- EXACTLY ONE OPERATIONAL E-STOP BUTTON -->
+            <button class="btn btn-danger btn-block" id="btn-estop" style="font-size: 1.1rem; font-weight: bold; padding: 14px; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);">
+              🚨 EMERGENCY STOP ALL MOTORS
+            </button>
+          </div>
+
+          <!-- D-Pad Directional Controls -->
+          <div class="control-group" style="margin-top: 15px;">
+            <h3>Direction Control</h3>
+            <div class="dpad-wrapper">
+              <div class="dpad">
+                <button class="dpad-btn up" id="ctrl-forward" title="Forward">▲</button>
+                <button class="dpad-btn left" id="ctrl-left" title="Turn Left">◀</button>
+                <button class="dpad-btn center-stop" id="ctrl-stop-center" title="ESTOP">STOP</button>
+                <button class="dpad-btn right" id="ctrl-right" title="Turn Right">▶</button>
+                <button class="dpad-btn down" id="ctrl-reverse" title="Reverse">▼</button>
+              </div>
+            </div>
+            <div class="spin-controls" style="margin-top: 10px; display: flex; gap: 10px;">
+              <button class="btn btn-spin-left" id="ctrl-spin-left" style="flex: 1;">↺ Spin Left</button>
+              <button class="btn btn-spin-right" id="ctrl-spin-right" style="flex: 1;">Spin Right ↻</button>
+            </div>
+          </div>
+
+          <!-- Speed & PWM Sliders -->
+          <div class="control-group" style="margin-top: 15px;">
+            <div class="slider-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <h3 style="margin: 0;">Synchronized Speed Scale</h3>
+              <span class="value-readout" id="sync-speed-readout">0</span>
+            </div>
+            <input type="range" class="styled-slider" id="sync-speed-slider" min="-1000" max="1000" value="0" style="width: 100%;">
+            <div class="speed-presets" style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+              <button class="preset-btn" data-val="-500">Reverse (Mid)</button>
+              <button class="preset-btn stop" data-val="0">Stop All</button>
+              <button class="preset-btn" data-val="500">Forward (Mid)</button>
+              <button class="preset-btn" data-val="1000">Forward (Max)</button>
+            </div>
+          </div>
+
+          <!-- Gamepad Telemetry HUD -->
+          <div class="control-group" style="margin-top: 15px;">
+            <h3>Gamepad Telemetry HUD</h3>
+            <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;">
+              <div>Arm State:</div><div id="gp-live-arm" style="font-weight: bold; color: #6b7280;">DISARMED</div>
+              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED</div>
+              <div>Linear Axis Y:</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Angular Axis X:</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Stop State:</div><div id="gp-live-stop" style="font-weight: bold; color: #10b981;">STATIONARY</div>
+              <div>Safety ESTOP:</div><div id="gp-live-estop" style="font-weight: bold; color: #10b981;">NOMINAL</div>
+              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent);">None</div>
+            </div>
+          </div>
+
+          <!-- Advanced Path Backtracking & Wheel Odometry Details (Collapsible / Preserved IDs) -->
+          <details style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px;">
+            <summary style="font-size: 0.85rem; font-weight: bold; color: var(--cyan-glow); cursor: pointer;">📂 Advanced Details: Wheel Odometry & Path Backtracking</summary>
+
+            <div style="margin-top: 10px;">
+              <!-- PATH RECORDING & BACKTRACKING panel -->
+              <div class="control-group" style="margin-bottom: 15px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                  <button id="btn-record-start" class="btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Start Recording</button>
+                  <button id="btn-record-stop" class="btn" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Stop Recording</button>
+                  <button id="btn-record-clear" class="btn" style="background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.4); color: #e5e7eb; font-size: 11px; font-weight: bold; padding: 8px; grid-column: span 2; cursor: pointer;">Clear Recorded Path</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                  <button id="btn-start-backtrack" class="btn btn-primary" style="background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%); font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Backtrack Home</button>
+                  <button id="btn-abort-backtrack" class="btn btn-secondary" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fff; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Abort Backtrack</button>
+                </div>
+                <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 10px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px;">
+                  <div>Recording Status:</div><div id="path-recording-lbl" style="font-weight: bold; color: #6b7280;">Idle</div>
+                  <div>Recorded Waypoints:</div><div id="path-breadcrumbs-lbl" style="font-weight: bold;">0</div>
+                  <div>Backtrack State:</div><div id="backtrack-state-lbl" style="font-weight: bold; color: #6b7280;">IDLE</div>
+                  <div style="grid-column: span 2; height: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 4px;">
+                    <div id="backtrack-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #a855f7 0%, #3b82f6 100%);"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Skid-Steer Wheel Odometry HUD -->
+              <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px 10px;">
+                <div style="grid-column: span 2; font-weight: bold; color: var(--cyan-glow); display: flex; justify-content: space-between;">
+                  <span>🌍 Skid-Steer Odometry:</span>
+                  <span id="limits-testing-lbl" style="font-size: 9px; color: #f59e0b;">FLOOR TESTING</span>
+                </div>
+                <div>Position X:</div><div id="odom-x-real" style="color: var(--cyan-glow);">0.000 m</div>
+                <div>Position Y:</div><div id="odom-y-real" style="color: var(--cyan-glow);">0.000 m</div>
+                <div>Heading Yaw:</div><div id="odom-yaw-real" style="color: var(--cyan-glow);">0.0°</div>
+                <div>Left Side Dist:</div><div id="odom-left-dist">0.000 m</div>
+                <div>Right Side Dist:</div><div id="odom-right-dist">0.000 m</div>
+                <div>Linear Speed v:</div><div id="odom-v-real" style="color: var(--accent);">0.000 m/s</div>
+                <div>Angular Speed w:</div><div id="odom-w-real" style="color: var(--accent);">0.000 rad/s</div>
+                <div style="grid-column: span 2; border-bottom: 1px dashed var(--border); margin: 2px 0;"></div>
+                <div>LF / RF (M1 / M2):</div><div><span id="odom-enc-m1">0</span> / <span id="odom-enc-m2">0</span></div>
+                <div>LR / RR (M3 / M4):</div><div><span id="odom-enc-m3">0</span> / <span id="odom-enc-m4">0</span></div>
+              </div>
+
+              <!-- Individual Motor Sliders -->
+              <div style="margin-top: 15px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.8rem; color: var(--text-muted);">Individual Motor Direct Testing</h4>
+                <div class="individual-sliders" style="display: flex; gap: 10px;">
+                  <div class="indiv-slider-col"><span class="label">M1</span><input type="range" class="styled-slider vertical" id="speed-m1" min="-1000" max="1000" value="0" orient="vertical"><span class="val" id="readout-m1">0</span></div>
+                  <div class="indiv-slider-col"><span class="label">M2</span><input type="range" class="styled-slider vertical" id="speed-m2" min="-1000" max="1000" value="0" orient="vertical"><span class="val" id="readout-m2">0</span></div>
+                  <div class="indiv-slider-col"><span class="label">M3</span><input type="range" class="styled-slider vertical" id="speed-m3" min="-1000" max="1000" value="0" orient="vertical"><span class="val" id="readout-m3">0</span></div>
+                  <div class="indiv-slider-col"><span class="label">M4</span><input type="range" class="styled-slider vertical" id="speed-m4" min="-1000" max="1000" value="0" orient="vertical"><span class="val" id="readout-m4">0</span></div>
+                </div>
+                <div class="diag-row" style="margin-top: 10px;">
+                  <button class="btn btn-warning btn-block" id="btn-motor-proof">Run Motor Power Proof</button>
+                  <span class="diag-chip" id="encoder-activity">Encoder: waiting for packets</span>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -108,41 +302,67 @@
             <p>Monitor ROS 2 navigation stack, SLAM mapping, localization state, Nav2 lifecycle, goal progress, and Foxglove access.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy ROS 2 Area</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="autonomy-stack-health">
-            <span class="card-label">Placeholder Region: autonomy-stack-health</span>
-            <h3>ROS 2 Stack Health</h3>
-            <p>Destination for system bringup service health and node status monitors.</p>
+          <div class="v2-card" id="autonomy-stack-health">
+            <div class="v2-card-header">
+              <h3>🤖 ROS 2 Stack Health</h3>
+              <span class="badge badge-info">ROS 2 JAZZY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">System Health:</span> <span id="v2-ros-val-system" class="status-val">Connecting...</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">LiDAR Bridge:</span> <span id="v2-ros-val-lidar" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Encoder Odometry:</span> <span id="v2-ros-val-odom" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-ros-val-foxglove" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Diagnostics Rate:</span> <span id="v2-ros-val-diag-hz" class="status-val">-- Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Odometry Rate:</span> <span id="v2-ros-val-odom-hz" class="status-val">-- Hz</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-localization">
-            <span class="card-label">Placeholder Region: autonomy-localization</span>
-            <h3>Localization State</h3>
-            <p>Destination for active pose estimator X/Y/Yaw coordinates and covariance confidence.</p>
+          <div class="v2-card" id="autonomy-localization">
+            <div class="v2-card-header">
+              <h3>🧭 Vehicle Localization State</h3>
+              <span class="badge badge-warning">ODOMETRY ONLY</span>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Active localization mode: <strong>Wheel Odometry Only (Skid-Steer Kinematics)</strong></p>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Position X:</span> <span id="v2-loc-val-x" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Position Y:</span> <span id="v2-loc-val-y" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Heading (Yaw):</span> <span id="v2-loc-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Covariance Confidence:</span> <span id="v2-loc-val-cov" class="status-val">High (Dead-Reckoning)</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-slam">
-            <span class="card-label">Placeholder Region: autonomy-slam</span>
-            <h3>SLAM Mapping State</h3>
-            <p>Destination for active map status, grid resolution, and map update rates.</p>
+          <div class="v2-card" id="autonomy-slam">
+            <div class="v2-card-header">
+              <h3>🗺️ SLAM Mapping State</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">SLAM map building service is <strong>Not installed</strong> on this chassis build. Cartographer/SLAM-Toolbox integration scheduled for Phase 7.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-nav2">
-            <span class="card-label">Placeholder Region: autonomy-nav2</span>
-            <h3>Nav2 Lifecycle State</h3>
-            <p>Destination for Nav2 planner, controller, and recovery server lifecycle status.</p>
+          <div class="v2-card" id="autonomy-nav2">
+            <div class="v2-card-header">
+              <h3>🧭 Nav2 Lifecycle State</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Nav2 stack planner and controller servers are <strong>Not installed</strong>. Autonomous path planning is scheduled for Phase 7.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-goal">
-            <span class="card-label">Placeholder Region: autonomy-goal</span>
-            <h3>Navigation Goal & Progress</h3>
-            <p>Destination for goal target status, distance-to-goal tracking, and cancel action controls.</p>
+          <div class="v2-card" id="autonomy-goal">
+            <div class="v2-card-header">
+              <h3>🎯 Navigation Goal & Progress</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Navigation goal controls will be enabled after Nav2 integration is deployed.</p>
           </div>
-          <div class="v2-placeholder-card" id="autonomy-foxglove">
-            <span class="card-label">Placeholder Region: autonomy-foxglove</span>
-            <h3>Foxglove Web Visualizer</h3>
-            <p>Destination for Foxglove Studio WebSocket bridge access details (Port 8765).</p>
+          <div class="v2-card" id="autonomy-foxglove">
+            <div class="v2-card-header">
+              <h3>🦊 Foxglove Web Visualizer Bridge</h3>
+              <span class="badge badge-success">PORT 8765</span>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-muted);">Foxglove Studio WebSocket bridge active at <code>ws://10.0.0.246:8765</code>.</p>
+            <a href="https://studio.foxglove.dev" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="margin-top: 8px; display: inline-block;">Open Foxglove Web Studio</a>
           </div>
         </div>
       </div>
@@ -156,37 +376,80 @@
             <p>Real-time inspection of RPLIDAR C1 360° scans, 3D IMU attitude, wheel odometry trajectories, and sensor health.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-lidar">Open Current Legacy LiDAR Monitor</button>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-imu">Open Current Legacy IMU & Position Tracking</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="sensors-summary">
-            <span class="card-label">Placeholder Region: sensors-summary</span>
-            <h3>Sensor Health Overview</h3>
-            <p>Destination for per-sensor update rates (Hz) and operational status metrics.</p>
+          <div class="v2-card" id="sensors-summary">
+            <div class="v2-card-header">
+              <h3>📡 Sensor Payloads & Health Overview</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">RPLIDAR C1 360°:</span> <span id="v2-sensor-val-lidar" class="status-val">Healthy (6.6 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">3D IMU Attitude:</span> <span id="v2-sensor-val-imu" class="status-val">Healthy (10 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Wheel Odometry:</span> <span id="v2-sensor-val-odom" class="status-val">Healthy (10 Hz)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">RPi Camera:</span> <span id="v2-sensor-val-camera" class="status-val">Available</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-lidar">
-            <span class="card-label">Placeholder Region: sensors-lidar</span>
-            <h3>LiDAR 360° Scan Display</h3>
-            <p>Destination for RPLIDAR C1 polar canvas display and range controls.</p>
+          <div class="v2-card" id="sensors-lidar">
+            <div class="v2-card-header">
+              <h3>📡 RPLIDAR C1 360° Polar Scan</h3>
+              <span id="v2-lidar-badge" class="badge badge-success">SCANNING</span>
+            </div>
+            <div style="display: flex; gap: 15px; margin-bottom: 10px; font-size: 0.85rem; font-family: monospace;">
+              <div>Scan Hz: <strong id="v2-lidar-val-hz">-- Hz</strong></div>
+              <div>Point Count: <strong id="v2-lidar-val-points">--</strong></div>
+              <div>Data Age: <strong id="v2-lidar-val-age">-- ms</strong></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 280px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-lidar-polar-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-imu">
-            <span class="card-label">Placeholder Region: sensors-imu</span>
-            <h3>3D IMU Attitude & Sensors</h3>
-            <p>Destination for 3D chassis model and 6-axis accelerometer/gyroscope readouts.</p>
+          <div class="v2-card" id="sensors-imu">
+            <div class="v2-card-header">
+              <h3>🧭 3D Chassis Attitude & 6-Axis Telemetry</h3>
+              <span id="v2-imu-badge" class="badge badge-success">HEALTHY</span>
+            </div>
+            <div class="v2-status-grid" style="margin-bottom: 10px;">
+              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">0.0, 0.0, 9.8 m/s²</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">0.0, 0.0, 0.0 °/s</span></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-imu-model-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-odometry">
-            <span class="card-label">Placeholder Region: sensors-odometry</span>
-            <h3>Wheel Odometry Tracker</h3>
-            <p>Destination for 2D position trajectory canvas and wheel speed telemetry.</p>
+          <div class="v2-card" id="sensors-odometry">
+            <div class="v2-card-header">
+              <h3>🔍 Wheel Odometry Trajectory Tracker</h3>
+              <span id="v2-odom-badge" class="badge badge-success">HEALTHY</span>
+            </div>
+            <div class="v2-status-grid" style="margin-bottom: 10px;">
+              <div class="v2-status-item"><span class="v2-status-label">X Position:</span> <span id="v2-odom-val-x" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Y Position:</span> <span id="v2-odom-val-y" class="status-val">0.000 m</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw Heading:</span> <span id="v2-odom-val-yaw" class="status-val">0.0°</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Total Distance:</span> <span id="v2-odom-val-dist" class="status-val">0.000 m</span></div>
+            </div>
+            <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
+              <canvas id="v2-odom-traj-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="sensors-future">
-            <span class="card-label">Placeholder Region: sensors-future</span>
-            <h3>Future Payload Expansion</h3>
-            <p>Destination for future ultrasonic distance sensors, cliff sensors, and depth cameras.</p>
+          <div class="v2-card" id="sensors-future">
+            <div class="v2-card-header">
+              <h3>🔮 Payload Expansion Slots</h3>
+              <span class="badge badge-secondary">NOT INSTALLED</span>
+            </div>
+            <ul style="color: var(--text-muted); font-size: 0.85rem; padding-left: 20px; margin: 5px 0;">
+              <li>Ultrasonic Range Sensors: <strong>Not installed</strong></li>
+              <li>Cliff/Floor Drop Sensors: <strong>Not installed</strong></li>
+              <li>Depth/Stereo Camera: <strong>Not installed</strong></li>
+            </ul>
           </div>
         </div>
       </div>
@@ -208,27 +471,27 @@
 
         <div class="v2-placeholder-grid">
           <div class="v2-placeholder-card" id="calibration-primary-workflow">
-            <span class="card-label">Placeholder Region: calibration-primary-workflow</span>
+            <span class="card-label">Placeholder Region: calibration-primary-workflow (Stage 5)</span>
             <h3>Primary Calibration Workflow</h3>
             <p>Destination for wheel verification, Auto 1 m Forward, Auto 90° Left, and Auto 90° Right test buttons.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-live-progress">
-            <span class="card-label">Placeholder Region: calibration-live-progress</span>
+            <span class="card-label">Placeholder Region: calibration-live-progress (Stage 5)</span>
             <h3>Live Test Progress HUD</h3>
             <p>Destination for real-time distance/yaw progress tracking and safety HUD during auto tests.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-latest-result">
-            <span class="card-label">Placeholder Region: calibration-latest-result</span>
+            <span class="card-label">Placeholder Region: calibration-latest-result (Stage 5)</span>
             <h3>Latest Test Result</h3>
             <p>Destination for target errors, elapsed duration, and completion status result cards.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-repeatability">
-            <span class="card-label">Placeholder Region: calibration-repeatability</span>
+            <span class="card-label">Placeholder Region: calibration-repeatability (Stage 5)</span>
             <h3>Repeatability & Statistics</h3>
             <p>Destination for Phase 5 repeatability counters, pass rate %, mean error, and history logs.</p>
           </div>
           <div class="v2-placeholder-card" id="calibration-advanced">
-            <span class="card-label">Placeholder Region: calibration-advanced</span>
+            <span class="card-label">Placeholder Region: calibration-advanced (Stage 5)</span>
             <h3>Advanced Calibration & Maintenance</h3>
             <p>Destination for 2m/360° manual tools, raised-wheel maintenance testing, and LiDAR straight-line wizard.</p>
           </div>
@@ -244,39 +507,67 @@
             <p>Deep-dive system diagnostics, service rate monitors, serial link parameters, raw driver logs, and command terminal.</p>
           </div>
           <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
+            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
             <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy Diagnostics / ROS 2 Area</button>
           </div>
         </div>
 
         <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="diagnostics-services">
-            <span class="card-label">Placeholder Region: diagnostics-services</span>
-            <h3>Service Status Overview</h3>
-            <p>Destination for Node.js server status, Python sidecars, and system background tasks.</p>
+          <div class="v2-card" id="diagnostics-services">
+            <div class="v2-card-header">
+              <h3>🛠️ System Services Status</h3>
+              <span class="badge badge-info">READ-ONLY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Node.js Cockpit Server:</span> <span id="v2-diag-val-srv-node" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">LiDAR Python Sidecar:</span> <span id="v2-diag-val-srv-lidar" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">ROS 2 Odometry Bridge:</span> <span id="v2-diag-val-srv-ros" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-diag-val-srv-foxglove" class="status-val badge-healthy">RUNNING</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-firmware">
-            <span class="card-label">Placeholder Region: diagnostics-firmware</span>
-            <h3>Firmware & Protocol Identity</h3>
-            <p>Destination for ESP32 firmware build timestamp, git hash, and binary protocol identity.</p>
+          <div class="v2-card" id="diagnostics-firmware">
+            <div class="v2-card-header">
+              <h3>🆔 Firmware & Binary Protocol Identity</h3>
+              <span class="badge badge-info">ESP32</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Target Board:</span> <span id="v2-fw-val-board" class="status-val">Maker ESP32 Pro</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Firmware Name:</span> <span id="v2-fw-val-name" class="status-val">esp-maker-usba-4motor</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Firmware Version:</span> <span id="v2-fw-val-ver" class="status-val">1.0.0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Binary Protocol:</span> <span id="v2-fw-val-proto" class="status-val">Binary Packet v1</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-serial">
-            <span class="card-label">Placeholder Region: diagnostics-serial</span>
-            <h3>Serial Link Diagnostics</h3>
-            <p>Destination for COM port configuration, baud rate, and packet throughput metrics.</p>
+          <div class="v2-card" id="diagnostics-serial">
+            <div class="v2-card-header">
+              <h3>🔌 Serial Link Diagnostics</h3>
+              <span class="badge badge-info">UART</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Serial Device:</span> <span id="v2-serial-val-dev" class="status-val">/dev/rover-esp32</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Baud Rate:</span> <span id="v2-serial-val-baud" class="status-val">115200 Baud</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Telemetry Rate:</span> <span id="v2-serial-val-hz" class="status-val">10 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Packet Errors:</span> <span id="v2-serial-val-errs" class="status-val">0</span></div>
+            </div>
           </div>
-          <div class="v2-placeholder-card" id="diagnostics-ros">
-            <span class="card-label">Placeholder Region: diagnostics-ros</span>
-            <h3>ROS Topic & TF Rates</h3>
-            <p>Destination for ROS 2 topic publishing frequency and TF transform latency monitors.</p>
+          <div class="v2-card" id="diagnostics-ros">
+            <div class="v2-card-header">
+              <h3>📡 ROS 2 Topic & TF Diagnostics</h3>
+              <span class="badge badge-info">ROS 2</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">/diagnostics Topic:</span> <span id="v2-rosdiag-val-diag" class="status-val">1.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/scan Topic:</span> <span id="v2-rosdiag-val-scan" class="status-val">6.6 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/odom Topic:</span> <span id="v2-rosdiag-val-odom" class="status-val">10.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/tf Topic:</span> <span id="v2-rosdiag-val-tf" class="status-val">10.0 Hz</span></div>
+            </div>
           </div>
           <div class="v2-placeholder-card" id="diagnostics-logs">
-            <span class="card-label">Placeholder Region: diagnostics-logs</span>
+            <span class="card-label">Placeholder Region: diagnostics-logs (Stage 6)</span>
             <h3>Live Driver Logs</h3>
             <p>Destination for real-time driver log stream and console clear action.</p>
           </div>
           <div class="v2-placeholder-card" id="diagnostics-developer">
-            <span class="card-label">Placeholder Region: diagnostics-developer</span>
+            <span class="card-label">Placeholder Region: diagnostics-developer (Stage 6)</span>
             <h3>Developer & Packet Tools</h3>
             <p>Destination for raw hex serial command prompt and calibration database raw JSON inspector.</p>
           </div>
@@ -310,218 +601,23 @@
       <!-- Main Grid Dashboard -->
       <main class="dashboard-grid">
 
-      <!-- Left Column: Driving Control Room -->
+      <!-- Left Column: Legacy Dashboard Compatibility Banner -->
       <section class="panel controls-panel glass">
         <div class="panel-header">
-          <h2>🕹️ Driving Control Room</h2>
+          <h2>🛠️ Legacy Cockpit Dashboard</h2>
         </div>
 
-        <!-- PHASE 4 — PLATFORM COORDINATED DRIVE & BACKTRACKING -->
-        <div class="control-group" style="border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin: 0; color: var(--accent);">🕹️ Phase 4 — Normal Platform Drive</h3>
-            <span id="normal-drive-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 4px 10px; border-radius: 12px; font-size: 11px;">Disarmed</span>
+        <div class="v2-card" style="margin-bottom: 20px; border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.05);">
+          <div class="v2-card-header">
+            <h3 style="color: #c084fc;">🎮 Manual Driving Controls Moved to Drive Tab</h3>
+            <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc;">STAGE 4 MIGRATED</span>
           </div>
-
-          <!-- Floor testing limits toggle -->
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 12px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
-            <label for="limits-floor-testing" style="font-weight: bold; color: var(--text-muted); cursor: pointer;">Floor Testing Limits (Max 0.17 m/s):</label>
-            <input type="checkbox" id="limits-floor-testing" style="width: 18px; height: 18px; cursor: pointer;">
-          </div>
-
-          <!-- Gamepad Cheat-Sheet Mapping info -->
-          <div style="background: rgba(0,242,254,0.05); border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; padding: 10px; font-size: 11px; margin-bottom: 15px; line-height: 1.4;">
-            <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">🎮 Game Controller Mapping:</div>
-            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px 10px; font-family: monospace;">
-              <div>• Left Stick Vert:</div><div>Throt (Fwd/Rev)</div>
-              <div>• Left Stick Horiz:</div><div>Steering (Turn)</div>
-              <div>• Hold RB or RT:</div><div style="color: #f59e0b; font-weight: bold;">DEADMAN SWITCH</div>
-              <div>• Button A or B:</div><div style="color: #ef4444; font-weight: bold;">EMERGENCY STOP</div>
-              <div>• Button Start:</div><div style="color: #10b981;">Arm Drive</div>
-              <div>• Button Select:</div><div style="color: #6b7280;">Disarm Drive</div>
-          </div>
-
-          <!-- Gamepad Live Input Status -->
-          <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px; font-size: 11px; margin-bottom: 15px; line-height: 1.4; font-family: monospace;">
-            <div style="font-weight: bold; color: var(--accent); margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">🎮 Live Controller Inputs:</div>
-            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 4px 10px;">
-              <div>Arm State:</div><div id="gp-live-arm" style="font-weight: bold; color: #6b7280;">DISARMED</div>
-              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED</div>
-              <div>Linear Axis Y (Throt):</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
-              <div>Angular Axis X (Turn):</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
-              <div>Stop State:</div><div id="gp-live-stop" style="font-weight: bold; color: #10b981;">STATIONARY</div>
-              <div>Safety ESTOP:</div><div id="gp-live-estop" style="font-weight: bold; color: #10b981;">NOMINAL</div>
-              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent);">None</div>
-            </div>
-          </div>
-
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <button id="btn-arm-drive" class="btn btn-primary" style="flex: 1; font-weight: bold; padding: 10px;">Arm Normal Drive</button>
-            <button id="btn-disarm-drive" class="btn btn-secondary" style="flex: 1; font-weight: bold; padding: 10px;">Disarm Normal Drive</button>
-          </div>
-
-          <!-- Normal Drive Live Telemetry HUD -->
-          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; font-family: monospace; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 15px;">
-            <div>Drive State:</div><div id="tele-drive-state" style="font-weight: bold; color: #fca5a5;">Disarmed</div>
-            <div>Driver Mode:</div><div id="tele-drive-mode" style="font-weight: bold;">--</div>
-            <div>Physical Lock:</div><div id="tele-drive-phys-lock" style="font-weight: bold; color: var(--accent);">CLAMP ACTIVE</div>
-            <div>Active Source:</div><div id="tele-drive-source" style="font-weight: bold;">--</div>
-            <div>Command Age:</div><div id="tele-drive-age" style="font-weight: bold;">--</div>
-
-            <div style="grid-column: span 2; border-bottom: 1px dashed var(--border); margin: 4px 0;"></div>
-
-            <div>Req. Linear:</div><div id="tele-drive-req-lin" style="font-weight: bold; color: var(--cyan-glow);">0.00 m/s</div>
-            <div>Req. Angular:</div><div id="tele-drive-req-ang" style="font-weight: bold; color: var(--cyan-glow);">0.00 rad/s</div>
-            <div>Limited Linear:</div><div id="tele-drive-lim-lin" style="font-weight: bold; color: var(--accent);">0.00 m/s</div>
-            <div>Limited Angular:</div><div id="tele-drive-lim-ang" style="font-weight: bold; color: var(--accent);">0.00 rad/s</div>
-          </div>
-
-          <!-- Skid-Steer Wheel Odometry HUD -->
-          <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 6px 12px; margin-top: 15px;">
-            <div style="grid-column: span 2; font-weight: bold; color: var(--cyan-glow); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
-              <span>🌍 Skid-Steer Odometry:</span>
-              <span id="limits-testing-lbl" style="font-size: 9px; color: #f59e0b; font-weight: bold;">FLOOR TESTING (0.17 m/s)</span>
-            </div>
-
-            <div>Position X:</div><div id="odom-x-real" style="font-weight: bold; color: var(--cyan-glow);">0.000 m</div>
-            <div>Position Y:</div><div id="odom-y-real" style="font-weight: bold; color: var(--cyan-glow);">0.000 m</div>
-            <div>Heading Yaw:</div><div id="odom-yaw-real" style="font-weight: bold; color: var(--cyan-glow);">0.0°</div>
-            <div>Left Side Dist:</div><div id="odom-left-dist" style="font-weight: bold;">0.000 m</div>
-            <div>Right Side Dist:</div><div id="odom-right-dist" style="font-weight: bold;">0.000 m</div>
-            <div>Linear Speed v:</div><div id="odom-v-real" style="font-weight: bold; color: var(--accent);">0.000 m/s</div>
-            <div>Angular Speed w:</div><div id="odom-w-real" style="font-weight: bold; color: var(--accent);">0.000 rad/s</div>
-
-            <div style="grid-column: span 2; border-bottom: 1px dashed var(--border); margin: 4px 0;"></div>
-            <div style="grid-column: span 2; font-weight: bold; color: var(--text-muted); margin-bottom: 2px;">Four Encoder Ticks:</div>
-
-            <div>LF / RF (M1 / M2):</div><div style="font-weight: bold;"><span id="odom-enc-m1">0</span> / <span id="odom-enc-m2">0</span></div>
-            <div>LR / RR (M3 / M4):</div><div style="font-weight: bold;"><span id="odom-enc-m3">0</span> / <span id="odom-enc-m4">0</span></div>
-          </div>
-        </div>
-
-        <!-- PATH RECORDING & BACKTRACKING return panel -->
-        <div class="control-group" style="border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
-          <h3 style="margin: 0 0 10px 0; color: var(--cyan-glow); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">📂 Path Breadcrumbs & Return Home</h3>
-
-          <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 8px; font-size: 10px; color: #fca5a5; font-weight: bold; margin-bottom: 12px; text-align: center; line-height: 1.3;">
-            BACKTRACK HOME — ENCODER DEAD RECKONING<br>
-            <span style="font-weight: normal; font-size: 9px; opacity: 0.8;">APPROXIMATE ONLY UNTIL IMU/SLAM IS ADDED</span>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
-            <button id="btn-record-start" class="btn" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Start Recording</button>
-            <button id="btn-record-stop" class="btn" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 11px; font-weight: bold; padding: 8px; cursor: pointer;">Stop Recording</button>
-            <button id="btn-record-clear" class="btn" style="background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.4); color: #e5e7eb; font-size: 11px; font-weight: bold; padding: 8px; grid-column: span 2; cursor: pointer;">Clear Recorded Path</button>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
-            <button id="btn-start-backtrack" class="btn btn-primary" style="background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%); font-size: 11px; font-weight: bold; padding: 10px; cursor: pointer;">Backtrack Home</button>
-            <button id="btn-abort-backtrack" class="btn btn-secondary" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fff; font-size: 11px; font-weight: bold; padding: 10px; cursor: pointer;">Abort Backtrack</button>
-          </div>
-
-          <!-- Path status indicators -->
-          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 6px;">
-            <div>Recording Status:</div><div id="path-recording-lbl" style="font-weight: bold; color: #6b7280;">Idle</div>
-            <div>Recorded Waypoints:</div><div id="path-breadcrumbs-lbl" style="font-weight: bold;">0</div>
-            <div>Backtrack State:</div><div id="backtrack-state-lbl" style="font-weight: bold; color: #6b7280;">IDLE</div>
-
-            <div style="grid-column: span 2; display: flex; align-items: center; margin-top: 4px;">
-              <div style="flex: 1; height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
-                <div id="backtrack-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #a855f7 0%, #3b82f6 100%); transition: width 0.1s ease; font-size: 8px; line-height: 10px; text-align: center; color: white;"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Movement Direction Pad -->
-        <div class="control-group">
-          <h3>Direction Control</h3>
-          <div class="dpad-wrapper">
-            <div class="dpad">
-              <button class="dpad-btn up" id="ctrl-forward" title="Forward">▲</button>
-              <button class="dpad-btn left" id="ctrl-left" title="Turn Left">◀</button>
-              <button class="dpad-btn center-stop" id="ctrl-stop-center" title="ESTOP">STOP</button>
-              <button class="dpad-btn right" id="ctrl-right" title="Turn Right">▶</button>
-              <button class="dpad-btn down" id="ctrl-reverse" title="Reverse">▼</button>
-            </div>
-          </div>
-          <div class="spin-controls">
-            <button class="btn btn-spin-left" id="ctrl-spin-left">↺ Spin Left</button>
-            <button class="btn btn-spin-right" id="ctrl-spin-right">Spin Right ↻</button>
-          </div>
-        </div>
-
-        <!-- Speed & PWM Sliders -->
-        <div class="control-group">
-          <div class="slider-header">
-            <h3>Synchronized Speed Scale</h3>
-            <span class="value-readout" id="sync-speed-readout">0</span>
-          </div>
-          <input type="range" class="styled-slider" id="sync-speed-slider" min="-1000" max="1000" value="0">
-          <div class="speed-presets">
-            <button class="preset-btn" data-val="-500">Reverse (Mid)</button>
-            <button class="preset-btn stop" data-val="0">Stop All</button>
-            <button class="preset-btn" data-val="500">Forward (Mid)</button>
-            <button class="preset-btn" data-val="1000">Forward (Max)</button>
-          </div>
-        </div>
-
-        <div class="control-group">
-          <h3>Individual Speed Fine-Tuning</h3>
-          <div class="individual-sliders">
-            <div class="indiv-slider-col">
-              <span class="label">M1</span>
-              <input type="range" class="styled-slider vertical" id="speed-m1" min="-1000" max="1000" value="0" orient="vertical">
-              <span class="val" id="readout-m1">0</span>
-            </div>
-            <div class="indiv-slider-col">
-              <span class="label">M2</span>
-              <input type="range" class="styled-slider vertical" id="speed-m2" min="-1000" max="1000" value="0" orient="vertical">
-              <span class="val" id="readout-m2">0</span>
-            </div>
-            <div class="indiv-slider-col">
-              <span class="label">M3</span>
-              <input type="range" class="styled-slider vertical" id="speed-m3" min="-1000" max="1000" value="0" orient="vertical">
-              <span class="val" id="readout-m3">0</span>
-            </div>
-            <div class="indiv-slider-col">
-              <span class="label">M4</span>
-              <input type="range" class="styled-slider vertical" id="speed-m4" min="-1000" max="1000" value="0" orient="vertical">
-              <span class="val" id="readout-m4">0</span>
-            </div>
-          </div>
-          <button class="btn btn-danger btn-block" id="btn-estop">🚨 EMERGENCY STOP ALL MOTORS</button>
-          <div class="diag-row">
-            <button class="btn btn-warning btn-block" id="btn-motor-proof">Run Motor Power Proof</button>
-            <span class="diag-chip" id="encoder-activity">Encoder: waiting for packets</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- RPi Camera Feed Panel -->
-      <section class="panel camera-panel glass">
-        <div class="panel-header">
-          <h2>📷 RPi Camera Feed</h2>
-          <div class="status-badge" id="camera-status-badge">
-            <span class="status-indicator off" id="camera-status-dot"></span> <span id="camera-status-text">OFFLINE</span>
-          </div>
-        </div>
-        <div class="camera-viewport-container" id="camera-viewport">
-          <!-- Cyber HUD Overlays -->
-          <div class="camera-hud-grid"></div>
-          <div class="camera-hud-reticle"></div>
-          <div class="camera-hud-scanline"></div>
-
-          <img id="camera-stream" src="" class="camera-stream-img" alt="Camera Feed Offline" style="display: none;">
-          <div class="camera-placeholder" id="camera-placeholder">
-            <div class="placeholder-icon">🎥</div>
-            <div class="placeholder-text">Camera Feed Offline</div>
-            <div class="placeholder-subtext">Click "Start Feed" to initialize the stream</div>
-          </div>
-        </div>
-        <div class="camera-controls">
-          <button class="btn btn-primary btn-block" id="btn-toggle-camera">Start Feed</button>
-          <button class="btn btn-secondary btn-block" id="btn-fullscreen-camera" disabled>Fullscreen</button>
+          <p style="color: var(--text-muted); font-size: 0.88rem; margin: 10px 0; line-height: 1.4;">
+            The manual driving controls, direction pad, speed sliders, arming switches, and live RPi camera feed have been migrated to the primary <strong>Drive</strong> tab for an integrated teleoperation cockpit experience.
+          </p>
+          <button class="btn legacy-redirect-btn" data-target-tab="tab-drive-v2" style="align-self: flex-start; padding: 10px 18px;">
+            👉 Open Primary Drive Tab
+          </button>
         </div>
       </section>
 
