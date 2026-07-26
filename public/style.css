@@ -2046,3 +2046,25 @@ body {
 .badge-healthy {
   color: #10b981 !important;
 }
+
+/* Stage 4 Drive Viewports Grid (Desktop Split 70/30, Mobile Stacked) */
+.v2-drive-viewport-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .v2-drive-viewport-grid {
+    flex-direction: column;
+  }
+}
+
+.badge-estop-clear {
+  color: #10b981 !important;
+}
+
+.badge-healthy {
+  color: #10b981 !important;
+}

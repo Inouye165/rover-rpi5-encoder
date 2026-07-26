@@ -185,18 +185,38 @@ let prevEncoderTime = null;
 let prevM1 = 0, prevM2 = 0, prevM3 = 0, prevM4 = 0;
 
 // Connect WebSocket
+let lastWsErrorLogTime = 0;
+
+// Connect WebSocket
 function connectWebSocket() {
+  // Prevent duplicate concurrent WebSocket creation
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${wsProtocol}//${window.location.host}`;
   
   logSystem(`Connecting to server WebSocket at ${wsUrl}...`);
-  ws = new WebSocket(wsUrl);
+  updateBadge(wsStatus, 'alert', 'WS: Connecting...');
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch (e) {
+    console.error('Failed to instantiate WebSocket:', e);
+    scheduleReconnect();
+    return;
+  }
 
   ws.onopen = () => {
     logSystem('WebSocket connected successfully.');
     updateBadge(wsStatus, 'ok', 'WS: Connected');
     reconnectInterval = 1000; // Reset reconnect timeout backoff
     if (reconnectTimer) clearTimeout(reconnectTimer);
+
+    if (window.roverState && window.roverState.connection) {
+      window.roverState.connection.ws = true;
+    }
     
     // Sync telemetry checkbox state with server
     sendUploadConfig();
@@ -206,6 +226,12 @@ function connectWebSocket() {
 
     // Request current calibration database
     sendServerMessage({ type: 'get_calibration_db' });
+
+    // Synchronize canonical drive status from backend on connection/reconnect
+    fetchDriveStatus();
+
+    // Reset last sent joystick command state to require fresh input
+    lastSentJoystick = { x: 0, y: 0, deadman: false };
   };
 
   ws.onmessage = (event) => {
@@ -220,12 +246,21 @@ function connectWebSocket() {
   ws.onclose = () => {
     updateBadge(wsStatus, 'alert', 'WS: Disconnected');
     logSystem('WebSocket connection lost. Retrying...');
+    if (window.roverState && window.roverState.connection) {
+      window.roverState.connection.ws = false;
+    }
+    if (typeof driveRover === 'function') {
+      driveRover('stop');
+    }
     scheduleReconnect();
   };
 
   ws.onerror = (err) => {
     console.error('WebSocket Error:', err);
     updateBadge(wsStatus, 'alert', 'WS: Connection Error');
+    if (window.roverState && window.roverState.connection) {
+      window.roverState.connection.ws = false;
+    }
   };
 }
 
@@ -283,12 +318,26 @@ function addLogLine(text, className) {
   terminalConsole.scrollTop = terminalConsole.scrollHeight;
 }
 
-// Send Commands via WS
+// Send Commands via WS with Rate-Limited Warning Logging
 function sendServerMessage(data) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
+    try {
+      ws.send(JSON.stringify(data));
+    } catch (e) {
+      console.error('Error sending WS message:', e);
+    }
   } else {
-    logSystem('Error: WebSocket is not open to send command.');
+    // Suppress non-zero joystick movement sends when offline
+    if (data && data.type === 'joystick' && (data.x !== 0 || data.y !== 0)) {
+      // Intentionally drop non-zero commands when socket is offline
+    }
+    
+    // Rate-limit terminal error logging to at most once per 5 seconds (5000ms)
+    const now = Date.now();
+    if (now - lastWsErrorLogTime > 5000) {
+      lastWsErrorLogTime = now;
+      logSystem('⚠️ Error: WebSocket is not open to send command.');
+    }
   }
 }
 
@@ -1001,105 +1050,7 @@ function handleServerMessage(msg) {
     }
 
     case 'normal_drive_status': {
-      const armed = msg.armed;
-      const mode = msg.mode;
-      const source = msg.source;
-      const cmdAge = msg.cmdAge;
-      const reqLinear = msg.reqLinear;
-      const reqAngular = msg.reqAngular;
-      const limLinear = msg.limLinear;
-      const limAngular = msg.limAngular;
-      const lockStatus = msg.lockStatus;
-      
-      driveArmed = armed;
-      
-      const badge = document.getElementById('normal-drive-badge');
-      if (badge) {
-        if (armed) {
-          if (badge) badge.innerText = 'Armed';
-          if (badge) badge.style.background = 'rgba(16, 185, 129, 0.2)';
-          if (badge) badge.style.color = '#10b981';
-          if (badge) badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-        } else {
-          if (badge) badge.innerText = 'Disarmed';
-          if (badge) badge.style.background = 'rgba(239, 68, 68, 0.2)';
-          if (badge) badge.style.color = '#fca5a5';
-          if (badge) badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-        }
-      }
-      
-      const elState = document.getElementById('tele-drive-state');
-      if (elState) {
-        if (elState) elState.innerText = armed ? 'ARMED' : 'Disarmed';
-        if (elState) elState.style.color = armed ? '#10b981' : '#fca5a5';
-      }
-      
-      const modes = ['LOCKED', 'MAINTENANCE', 'CALIBRATION', 'NORMAL_DRIVE', 'EMERGENCY_STOP', 'FAULTED'];
-      const elMode = document.getElementById('tele-drive-mode');
-      if (elMode) {
-        if (elMode) elMode.innerText = modes[mode] || `UNKNOWN (${mode})`;
-        if (elMode) elMode.style.color = (mode === 3) ? '#10b981' : ((mode === 4 || mode === 5) ? '#ef4444' : '#f59e0b');
-      }
-      
-      const elPhys = document.getElementById('tele-drive-phys-lock');
-      if (elPhys) {
-        if (lockStatus) {
-          if (elPhys) elPhys.innerText = 'CLAMP ACTIVE';
-          if (elPhys) elPhys.style.color = '#ef4444';
-        } else {
-          if (elPhys) elPhys.innerText = 'DISABLED (LIVE)';
-          if (elPhys) elPhys.style.color = '#10b981';
-        }
-      }
-      
-      const sources = ['NONE', 'WEB_JOYSTICK', 'USB_SERIAL', 'ROS', 'POSITION', 'CALIBRATION'];
-      const elSource = document.getElementById('tele-drive-source');
-      if (elSource) {
-        if (elSource) elSource.innerText = sources[source] || `UNKNOWN (${source})`;
-      }
-      
-      const elAge = document.getElementById('tele-drive-age');
-      if (elAge) {
-        if (elAge) elAge.innerText = (cmdAge === 999999) ? 'N/A' : `${cmdAge} ms`;
-        if (cmdAge !== 999999 && cmdAge > 500) {
-          if (elAge) elAge.style.color = '#ef4444';
-        } else {
-          if (elAge) elAge.style.color = '';
-        }
-      }
-      
-      const elReqLin = document.getElementById('tele-drive-req-lin');
-      if (elReqLin) elReqLin.innerText = `${reqLinear.toFixed(2)} m/s`;
-      
-      const elReqAng = document.getElementById('tele-drive-req-ang');
-      if (elReqAng) elReqAng.innerText = `${reqAngular.toFixed(2)} rad/s`;
-      
-      const elLimLin = document.getElementById('tele-drive-lim-lin');
-      if (elLimLin) elLimLin.innerText = `${limLinear.toFixed(2)} m/s`;
-      
-      const elLimAng = document.getElementById('tele-drive-lim-ang');
-      if (elLimAng) elLimAng.innerText = `${limAngular.toFixed(2)} rad/s`;
-
-      // Update Gamepad Live Input HUD (Arm and ESTOP)
-      const gpArm = document.getElementById('gp-live-arm');
-      if (gpArm) {
-        if (gpArm) gpArm.innerText = armed ? 'ARMED' : 'DISARMED';
-        if (gpArm) gpArm.style.color = armed ? '#10b981' : '#6b7280';
-      }
-      const gpEstop = document.getElementById('gp-live-estop');
-      if (gpEstop) {
-        if (mode === 4) {
-          if (gpEstop) gpEstop.innerText = 'ESTOP ACTIVE';
-          if (gpEstop) gpEstop.style.color = '#ef4444';
-        } else if (mode === 5) {
-          if (gpEstop) gpEstop.innerText = 'FAULTED';
-          if (gpEstop) gpEstop.style.color = '#ef4444';
-        } else {
-          if (gpEstop) gpEstop.innerText = 'NOMINAL';
-          if (gpEstop) gpEstop.style.color = '#10b981';
-        }
-      }
-      
+      updateCanonicalDriveState(msg);
       break;
     }
 
@@ -1441,7 +1392,8 @@ if (btnMotorProof) {
 let currentSpeedSetting = 500; // Default active speed to use when clicking DPad
 
 function driveRover(direction) {
-  if (!driveArmed) {
+  const isArmed = (window.roverState && window.roverState.drive && window.roverState.drive.armed === true) || driveArmed;
+  if (!isArmed && direction !== 'stop') {
     logSystem("⚠️ Cannot drive: Coordinated Normal Drive is DISARMED. Press Arm first.");
     return;
   }
@@ -1458,29 +1410,27 @@ function driveRover(direction) {
   switch (direction) {
     case 'forward':
       y = 1.0;
+      x = 0.0;
       break;
     case 'reverse':
       y = -1.0;
+      x = 0.0;
       break;
     case 'left':
-      // Turn left: Left wheels backward, right wheels forward
-      m1 = m3 = -activeSpeed;
-      m2 = m4 = activeSpeed;
+      x = -1.0;
+      y = 0.0;
       break;
     case 'right':
-      // Turn right: Left wheels forward, right wheels backward
-      m1 = m3 = activeSpeed;
-      m2 = m4 = -activeSpeed;
+      x = 1.0;
+      y = 0.0;
       break;
     case 'spin_left':
-      // Spin left: Left wheels backward, right wheels forward
-      m1 = m3 = -activeSpeed;
-      m2 = m4 = activeSpeed;
+      x = -1.0;
+      y = 0.0;
       break;
     case 'spin_right':
-      // Spin right: Left wheels forward, right wheels backward
-      m1 = m3 = activeSpeed;
-      m2 = m4 = -activeSpeed;
+      x = 1.0;
+      y = 0.0;
       break;
     case 'stop':
     default:
@@ -1490,32 +1440,59 @@ function driveRover(direction) {
   }
 
   sendServerMessage({ type: 'joystick', x, y });
-  logSystem(`Driving direction: ${direction.toUpperCase()} via Coordinated Joystick Path (x: ${x.toFixed(2)}, y: ${y.toFixed(2)})`);
+  if (direction !== 'stop') {
+    logSystem(`Driving direction: ${direction.toUpperCase()} via Coordinated Joystick Path (x: ${x.toFixed(2)}, y: ${y.toFixed(2)})`);
+  }
 }
 
-// DPad Action Click Listeners
-ctrlForward.addEventListener('click', () => driveRover('forward'));
-ctrlReverse.addEventListener('click', () => driveRover('reverse'));
-ctrlLeft.addEventListener('click', () => driveRover('left'));
-ctrlRight.addEventListener('click', () => driveRover('right'));
-ctrlSpinLeft.addEventListener('click', () => driveRover('spin_left'));
-ctrlSpinRight.addEventListener('click', () => driveRover('spin_right'));
+// DPad Action Listeners with Deadman Release
+function bindDpadButton(btnEl, direction) {
+  if (!btnEl) return;
+  
+  const startDrive = (e) => {
+    if (e) e.preventDefault();
+    btnEl.classList.add('active');
+    driveRover(direction);
+  };
 
-// Keyboard WASD / Arrows controls
+  const stopDrive = (e) => {
+    if (e) e.preventDefault();
+    btnEl.classList.remove('active');
+    driveRover('stop');
+  };
+
+  btnEl.addEventListener('pointerdown', startDrive);
+  btnEl.addEventListener('pointerup', stopDrive);
+  btnEl.addEventListener('pointerleave', stopDrive);
+  btnEl.addEventListener('pointercancel', stopDrive);
+}
+
+bindDpadButton(ctrlForward, 'forward');
+bindDpadButton(ctrlReverse, 'reverse');
+bindDpadButton(ctrlLeft, 'left');
+bindDpadButton(ctrlRight, 'right');
+bindDpadButton(ctrlSpinLeft, 'spin_left');
+bindDpadButton(ctrlSpinRight, 'spin_right');
+
+// Keyboard WASD / Arrows controls with Active Key Tracking & Safe Release
+let activeKeyboardKeys = new Set();
+
 document.addEventListener('keydown', (e) => {
-  // Prevent default scroll behaviors for arrow keys/space inside dashboard
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key) && document.activeElement.tagName !== 'INPUT') {
     e.preventDefault();
   }
 
-  if (document.activeElement.tagName === 'INPUT') return; // Skip if user typing
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (e.repeat) return; // Ignore auto-repeat keydown events
 
-  // Ignore steering keys when straight drive is locked
-  if (straightDriveLocked && ['a', 'arrowleft', 'd', 'arrowright', 'q', 'e'].includes(e.key.toLowerCase())) {
+  const key = e.key.toLowerCase();
+  activeKeyboardKeys.add(key);
+
+  if (straightDriveLocked && ['a', 'arrowleft', 'd', 'arrowright', 'q', 'e'].includes(key)) {
     return;
   }
 
-  switch (e.key.toLowerCase()) {
+  switch (key) {
     case 'w':
     case 'arrowup':
       ctrlForward.classList.add('active');
@@ -1554,7 +1531,8 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keyup', (e) => {
   const key = e.key.toLowerCase();
-  
+  activeKeyboardKeys.delete(key);
+
   if (['w', 'arrowup'].includes(key)) ctrlForward.classList.remove('active');
   if (['s', 'arrowdown'].includes(key)) ctrlReverse.classList.remove('active');
   if (['a', 'arrowleft'].includes(key)) ctrlLeft.classList.remove('active');
@@ -1562,6 +1540,12 @@ document.addEventListener('keyup', (e) => {
   if (key === 'q') ctrlSpinLeft.classList.remove('active');
   if (key === 'e') ctrlSpinRight.classList.remove('active');
   if ([' ', 'escape'].includes(key)) ctrlStopCenter.classList.remove('active');
+
+  const driveKeys = ['w', 's', 'a', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+  const anyDriveKeyActive = Array.from(activeKeyboardKeys).some(k => driveKeys.includes(k));
+  if (!anyDriveKeyActive) {
+    driveRover('stop');
+  }
 });
 
 // Telemetry toggles checkboxes
@@ -1618,28 +1602,61 @@ btnChangePort.addEventListener('click', () => {
 });
 
 // Phase 4 Arm and Disarm drive control actions
-function armNormalDrive() {
-  logSystem('Sending arm normal drive request...');
-  fetch('/api/drive/arm', { method: 'POST' })
-    .then(res => res.json())
+function fetchDriveStatus() {
+  return fetch('/api/drive/status')
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
     .then(data => {
-      logSystem(data.message || 'Arm request processed.');
+      if (data && data.ok && data.status) {
+        updateCanonicalDriveState(data.status);
+      }
+      return data;
     })
     .catch(err => {
-      logSystem(`⚠️ Error arming normal drive: ${err.message}`);
+      logSystem(`⚠️ Error fetching drive status: ${err.message}`);
     });
 }
 
-function disarmNormalDrive() {
+async function armNormalDrive() {
+  logSystem('Sending arm normal drive request...');
+  try {
+    const res = await fetch('/api/drive/arm', { method: 'POST' });
+    const data = await res.json();
+    if (data && data.ok) {
+      logSystem(data.message || 'Arm request processed.');
+    } else {
+      logSystem(`⚠️ Arm request rejected: ${(data && data.error) || 'Unknown error'}`);
+    }
+  } catch (err) {
+    logSystem(`⚠️ Error arming normal drive: ${err.message}`);
+  }
+
+  // Immediate status refresh & brief 150ms retry for ESP32 telemetry packet propagation
+  await fetchDriveStatus();
+  await new Promise(r => setTimeout(r, 150));
+  await fetchDriveStatus();
+}
+
+async function disarmNormalDrive() {
   logSystem('Sending disarm normal drive request...');
-  fetch('/api/drive/disarm', { method: 'POST' })
-    .then(res => res.json())
-    .then(data => {
+  try {
+    const res = await fetch('/api/drive/disarm', { method: 'POST' });
+    const data = await res.json();
+    if (data && data.ok) {
       logSystem(data.message || 'Disarm request processed.');
-    })
-    .catch(err => {
-      logSystem(`⚠️ Error disarming normal drive: ${err.message}`);
-    });
+    } else {
+      logSystem(`⚠️ Disarm request rejected: ${(data && data.error) || 'Unknown error'}`);
+    }
+  } catch (err) {
+    logSystem(`⚠️ Error disarming normal drive: ${err.message}`);
+  }
+
+  // Immediate status refresh & brief 150ms retry for ESP32 telemetry packet propagation
+  await fetchDriveStatus();
+  await new Promise(r => setTimeout(r, 150));
+  await fetchDriveStatus();
 }
 
 const btnArmDrive = document.getElementById('btn-arm-drive');
@@ -1674,7 +1691,7 @@ btnClearLogs.addEventListener('click', () => {
   logSystem('Logs cleared.');
 });
 
-// --- Stage 3 Canonical State & Read-Only Rendering ---
+// --- Stage 3 & 4 Canonical State & Read-Only Rendering ---
 window.roverState = {
   connection: {
     ws: true,
@@ -1684,7 +1701,16 @@ window.roverState = {
     odomAgeMs: 10
   },
   drive: {
-    armed: false,
+    armed: null,
+    known: false,
+    mode: 0,
+    source: 0,
+    cmdAgeMs: 999999,
+    reqLinear: 0.0,
+    reqAngular: 0.0,
+    limLinear: 0.0,
+    limAngular: 0.0,
+    lockStatus: null,
     estop: false,
     battery: '12.4'
   },
@@ -1725,6 +1751,49 @@ window.roverState = {
   }
 };
 
+function updateCanonicalDriveState(statusObj) {
+  if (!statusObj || typeof statusObj !== 'object') return;
+  const target = (statusObj.status && typeof statusObj.status === 'object') ? statusObj.status : statusObj;
+  const st = window.roverState;
+
+  if (typeof target.armed === 'boolean') {
+    st.drive.armed = target.armed;
+    driveArmed = target.armed;
+  }
+  if (typeof target.mode === 'number') {
+    st.drive.mode = target.mode;
+  }
+  if (typeof target.source === 'number') {
+    st.drive.source = target.source;
+  }
+  if (typeof target.cmdAge === 'number') {
+    st.drive.cmdAgeMs = target.cmdAge;
+  } else if (typeof target.cmdAgeMs === 'number') {
+    st.drive.cmdAgeMs = target.cmdAgeMs;
+  }
+  if (typeof target.reqLinear === 'number') {
+    st.drive.reqLinear = target.reqLinear;
+  }
+  if (typeof target.reqAngular === 'number') {
+    st.drive.reqAngular = target.reqAngular;
+  }
+  if (typeof target.limLinear === 'number') {
+    st.drive.limLinear = target.limLinear;
+  }
+  if (typeof target.limAngular === 'number') {
+    st.drive.limAngular = target.limAngular;
+  }
+  if (typeof target.lockStatus === 'boolean') {
+    st.drive.lockStatus = target.lockStatus;
+  }
+  if (typeof target.estop === 'boolean') {
+    st.drive.estop = target.estop;
+  }
+
+  st.drive.known = true;
+  renderDriveV2Status();
+}
+
 function renderStage3V2Panels() {
   renderDriveV2Status();
   renderAutonomyV2();
@@ -1734,6 +1803,7 @@ function renderStage3V2Panels() {
 
 function renderDriveV2Status() {
   const st = window.roverState;
+  const drv = st.drive;
 
   const elWs = document.getElementById('v2-drive-val-ws');
   if (elWs) {
@@ -1753,20 +1823,164 @@ function renderDriveV2Status() {
     elGp.style.color = st.connection.gamepad ? '#10b981' : '#9ca3af';
   }
 
+  // 1. Top Status Strip Armed Badge (#v2-drive-val-armed)
   const elArmed = document.getElementById('v2-drive-val-armed');
   if (elArmed) {
-    elArmed.textContent = st.drive.armed ? 'ARMED' : 'DISARMED';
-    elArmed.style.color = st.drive.armed ? '#10b981' : '#f59e0b';
+    if (!drv.known || drv.armed === null) {
+      elArmed.textContent = 'UNKNOWN';
+      elArmed.style.color = '#9ca3af';
+    } else if (drv.armed) {
+      elArmed.textContent = 'ARMED';
+      elArmed.style.color = '#10b981';
+    } else {
+      elArmed.textContent = 'DISARMED';
+      elArmed.style.color = '#f59e0b';
+    }
   }
 
+  // 2. Operational Controls Card Header Badge (#normal-drive-badge)
+  const badge = document.getElementById('normal-drive-badge');
+  if (badge) {
+    if (!drv.known || drv.armed === null) {
+      badge.innerText = 'Unknown';
+      badge.style.background = 'rgba(156, 163, 175, 0.2)';
+      badge.style.color = '#9ca3af';
+      badge.style.border = '1px solid rgba(156, 163, 175, 0.4)';
+    } else if (drv.armed) {
+      badge.innerText = 'Armed';
+      badge.style.background = 'rgba(16, 185, 129, 0.2)';
+      badge.style.color = '#10b981';
+      badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+    } else {
+      badge.innerText = 'Disarmed';
+      badge.style.background = 'rgba(239, 68, 68, 0.2)';
+      badge.style.color = '#fca5a5';
+      badge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+    }
+  }
+
+  // 3. Telemetry HUD Drive State (#tele-drive-state)
+  const elState = document.getElementById('tele-drive-state');
+  if (elState) {
+    if (!drv.known || drv.armed === null) {
+      elState.innerText = 'Unknown';
+      elState.style.color = '#9ca3af';
+    } else if (drv.armed) {
+      elState.innerText = 'ARMED';
+      elState.style.color = '#10b981';
+    } else {
+      elState.innerText = 'Disarmed';
+      elState.style.color = '#fca5a5';
+    }
+  }
+
+  // 4. Telemetry HUD Driver Mode (#tele-drive-mode)
+  const modes = ['LOCKED', 'MAINTENANCE', 'CALIBRATION', 'NORMAL_DRIVE', 'EMERGENCY_STOP', 'FAULTED'];
+  const elMode = document.getElementById('tele-drive-mode');
+  if (elMode) {
+    if (!drv.known || typeof drv.mode !== 'number') {
+      elMode.innerText = '--';
+      elMode.style.color = '#9ca3af';
+    } else {
+      elMode.innerText = modes[drv.mode] || `UNKNOWN (${drv.mode})`;
+      elMode.style.color = (drv.mode === 3) ? '#10b981' : ((drv.mode === 4 || drv.mode === 5) ? '#ef4444' : '#f59e0b');
+    }
+  }
+
+  // 5. Telemetry HUD Physical Lock (#tele-drive-phys-lock)
+  // Phase 6 Semantics:
+  // lockStatus === true  => Physical Lock / Safety Clamp ACTIVE (Hardware locked)
+  // lockStatus === false => Physical Lock CLEAR / DISABLED (Hardware live)
+  const elPhys = document.getElementById('tele-drive-phys-lock');
+  if (elPhys) {
+    if (!drv.known || drv.lockStatus === null || drv.lockStatus === undefined) {
+      elPhys.innerText = 'Unknown';
+      elPhys.style.color = '#9ca3af';
+    } else if (drv.lockStatus === true) {
+      elPhys.innerText = 'CLAMP ACTIVE';
+      elPhys.style.color = '#ef4444';
+    } else {
+      elPhys.innerText = 'CLEAR (DISABLED)';
+      elPhys.style.color = '#10b981';
+    }
+  }
+
+  // 6. Telemetry HUD Active Source (#tele-drive-source)
+  const sources = ['NONE', 'WEB_JOYSTICK', 'USB_SERIAL', 'ROS', 'POSITION', 'CALIBRATION'];
+  const elSource = document.getElementById('tele-drive-source');
+  if (elSource) {
+    if (!drv.known || typeof drv.source !== 'number') {
+      elSource.innerText = '--';
+    } else {
+      elSource.innerText = sources[drv.source] || `UNKNOWN (${drv.source})`;
+    }
+  }
+
+  // 7. Telemetry HUD Command Speeds & Age
+  const elReqLin = document.getElementById('tele-drive-req-lin');
+  if (elReqLin) elReqLin.innerText = `${(drv.reqLinear || 0).toFixed(2)} m/s`;
+
+  const elReqAng = document.getElementById('tele-drive-req-ang');
+  if (elReqAng) elReqAng.innerText = `${(drv.reqAngular || 0).toFixed(2)} rad/s`;
+
+  const elLimLin = document.getElementById('tele-drive-lim-lin');
+  if (elLimLin) elLimLin.innerText = `${(drv.limLinear || 0).toFixed(2)} m/s`;
+
+  const elLimAng = document.getElementById('tele-drive-lim-ang');
+  if (elLimAng) elLimAng.innerText = `${(drv.limAngular || 0).toFixed(2)} rad/s`;
+
+  const elCmdAge = document.getElementById('tele-drive-age');
+  if (elCmdAge) elCmdAge.innerText = (drv.cmdAgeMs !== undefined && drv.cmdAgeMs < 999999) ? `${drv.cmdAgeMs} ms` : '--';
+
+  // 8. E-stop badge (#v2-drive-val-estop)
   const elEstop = document.getElementById('v2-drive-val-estop');
   if (elEstop) {
-    elEstop.textContent = st.drive.estop ? 'ACTIVE (ESTOP)' : 'CLEAR';
-    elEstop.style.color = st.drive.estop ? '#ef4444' : '#10b981';
+    elEstop.textContent = drv.estop ? 'ACTIVE (ESTOP)' : 'CLEAR';
+    elEstop.style.color = drv.estop ? '#ef4444' : '#10b981';
   }
 
+  // 9. Gamepad HUD Arm State (#gp-live-arm)
+  const elGpArm = document.getElementById('gp-live-arm');
+  if (elGpArm) {
+    if (!drv.known || drv.armed === null) {
+      elGpArm.innerText = 'UNKNOWN';
+      elGpArm.style.color = '#9ca3af';
+    } else if (drv.armed) {
+      elGpArm.innerText = 'ARMED';
+      elGpArm.style.color = '#10b981';
+    } else {
+      elGpArm.innerText = 'DISARMED';
+      elGpArm.style.color = '#6b7280';
+    }
+  }
+
+  // 10. Arm/Disarm Buttons Enabled/Disabled State
+  if (btnArmDrive && btnDisarmDrive) {
+    if (drv.known && drv.armed === true) {
+      btnArmDrive.disabled = true;
+      btnArmDrive.style.opacity = '0.5';
+      btnArmDrive.style.cursor = 'not-allowed';
+      btnDisarmDrive.disabled = false;
+      btnDisarmDrive.style.opacity = '1.0';
+      btnDisarmDrive.style.cursor = 'pointer';
+    } else if (drv.known && drv.armed === false) {
+      btnArmDrive.disabled = false;
+      btnArmDrive.style.opacity = '1.0';
+      btnArmDrive.style.cursor = 'pointer';
+      btnDisarmDrive.disabled = true;
+      btnDisarmDrive.style.opacity = '0.5';
+      btnDisarmDrive.style.cursor = 'not-allowed';
+    } else {
+      btnArmDrive.disabled = false;
+      btnArmDrive.style.opacity = '1.0';
+      btnDisarmDrive.disabled = false;
+      btnDisarmDrive.style.opacity = '1.0';
+    }
+  }
+
+  // Battery and ages
   const elBat = document.getElementById('v2-drive-val-battery');
-  if (elBat) elBat.textContent = `${st.drive.battery} V`;
+  if (elBat) elBat.textContent = `${drv.battery} V`;
 
   const elTelemAge = document.getElementById('v2-drive-val-telem-age');
   if (elTelemAge) elTelemAge.textContent = `${st.connection.telemAgeMs || 10} ms`;
@@ -1774,13 +1988,13 @@ function renderDriveV2Status() {
   const elOdomAge = document.getElementById('v2-drive-val-odom-age');
   if (elOdomAge) elOdomAge.textContent = `${st.connection.odomAgeMs || 10} ms`;
 
-  // Drive Faults Banner
+  // Faults list
   const faultsContainer = document.getElementById('v2-drive-faults-list');
   if (faultsContainer) {
     const faults = [];
     if (!st.connection.ws) faults.push({ text: '⚠️ WebSocket Disconnected', level: 'warn' });
     if (!st.connection.serial) faults.push({ text: '⚠️ ESP32 Serial Link Offline', level: 'err' });
-    if (st.drive.estop) faults.push({ text: '🛑 Emergency Stop Lock Active', level: 'err' });
+    if (drv.estop) faults.push({ text: '🛑 Emergency Stop Lock Active', level: 'err' });
     if (st.connection.telemAgeMs > 1000) faults.push({ text: '⚠️ Stale Telemetry Warning (>1s)', level: 'warn' });
 
     if (faults.length === 0) {
@@ -1867,9 +2081,21 @@ function renderDiagnosticsV2() {
   if (elProto) elProto.textContent = st.firmware.proto;
 }
 
-// Initial Stage 3 Rendering
-document.addEventListener('DOMContentLoaded', renderStage3V2Panels);
-setTimeout(renderStage3V2Panels, 100);
+// Initial Stage 3 Rendering & WebSocket / Drive / Poller Startup
+document.addEventListener('DOMContentLoaded', () => {
+  renderStage3V2Panels();
+  if (typeof connectWebSocket === 'function') connectWebSocket();
+  fetchDriveStatus();
+  if (typeof updateLidarTabState === 'function') updateLidarTabState();
+  if (typeof checkGamepadConnection === 'function') checkGamepadConnection();
+});
+setTimeout(() => {
+  renderStage3V2Panels();
+  if (typeof connectWebSocket === 'function') connectWebSocket();
+  fetchDriveStatus();
+  if (typeof updateLidarTabState === 'function') updateLidarTabState();
+  if (typeof checkGamepadConnection === 'function') checkGamepadConnection();
+}, 100);
 
 // --- Tab Switching Logic (Stage 2 Navigation Shell & Legacy Parity) ---
 const topTabButtons = document.querySelectorAll('.tab-navigation-bar .tab-btn');
@@ -1882,6 +2108,7 @@ let activeLegacySubTabId = 'tab-dashboard';
 function updateLidarTabState() {
   const isLidarActive = (
     (activeTopTabId === 'tab-legacy' && (activeLegacySubTabId === 'tab-lidar' || activeLegacySubTabId === 'tab-encoder')) ||
+    activeTopTabId === 'tab-drive-v2' ||
     activeTopTabId === 'tab-sensors-v2' ||
     activeTopTabId === 'tab-lidar' ||
     activeTopTabId === 'tab-encoder'
@@ -1890,7 +2117,7 @@ function updateLidarTabState() {
   if (isLidarActive) {
     lidarActiveTab = (activeTopTabId === 'tab-legacy') ? activeLegacySubTabId : activeTopTabId;
     if (typeof startLidarPolling === 'function') startLidarPolling();
-    if (activeTopTabId === 'tab-sensors-v2' || activeLegacySubTabId === 'tab-lidar' || activeTopTabId === 'tab-lidar') {
+    if (activeTopTabId === 'tab-drive-v2' || activeTopTabId === 'tab-sensors-v2' || activeLegacySubTabId === 'tab-lidar' || activeTopTabId === 'tab-lidar') {
       if (typeof pollLidar === 'function') pollLidar();
       requestAnimationFrame(() => {
         if (typeof latestLidarScan !== 'undefined' && latestLidarScan && typeof drawPolarScan === 'function') {
@@ -1905,6 +2132,13 @@ function updateLidarTabState() {
 }
 
 function activateTopTab(targetTabId) {
+  // Stage 4 Safety Requirement: Switching away from Drive tab immediately stops motors
+  if (activeTopTabId === 'tab-drive-v2' && targetTabId !== 'tab-drive-v2') {
+    if (typeof driveRover === 'function') {
+      driveRover('stop');
+    }
+  }
+
   activeTopTabId = targetTabId;
 
   // Toggle active states and ARIA attributes on top-level buttons
@@ -2626,6 +2860,8 @@ function formatFeetInches(mm) {
   return `${inches}"`;
 }
 
+let isLidarPollPending = false;
+
 function startLidarPolling() {
   if (lidarPollTimer) return;
   pollLidar();
@@ -2637,31 +2873,39 @@ function stopLidarPolling() {
   if (lidarPollTimer) {
     clearInterval(lidarPollTimer);
     lidarPollTimer = null;
+    isLidarPollPending = false;
     console.log('[LiDAR UI] Polling stopped.');
   }
 }
 
 async function pollLidar() {
+  if (isLidarPollPending) return;
+  isLidarPollPending = true;
+
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
+
     const [statusRes, scanRes] = await Promise.all([
-      fetch('/api/lidar/status').then(r => r.json()),
-      fetch('/api/lidar/scan').then(r => {
-        if (r.status === 200) return r.json();
+      fetch('/api/lidar/status', { signal: controller.signal }).then(r => r.json()).catch(() => null),
+      fetch('/api/lidar/scan', { signal: controller.signal }).then(r => {
+        if (r && r.status === 200) return r.json();
         return null;
       }).catch(() => null)
     ]);
-    
-    updateLidarStatus(statusRes);
-    if (scanRes) {
-      updateLidarScan(scanRes);
-    }
+    clearTimeout(timeoutId);
+
+    if (statusRes) updateLidarStatus(statusRes);
+    if (scanRes) updateLidarScan(scanRes);
   } catch (err) {
-    console.error('Error polling LiDAR:', err);
+    console.error('[LiDAR UI] Error polling LiDAR:', err);
     const stateEl = document.getElementById('lidar-val-state');
     if (stateEl) {
       stateEl.textContent = 'ERROR';
       stateEl.style.color = '#ef4444';
     }
+  } finally {
+    isLidarPollPending = false;
   }
 }
 
@@ -2745,15 +2989,26 @@ function updateLidarScan(scan) {
   if (overlay) {
     overlay.style.display = 'none';
   }
-  
-  // Render Canvas Polar Display
-  drawPolarScan(scan);
-  
-  // Render Table Samples
-  renderSampleTable(scan);
 
-  // Calculate and update track interference
-  updateTrackInterference(scan);
+  // Draw compact LiDAR local view on Drive tab
+  try {
+    if (typeof drawCompactLidarScan === 'function') {
+      drawCompactLidarScan(scan);
+    }
+  } catch (err) {
+    console.error('[LiDAR UI] Compact canvas draw error:', err);
+  }
+
+  // Draw heavy polar canvas & sample table only when Sensors or legacy LiDAR tab is active
+  if (activeTopTabId === 'tab-sensors-v2' || activeTopTabId === 'tab-lidar' || activeLegacySubTabId === 'tab-lidar') {
+    try {
+      drawPolarScan(scan);
+      renderSampleTable(scan);
+      updateTrackInterference(scan);
+    } catch (err) {
+      console.error('[LiDAR UI] Polar canvas draw error:', err);
+    }
+  }
 }
 
 function updateTrackInterference(scan) {
@@ -2907,6 +3162,10 @@ function updateTrackInterferenceUI(dFront, dLeft, dRight) {
 
 
 function drawPolarScan(scan) {
+  if (typeof drawCompactLidarScan === 'function') {
+    drawCompactLidarScan(scan);
+  }
+
   const canvas = document.getElementById('lidar-polar-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -4109,11 +4368,29 @@ updateTimeBadge();
 // ==============================================================================
 let gamepadIndex = null;
 let gamepadActive = false;
+let gamepadLoopRunning = false;
 let lastSentJoystick = { x: 0, y: 0, deadman: false };
 let lastGamepadSendTime = 0;
 
+function checkGamepadConnection() {
+  const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (let i = 0; i < gamepads.length; i++) {
+    if (gamepads[i]) {
+      if (gamepadIndex !== i || !gamepadActive) {
+        gamepadIndex = i;
+        gamepadActive = true;
+        updateGamepadBadge(true, gamepads[i].id);
+        logSystem(`Gamepad detected: ${gamepads[i].id} at index ${i}`);
+        startGamepadLoop();
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 window.addEventListener('gamepadconnected', (e) => {
-  logSystem(`Gamepad connected: ${e.gamepad.id} at index ${e.gamepad.index}`);
+  logSystem(`Gamepad connected event: ${e.gamepad.id} at index ${e.gamepad.index}`);
   gamepadIndex = e.gamepad.index;
   gamepadActive = true;
   updateGamepadBadge(true, e.gamepad.id);
@@ -4125,10 +4402,9 @@ window.addEventListener('gamepaddisconnected', (e) => {
     logSystem(`Gamepad disconnected: ${e.gamepad.id}`);
     gamepadIndex = null;
     gamepadActive = false;
+    gamepadLoopRunning = false;
     updateGamepadBadge(false);
-    // Reset HUD
     updateGamepadHUD(0, 0, false, "None");
-    // Send safety stop
     sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
   }
 });
@@ -4142,13 +4418,31 @@ function updateGamepadBadge(connected, name = '') {
       updateBadge(gpStatus, 'off', 'Gamepad: Disconnected');
     }
   }
+
+  if (window.roverState && window.roverState.connection) {
+    window.roverState.connection.gamepad = connected;
+  }
+
+  const elGp = document.getElementById('v2-drive-val-gamepad');
+  if (elGp) {
+    elGp.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+    elGp.style.color = connected ? '#10b981' : '#9ca3af';
+  }
 }
 
 function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
   const elDeadman = document.getElementById('gp-live-deadman');
   if (elDeadman) {
-    elDeadman.innerText = deadman ? 'ACTIVE' : 'RELEASED';
-    elDeadman.style.color = deadman ? '#10b981' : '#ef4444';
+    if (gamepadActive && !deadman) {
+      elDeadman.innerText = 'Controller connected — deadman not active';
+      elDeadman.style.color = '#f59e0b'; // Amber
+    } else if (deadman) {
+      elDeadman.innerText = 'ACTIVE';
+      elDeadman.style.color = '#10b981'; // Green
+    } else {
+      elDeadman.innerText = 'RELEASED';
+      elDeadman.style.color = '#ef4444'; // Red
+    }
   }
   const elLinear = document.getElementById('gp-live-linear');
   if (elLinear) {
@@ -4171,17 +4465,28 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
 }
 
 function startGamepadLoop() {
+  if (gamepadLoopRunning) return;
+  gamepadLoopRunning = true;
+
   function poll() {
-    if (!gamepadActive || gamepadIndex === null) return;
-    const gp = navigator.getGamepads()[gamepadIndex];
+    if (!gamepadActive || gamepadIndex === null) {
+      if (!checkGamepadConnection()) {
+        gamepadLoopRunning = false;
+        return;
+      }
+    }
+
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = gamepads[gamepadIndex];
     if (!gp) {
-      requestAnimationFrame(poll);
+      gamepadLoopRunning = false;
+      if (checkGamepadConnection()) {
+        requestAnimationFrame(poll);
+      }
       return;
     }
 
     // Read axes: Left stick vertical (1) and horizontal (0)
-    // Gamepad axes: -1 is up/left, 1 is down/right.
-    // Negate gp.axes[1] so positive is forward (up) and negative is reverse (down).
     let throttle = -gp.axes[1];
     let turn = gp.axes[0];
 
@@ -4973,5 +5278,128 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
   }
+});
+
+// --- Stage 4 Compact LiDAR Local View Renderer & Safety Lifecycle Listeners ---
+function drawCompactLidarScan(scan) {
+  const canvas = document.getElementById('v2-compact-lidar-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const width = rect.width;
+  const height = rect.height;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(centerX, centerY) - 15;
+  if (radius <= 0) return;
+
+  const maxRangeMm = 3000.0;
+  const scale = radius / maxRangeMm;
+
+  // Clear background
+  ctx.fillStyle = '#0b0f19';
+  ctx.fillRect(0, 0, width, height);
+
+  // Concentric rings (1m, 2m, 3m)
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.12)';
+  ctx.lineWidth = 1;
+  [1000, 2000, 3000].forEach(rMm => {
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, rMm * scale, 0, 2 * Math.PI);
+    ctx.stroke();
+  });
+
+  // Crosshairs
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.2)';
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY - radius); ctx.lineTo(centerX, centerY + radius);
+  ctx.moveTo(centerX - radius, centerY); ctx.lineTo(centerX + radius, centerY);
+  ctx.stroke();
+
+  // Forward indicator (0 deg front)
+  ctx.fillStyle = 'rgba(0, 242, 254, 0.8)';
+  ctx.font = 'bold 9px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('0° FRONT', centerX, centerY - radius + 12);
+
+  let closestDistMm = 999999;
+
+  if (scan && scan.points && scan.points.length > 0) {
+    for (const pt of scan.points) {
+      if (pt.distanceMm > 0) {
+        if (pt.distanceMm < closestDistMm) closestDistMm = pt.distanceMm;
+
+        const angleRad = (pt.angleDeg - 90) * Math.PI / 180;
+        const x = centerX + pt.distanceMm * scale * Math.cos(angleRad);
+        const y = centerY + pt.distanceMm * scale * Math.sin(angleRad);
+
+        if (pt.distanceMm * scale <= radius) {
+          ctx.beginPath();
+          ctx.arc(x, y, 2.0, 0, 2 * Math.PI);
+          ctx.fillStyle = (pt.distanceMm < 300) ? '#ff0055' : '#00f2fe';
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  // Draw Center Rover Icon
+  ctx.fillStyle = '#10b981';
+  ctx.fillRect(centerX - 6, centerY - 8, 12, 16);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY - 12);
+  ctx.lineTo(centerX - 4, centerY - 6);
+  ctx.lineTo(centerX + 4, centerY - 6);
+  ctx.closePath();
+  ctx.fill();
+
+  // Update Closest Obstacle Readout HUD
+  const elDist = document.getElementById('v2-compact-lidar-dist');
+  const elStatus = document.getElementById('v2-compact-lidar-status');
+  if (closestDistMm < 999999) {
+    const closestM = (closestDistMm / 1000.0).toFixed(2);
+    if (elDist) elDist.textContent = `${closestM} m`;
+    if (elStatus) {
+      if (closestDistMm < 300) {
+        elStatus.textContent = '🛑 Danger (<0.3m)';
+        elStatus.style.color = '#ef4444';
+      } else if (closestDistMm < 500) {
+        elStatus.textContent = '⚠️ Caution (<0.5m)';
+        elStatus.style.color = '#f59e0b';
+      } else {
+        elStatus.textContent = '✓ Clear';
+        elStatus.style.color = '#10b981';
+      }
+    }
+  } else {
+    if (elDist) elDist.textContent = '-- m';
+    if (elStatus) {
+      elStatus.textContent = 'Offline';
+      elStatus.style.color = '#9ca3af';
+    }
+  }
+}
+
+// Stage 4 Safety Event Handlers: Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
+window.addEventListener('blur', () => {
+  if (typeof driveRover === 'function') driveRover('stop');
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && typeof driveRover === 'function') {
+    driveRover('stop');
+  }
+});
+
+window.addEventListener('gamepaddisconnect', () => {
+  if (typeof driveRover === 'function') driveRover('stop');
 });
 
