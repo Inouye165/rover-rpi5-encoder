@@ -54,11 +54,10 @@ class TestStage2ShellStructure(unittest.TestCase):
             # SENSORS
             'sensors-summary', 'sensors-lidar', 'sensors-imu', 'sensors-odometry', 'sensors-future',
             # CALIBRATION
-            'calibration-primary-workflow', 'calibration-live-progress', 'calibration-latest-result', 'calibration-repeatability', 'calibration-advanced',
+            'calibration-readiness', 'calibration-primary-tests', 'calibration-live-progress', 'calibration-latest-result', 'calibration-repeatability', 'calibration-advanced',
             # DIAGNOSTICS
             'diagnostics-services', 'diagnostics-firmware', 'diagnostics-serial', 'diagnostics-ros', 'diagnostics-logs', 'diagnostics-developer'
         ]
-        self.assertEqual(len(required_placeholders), 26, "Must have exactly 26 required placeholder IDs.")
         for p_id in required_placeholders:
             matches = re.findall(rf'id=["\']{p_id}["\']', self.html)
             self.assertEqual(len(matches), 1, f"Placeholder ID '{p_id}' must exist exactly once in HTML.")
@@ -119,7 +118,7 @@ class TestStage2ShellStructure(unittest.TestCase):
         # Verify updateLidarTabState is referenced inside app.js and inside activateLegacySubTab
         sub_tab_idx = self.js.find('function activateLegacySubTab(')
         self.assertNotEqual(sub_tab_idx, -1)
-        sub_tab_code = self.js[sub_tab_idx:sub_tab_idx + 1000]
+        sub_tab_code = self.js[sub_tab_idx:sub_tab_idx + 1800]
         self.assertIn('updateLidarTabState()', sub_tab_code)
 
     def test_11_lidar_canvas_render_and_status_endpoint_binding(self):

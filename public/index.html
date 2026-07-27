@@ -469,32 +469,531 @@
           </div>
         </div>
 
-        <div class="v2-placeholder-grid">
-          <div class="v2-placeholder-card" id="calibration-primary-workflow">
-            <span class="card-label">Placeholder Region: calibration-primary-workflow (Stage 5)</span>
-            <h3>Primary Calibration Workflow</h3>
-            <p>Destination for wheel verification, Auto 1 m Forward, Auto 90° Left, and Auto 90° Right test buttons.</p>
-          </div>
-          <div class="v2-placeholder-card" id="calibration-live-progress">
-            <span class="card-label">Placeholder Region: calibration-live-progress (Stage 5)</span>
-            <h3>Live Test Progress HUD</h3>
-            <p>Destination for real-time distance/yaw progress tracking and safety HUD during auto tests.</p>
-          </div>
-          <div class="v2-placeholder-card" id="calibration-latest-result">
-            <span class="card-label">Placeholder Region: calibration-latest-result (Stage 5)</span>
-            <h3>Latest Test Result</h3>
-            <p>Destination for target errors, elapsed duration, and completion status result cards.</p>
-          </div>
-          <div class="v2-placeholder-card" id="calibration-repeatability">
-            <span class="card-label">Placeholder Region: calibration-repeatability (Stage 5)</span>
-            <h3>Repeatability & Statistics</h3>
-            <p>Destination for Phase 5 repeatability counters, pass rate %, mean error, and history logs.</p>
-          </div>
-          <div class="v2-placeholder-card" id="calibration-advanced">
-            <span class="card-label">Placeholder Region: calibration-advanced (Stage 5)</span>
-            <h3>Advanced Calibration & Maintenance</h3>
-            <p>Destination for 2m/360° manual tools, raised-wheel maintenance testing, and LiDAR straight-line wizard.</p>
-          </div>
+        <div id="calibration-workflow-container" style="display: flex; flex-direction: column; gap: 20px;">
+
+          <!-- 1. Calibration Readiness Panel -->
+          <section class="panel glass" id="calibration-readiness">
+            <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin:0; color: var(--cyan-glow);">📋 System Calibration Readiness & Safety Gate</h3>
+              <span id="v2-calib-readiness-badge" class="badge badge-success" style="font-weight: bold; padding: 6px 12px; font-size: 12px;">READY</span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; font-family: monospace; font-size: 12px; margin-bottom: 15px;">
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">ROVER ARM STATE</div>
+                <div id="v2-calib-readiness-armed" style="font-weight: bold; color: #10b981;">Disarmed</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">AUTO CALIB STATE</div>
+                <div id="v2-calib-readiness-active" style="font-weight: bold; color: #38bdf8;">Idle</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">SERIAL CONNECTION</div>
+                <div id="v2-calib-readiness-serial" style="font-weight: bold; color: #10b981;">Connected</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">TELEMETRY VALIDITY</div>
+                <div id="v2-calib-readiness-telemetry" style="font-weight: bold; color: #10b981;">Fresh</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">ODOMETRY VALIDITY</div>
+                <div id="v2-calib-readiness-odom" style="font-weight: bold; color: #10b981;">Fresh</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">E-STOP STATUS</div>
+                <div id="v2-calib-readiness-estop" style="font-weight: bold; color: #10b981;">Clear</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">WHEEL DIAMETER</div>
+                <div id="v2-calib-readiness-diameter" style="font-weight: bold; color: var(--cyan-glow);">0.065 m</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">TRACK WIDTH</div>
+                <div id="v2-calib-readiness-trackwidth" style="font-weight: bold; color: #a855f7;">0.382 m</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="color: var(--text-muted); font-size: 10px;">TICKS / REV</div>
+                <div id="v2-calib-readiness-ticks" style="font-weight: bold; color: #fbbf24;">1894.0</div>
+              </div>
+            </div>
+
+            <div id="v2-calib-readiness-banner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 10px 15px; border-radius: 8px; font-size: 13px; font-weight: bold;">
+              ⚠️ NOT READY FOR CALIBRATION: <span id="v2-calib-readiness-reasons">Checking...</span>
+            </div>
+          </section>
+
+          <!-- 2. Wheel Verification Panel -->
+          <section class="panel glass" id="calibration-wheel-verification">
+            <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin:0; color: var(--cyan-glow);">🛠️ Step 1 — Wheel Verification (Raised-Wheel Maintenance Mode)</h3>
+              <span id="maint-status-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Locked</span>
+            </div>
+
+            <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 10px; padding: 12px;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; color: #fff;">
+                  <input type="checkbox" id="maint-safety-chk" style="accent-color: var(--primary); cursor: pointer;">
+                  <span>I confirm the rover is physically raised and supported with all 4 wheels completely off the floor.</span>
+                </label>
+              </div>
+
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
+                <!-- Front Left (M1 / Motor 0) -->
+                <div style="background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="font-weight: bold; color: var(--cyan-glow); font-size: 14px;">Front Left (M1 / Motor 0)</div>
+                  <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">PWM Limit: 50 | Timeout: 2.0s</div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button id="btn-m1-fwd" class="btn btn-primary" onclick="runSingleMotorTest(0, 'forward')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m1 FWD</button>
+                    <button id="btn-m1-rev" class="btn btn-secondary" onclick="runSingleMotorTest(0, 'reverse')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m1 REV</button>
+                  </div>
+                </div>
+
+                <!-- Rear Left (M3 / Motor 2) -->
+                <div style="background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="font-weight: bold; color: var(--cyan-glow); font-size: 14px;">Rear Left (M3 / Motor 2)</div>
+                  <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">PWM Limit: 50 | Timeout: 2.0s</div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button id="btn-m3-fwd" class="btn btn-primary" onclick="runSingleMotorTest(2, 'forward')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m3 FWD</button>
+                    <button id="btn-m3-rev" class="btn btn-secondary" onclick="runSingleMotorTest(2, 'reverse')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m3 REV</button>
+                  </div>
+                </div>
+
+                <!-- Front Right (M2 / Motor 1) -->
+                <div style="background: rgba(16, 185, 129, 0.03); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="font-weight: bold; color: #10b981; font-size: 14px;">Front Right (M2 / Motor 1)</div>
+                  <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">PWM Limit: 50 | Timeout: 2.0s</div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button id="btn-m2-fwd" class="btn btn-primary" onclick="runSingleMotorTest(1, 'forward')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m2 FWD</button>
+                    <button id="btn-m2-rev" class="btn btn-secondary" onclick="runSingleMotorTest(1, 'reverse')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m2 REV</button>
+                  </div>
+                </div>
+
+                <!-- Rear Right (M4 / Motor 3) -->
+                <div style="background: rgba(16, 185, 129, 0.03); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="font-weight: bold; color: #10b981; font-size: 14px;">Rear Right (M4 / Motor 3)</div>
+                  <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">PWM Limit: 50 | Timeout: 2.0s</div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button id="btn-m4-fwd" class="btn btn-primary" onclick="runSingleMotorTest(3, 'forward')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m4 FWD</button>
+                    <button id="btn-m4-rev" class="btn btn-secondary" onclick="runSingleMotorTest(3, 'reverse')" style="font-weight: bold; padding: 8px; border-radius: 6px; font-size: 12px;">m4 REV</button>
+                  </div>
+                </div>
+              </div>
+
+              <button id="btn-stop-all-maint" class="btn" onclick="stopAllMaintenance()" style="width: 100%; font-weight: bold; padding: 10px; border-radius: 6px; background: #ef4444; color: #fff; border: none; font-size: 13px; cursor: pointer;">🛑 STOP ALL (Emergency Stop & Lock Output)</button>
+
+              <div id="maint-test-result-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 10px; padding: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 10px;">
+                  <h4 style="margin: 0; color: var(--accent); font-size: 13px;">📊 Individual Wheel Test Result Card</h4>
+                  <button id="btn-clear-test-result" onclick="clearTestResult()" style="background: #374151; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 11px;">Clear Test Result</button>
+                </div>
+
+                <div id="maint-test-error-banner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; border-radius: 6px; padding: 8px; margin-bottom: 10px; font-weight: bold; font-size: 12px;">
+                  ⚠️ <span id="maint-test-error-msg">No test run yet.</span>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 11px; margin-bottom: 10px;">
+                  <div>Target Motor: <span id="maint-test-motor" style="font-weight: bold; color: var(--accent);">--</span></div>
+                  <div>Wheel Label: <span id="maint-test-label" style="font-weight: bold;">--</span></div>
+                  <div>Commanded PWM/Dir: <span id="maint-test-cmd" style="font-weight: bold;">--</span></div>
+                  <div>Elapsed Time: <span id="maint-test-time" style="font-weight: bold;">--</span></div>
+                  <div>Auto-Stop Status: <span id="maint-test-autostop" style="font-weight: bold; color: #10b981;">--</span></div>
+                  <div>Rover Armed State: <span id="maint-test-armed" style="font-weight: bold; color: #6b7280;">Disarmed</span></div>
+                  <div>Target Motor Delta: <span id="maint-test-delta-enc" style="font-weight: bold;">--</span></div>
+                  <div>Encoder Activity: <span id="maint-test-steady" style="font-weight: bold;">--</span></div>
+                  <div>Isolation Check: <span id="maint-test-isolation" style="font-weight: bold;">--</span></div>
+                </div>
+
+                <table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 11px; text-align: left;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted);">
+                      <th style="padding: 4px;">Wheel</th>
+                      <th style="padding: 4px;">Start Count</th>
+                      <th style="padding: 4px;">End Count</th>
+                      <th style="padding: 4px;">Delta</th>
+                      <th style="padding: 4px;">Isolation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 4px; font-weight: bold; color: var(--cyan-glow);">m1 (Front Left)</td>
+                      <td id="enc-start-m1" style="padding: 4px;">--</td>
+                      <td id="enc-end-m1" style="padding: 4px;">--</td>
+                      <td id="enc-delta-m1" style="padding: 4px; font-weight: bold;">--</td>
+                      <td id="enc-iso-m1" style="padding: 4px;">--</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 4px; font-weight: bold; color: var(--green-glow);">m2 (Front Right)</td>
+                      <td id="enc-start-m2" style="padding: 4px;">--</td>
+                      <td id="enc-end-m2" style="padding: 4px;">--</td>
+                      <td id="enc-delta-m2" style="padding: 4px; font-weight: bold;">--</td>
+                      <td id="enc-iso-m2" style="padding: 4px;">--</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 4px; font-weight: bold; color: var(--cyan-glow);">m3 (Rear Left)</td>
+                      <td id="enc-start-m3" style="padding: 4px;">--</td>
+                      <td id="enc-end-m3" style="padding: 4px;">--</td>
+                      <td id="enc-delta-m3" style="padding: 4px; font-weight: bold;">--</td>
+                      <td id="enc-iso-m3" style="padding: 4px;">--</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 4px; font-weight: bold; color: var(--green-glow);">m4 (Rear Right)</td>
+                      <td id="enc-start-m4" style="padding: 4px;">--</td>
+                      <td id="enc-end-m4" style="padding: 4px;">--</td>
+                      <td id="enc-delta-m4" style="padding: 4px; font-weight: bold;">--</td>
+                      <td id="enc-iso-m4" style="padding: 4px;">--</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- 3. Primary Automatic Calibration Controls -->
+          <section class="panel glass" id="calibration-primary-tests">
+            <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin:0; color: var(--cyan-glow);">🎯 Step 2 — Primary Closed-Loop Floor Tests</h3>
+              <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Floor Space Required</span>
+            </div>
+
+            <div class="auto-calib-warning-box" style="margin-bottom: 15px;">
+              <strong style="color: #ffb700; font-size: 0.9rem;">⚠️ SAFETY WARNING:</strong> The rover will drive autonomously on the floor. Maintain clear space and remain ready to click E-stop.
+            </div>
+
+            <div id="auto-calib-active-banner" class="auto-calib-banner auto-calib-active-banner" style="display: none; margin-bottom: 15px;">
+              ⚠️ AUTOMATIC MOVEMENT ACTIVE — REMAIN NEAR E-STOP ⚠️
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+              <button id="btn-auto-fwd-1m" class="btn btn-primary btn-auto-fwd-1m" onclick="promptAutoCalib('forward_1m')" style="font-weight: bold; background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff;">
+                🚗 Auto 1 m Forward
+              </button>
+              <button id="btn-auto-turn-left" class="btn btn-primary btn-auto-turn-left" onclick="promptAutoCalib('turn_left_90')" style="font-weight: bold; background: linear-gradient(135deg, #7e22ce 0%, #6b21a8 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff;">
+                ↺ Auto 90° Left
+              </button>
+              <button id="btn-auto-turn-right" class="btn btn-primary btn-auto-turn-right" onclick="promptAutoCalib('turn_right_90')" style="font-weight: bold; background: linear-gradient(135deg, #059669 0%, #047857 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff;">
+                ↻ Auto 90° Right
+              </button>
+              <button id="btn-auto-abort" class="btn btn-danger" onclick="abortAutoCalibrationTest()" style="font-weight: bold; background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff;">
+                🛑 Abort Test
+              </button>
+            </div>
+          </section>
+
+          <!-- 4. Live Progress Panel -->
+          <section class="panel glass" id="calibration-live-progress">
+            <div id="auto-calib-hud" class="auto-calib-hud" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
+              <h3 style="margin-top:0; margin-bottom:12px; color: var(--primary); font-size: 1rem; display: flex; align-items: center; justify-content: space-between;">
+                <span>📊 Live Closed-Loop Progress & Safety HUD</span>
+                <span id="auto-calib-hud-phase" class="badge auto-calib-hud-phase" style="background: rgba(255,255,255,0.1); color: #fff;">IDLE</span>
+              </h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; font-family: monospace; font-size: 12px;">
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">ACTIVE TEST</div>
+                  <div id="auto-calib-val-test" class="auto-calib-val-test" style="font-weight: bold; color: var(--cyan-glow); font-size: 13px;">None</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">ELAPSED TIME</div>
+                  <div id="auto-calib-val-elapsed" class="auto-calib-val-elapsed" style="font-weight: bold; color: #fff; font-size: 13px;">0.0 s</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">MEASURED DISTANCE</div>
+                  <div id="auto-calib-val-dist" class="auto-calib-val-dist" style="font-weight: bold; color: #38bdf8; font-size: 13px;">0.000 m</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">MEASURED YAW</div>
+                  <div id="auto-calib-val-yaw" class="auto-calib-val-yaw" style="font-weight: bold; color: #a855f7; font-size: 13px;">0.0°</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">TELEMETRY / ODOM AGE</div>
+                  <div id="auto-calib-val-ages" class="auto-calib-val-ages" style="font-weight: bold; color: #10b981; font-size: 13px;">0ms / 0ms</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">MOTOR COMMAND</div>
+                  <div id="auto-calib-val-cmd" class="auto-calib-val-cmd" style="font-weight: bold; color: #fbbf24; font-size: 13px;">[0, 0, 0, 0]</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                  <div style="color: var(--text-muted); font-size: 10px;">STOP REASON</div>
+                  <div id="auto-calib-val-reason" class="auto-calib-val-reason" style="font-weight: bold; color: var(--text-muted); font-size: 13px;">None</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 5. Latest Result Panel -->
+          <section class="panel glass" id="calibration-latest-result">
+            <div id="auto-calib-result-card" class="auto-calib-result-card" style="display: none; background: rgba(13, 17, 39, 0.9); border: 1px solid var(--cyan-glow); border-radius: 12px; padding: 15px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 12px;">
+                <h3 style="margin: 0; color: #fff; font-size: 1rem;">📋 Latest Test Result Card</h3>
+                <span id="auto-calib-result-badge" class="badge auto-calib-result-badge" style="font-weight: bold; font-size: 13px; padding: 4px 14px; border-radius: 20px;">UNKNOWN</span>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; font-size: 12px;">
+                <div>
+                  <div style="color: var(--text-muted);">Requested Test:</div>
+                  <div id="res-test-type" class="res-test-type" style="font-weight: bold; color: var(--cyan-glow);">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Starting Pose:</div>
+                  <div id="res-start-pose" class="res-start-pose" style="font-weight: bold; color: #fff; font-family: monospace;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Ending Pose:</div>
+                  <div id="res-ending-pose" class="res-ending-pose" style="font-weight: bold; color: #fff; font-family: monospace;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Measured Distance:</div>
+                  <div id="res-measured-dist" class="res-measured-dist" style="font-weight: bold; color: #38bdf8;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Measured Yaw:</div>
+                  <div id="res-measured-yaw" class="res-measured-yaw" style="font-weight: bold; color: #a855f7;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Target Errors:</div>
+                  <div id="res-target-errors" class="res-target-errors" style="font-weight: bold; color: #fbbf24;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Elapsed Duration:</div>
+                  <div id="res-elapsed-time" class="res-elapsed-time" style="font-weight: bold; color: #fff;">-</div>
+                </div>
+                <div>
+                  <div style="color: var(--text-muted);">Stop Reason & Safety:</div>
+                  <div id="res-stop-reason" class="res-stop-reason" style="font-weight: bold; color: #f43f5e;">-</div>
+                </div>
+              </div>
+              <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                <button id="btn-clear-calib-result" class="btn" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 6px 12px; font-size: 12px;">Dismiss Result</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 6. Repeatability History Dashboard -->
+          <section class="panel glass" id="calibration-repeatability">
+            <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <h3 style="margin:0; color: var(--cyan-glow);">📊 Step 3 — Commissioning Repeatability History</h3>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <label for="cal-surface-type" style="font-size: 12px; color: var(--text-muted); font-weight: bold;">Surface:</label>
+                <select id="cal-surface-type" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;" onchange="saveSurfaceType()">
+                  <option value="Carpet">Carpet</option>
+                  <option value="Hardwood">Hardwood</option>
+                  <option value="Concrete">Concrete</option>
+                  <option value="Tile">Tile</option>
+                  <option value="Linoleum">Linoleum</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 12px;">
+              <div id="repeatability-stats-hud" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px;">
+                <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                  <span>📊 Repeatability Session Statistics</span>
+                  <span id="rep-val-passrate" style="color: #10b981;">Pass Rate: --%</span>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; font-size: 11px;">
+                  <div>Total Runs: <span id="rep-val-count" style="font-weight: bold; color: #fff;">0</span></div>
+                  <div>Dist Mean Err: <span id="rep-val-dist-mean" style="font-weight: bold; color: #38bdf8;">--</span></div>
+                  <div>Dist Std Dev: <span id="rep-val-dist-std" style="font-weight: bold; color: #38bdf8;">--</span></div>
+                  <div>Yaw Mean Err: <span id="rep-val-yaw-mean" style="font-weight: bold; color: #a855f7;">--</span></div>
+                  <div>Norm Yaw Std: <span id="rep-val-yaw-std" style="font-weight: bold; color: #a855f7;">--</span></div>
+                </div>
+                <div style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; font-size: 11px; display: flex; gap: 12px; flex-wrap: wrap;">
+                  <div>Fwd 1m: <span id="rep-rec-fwd" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                  <div>Left 90°: <span id="rep-rec-left" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                  <div>Right 90°: <span id="rep-rec-right" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
+                  <div>Total Rec: <span id="rep-rec-total" style="font-weight: bold; color: var(--cyan-glow);">0/15</span></div>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <a href="/api/calibration/repeatability/export/json" target="_blank" class="btn" style="flex: 1; background: #0284c7; font-weight: bold; text-align: center; display: inline-block; padding: 8px 0; border-radius: 6px; color: #fff; text-decoration: none; font-size: 12px;">📥 Export JSON</a>
+                <a href="/api/calibration/repeatability/export/csv" target="_blank" class="btn" style="flex: 1; background: #059669; font-weight: bold; text-align: center; display: inline-block; padding: 8px 0; border-radius: 6px; color: #fff; text-decoration: none; font-size: 12px;">📊 Export CSV</a>
+                <button class="btn" style="flex: 0.8; background: #dc2626; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff; font-size: 12px;" onclick="clearRepeatabilityHistory()">🗑️ Clear History</button>
+              </div>
+
+              <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                  <thead>
+                    <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border); color: var(--text-muted);">
+                      <th style="padding: 6px 10px;">Date/Time</th>
+                      <th style="padding: 6px 10px;">Test Type</th>
+                      <th style="padding: 6px 10px;">Surface</th>
+                      <th style="padding: 6px 10px;">Firmware</th>
+                      <th style="padding: 6px 10px;">Results Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody id="cal-history-table-body">
+                    <tr>
+                      <td colspan="5" style="text-align: center; padding: 15px; color: var(--text-muted);">No logs available in database.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- 7. Advanced Calibration Collapsible Section -->
+          <details id="calibration-advanced" class="panel glass" style="border-radius: 12px; overflow: hidden;">
+            <summary style="padding: 15px; font-weight: bold; color: var(--cyan-glow); cursor: pointer; font-size: 1rem; background: rgba(255,255,255,0.02);">
+              ⚙️ Advanced Calibration & Specialist Commissioning Tools
+            </summary>
+            <div style="padding: 15px; display: flex; flex-direction: column; gap: 20px;">
+
+              <!-- Auto 2m Distance Test Card -->
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <h4 style="margin:0; color: #38bdf8;">📏 Auto 2-Meter Distance Test</h4>
+                  <span id="cal-dist-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Idle</span>
+                </div>
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">Requires at least 8 feet of clear floor space. Measures 2.00m straight drive error.</p>
+                <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; font-size: 12px; margin-bottom: 10px;">
+                  <span>Current Wheel Diameter:</span>
+                  <span id="cal-dist-current-diameter" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">-- mm</span>
+                </div>
+                <button id="btn-cal-run-distance" class="btn" style="background: var(--primary-grad); font-weight: bold; padding: 10px; width: 100%; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startDistanceTest()">🚗 Run 2-Meter Distance Test</button>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; color: var(--text-muted);">Trial 1 Actual (m):</label>
+                    <input type="number" id="cal-dist-trial1" step="0.001" placeholder="e.g. 1.98" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px;">
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; color: var(--text-muted);">Trial 2 Actual (m):</label>
+                    <input type="number" id="cal-dist-trial2" step="0.001" placeholder="e.g. 1.99" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px;">
+                  </div>
+                </div>
+
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 11px; font-family: monospace; margin-top: 10px;">
+                  <div>Proposed Dia 1: <span id="cal-dist-prop1">-- mm</span></div>
+                  <div>Proposed Dia 2: <span id="cal-dist-prop2">-- mm</span></div>
+                  <div>Average Proposed: <span id="cal-dist-avg" style="color: var(--cyan-glow); font-weight: bold;">-- mm</span></div>
+                  <div>Difference: <span id="cal-dist-diff">-- %</span></div>
+                </div>
+                <div id="cal-dist-warning" style="display: none; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 6px; font-size: 11px; color: #fca5a5; margin-top: 8px;">
+                  ⚠️ Trial differences exceed 3%.
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 10px;">
+                  <button id="btn-cal-dist-apply" class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: not-allowed; color: #fff; opacity: 0.6;" disabled onclick="applyWheelCalibration()">Apply</button>
+                  <button id="btn-cal-dist-reject" class="btn" style="flex: 0.8; background: #ef4444; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: pointer; color: #fff;" onclick="clearDistanceTrials()">Reject</button>
+                  <button id="btn-cal-dist-restore" class="btn" style="flex: 1; background: #4b5563; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Prev</button>
+                </div>
+              </div>
+
+              <!-- Auto 360° Rotation Test Card -->
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <h4 style="margin:0; color: #a855f7;">🔄 Auto 360° Rotation Tests</h4>
+                  <span id="cal-rot-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Idle</span>
+                </div>
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">Requires clear spot. Rotates on spot 360° CW or CCW.</p>
+                <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; font-size: 12px; margin-bottom: 10px;">
+                  <span>Current Track Width:</span>
+                  <span id="cal-rot-current-width" style="font-family: monospace; font-weight: bold; color: #a855f7;">-- mm</span>
+                </div>
+
+                <!-- Compass heading visualizer -->
+                <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px;">
+                  <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span style="font-size: 10px; color: var(--text-muted);">Heading Angle</span>
+                    <span id="cal-rot-compass-angle" style="font-family: monospace; font-size: 13px; color: #a855f7; font-weight: bold;">0.0°</span>
+                  </div>
+                  <div style="position: relative; width: 48px; height: 48px; border-radius: 50%; border: 1px dashed rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.03); display: flex; align-items: center; justify-content: center;">
+                    <svg viewBox="0 0 100 100" style="width: 30px; height: 30px;">
+                      <g id="cal-rot-arrow-group" style="transform-origin: 50px 50px; transition: transform 0.05s linear; transform: rotate(0deg);">
+                        <polygon points="50,10 65,45 55,45 55,90 45,90 45,45 35,45" fill="#a855f7" />
+                        <circle cx="50" cy="50" r="3" fill="#fff" />
+                      </g>
+                    </svg>
+                  </div>
+                </div>
+
+                <div id="cal-rot-realtime-display" style="display: none; text-align: center; margin-bottom: 10px; padding: 8px; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 6px;">
+                  <div style="font-size: 11px; color: var(--text-muted);">System Est. Yaw</div>
+                  <div id="cal-rot-realtime-value" style="font-size: 1.8rem; font-weight: bold; color: #a855f7; font-family: monospace;">0.0°</div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                  <button id="btn-cal-run-rot-cw" class="btn" style="background: linear-gradient(135deg, #a855f7, #7c3aed); font-weight: bold; padding: 8px; border: none; border-radius: 6px; cursor: pointer; color: #fff; font-size: 12px;" onclick="startRotationTest(true)">🔄 CW 360° Test</button>
+                  <button id="btn-cal-run-rot-ccw" class="btn" style="background: linear-gradient(135deg, #a855f7, #7c3aed); font-weight: bold; padding: 8px; border: none; border-radius: 6px; cursor: pointer; color: #fff; font-size: 12px;" onclick="startRotationTest(false)">🔄 CCW 360° Test</button>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; color: var(--text-muted);">CW Actual Angle (°):</label>
+                    <input type="number" id="cal-rot-cw-angle" placeholder="e.g. 358" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px;">
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; color: var(--text-muted);">CCW Actual Angle (°):</label>
+                    <input type="number" id="cal-rot-ccw-angle" placeholder="e.g. 362" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 12px;">
+                  </div>
+                </div>
+
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 11px; font-family: monospace; margin-top: 10px;">
+                  <div>Proposed Width CW: <span id="cal-rot-prop1">-- mm</span></div>
+                  <div>Proposed Width CCW: <span id="cal-rot-prop2">-- mm</span></div>
+                  <div>Average Proposed: <span id="cal-rot-avg" style="color: #a855f7; font-weight: bold;">-- mm</span></div>
+                  <div>Difference: <span id="cal-rot-diff">-- %</span></div>
+                </div>
+                <div id="cal-rot-warning" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 6px; font-size: 11px; color: #fde68a; margin-top: 8px;">
+                  ⚠️ Trial differences exceed 5%.
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 10px;">
+                  <button id="btn-cal-rot-apply" class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: not-allowed; color: #fff; opacity: 0.6;" disabled onclick="applyTrackWidthCalibration()">Apply</button>
+                  <button id="btn-cal-rot-reject" class="btn" style="flex: 0.8; background: #ef4444; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: pointer; color: #fff;" onclick="clearRotationTrials()">Reject</button>
+                  <button id="btn-cal-rot-restore" class="btn" style="flex: 1; background: #4b5563; font-weight: bold; border: none; padding: 6px; border-radius: 4px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Prev</button>
+                </div>
+              </div>
+
+              <!-- Database summary & proposed configuration inspector -->
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 15px;">
+                <h4 style="margin:0 0 10px 0; color: var(--cyan-glow);">🎛️ Database Stored Parameters</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; font-size: 12px;">
+                  <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 6px; padding: 8px;">
+                    <div style="font-weight: bold; color: var(--cyan-glow);">Current</div>
+                    <div>Wheel Dia: <span id="db-cur-diameter">--</span> mm</div>
+                    <div>Track Width: <span id="db-cur-track">--</span> mm</div>
+                  </div>
+                  <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 6px; padding: 8px;">
+                    <div style="font-weight: bold; color: var(--accent);">Proposed</div>
+                    <div>Wheel Dia: <span id="db-prop-diameter">--</span> mm</div>
+                    <div>Track Width: <span id="db-prop-track">--</span> mm</div>
+                  </div>
+                  <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 6px; padding: 8px;">
+                    <div style="font-weight: bold; color: var(--text-muted);">Previous</div>
+                    <div>Wheel Dia: <span id="db-prev-diameter">--</span> mm</div>
+                    <div>Track Width: <span id="db-prev-track">--</span> mm</div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </details>
+
+          <!-- 8. Calibration Constants Panel -->
+          <section class="panel glass" id="calibration-constants">
+            <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin:0; color: var(--cyan-glow);">📐 Canonical Kinematic Calibration Constants</h3>
+              <span class="badge badge-info">READ-ONLY AUDIT</span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+              <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">TICKS PER REVOLUTION</div>
+                <div id="v2-const-val-ticks" style="font-size: 1.2rem; font-weight: bold; color: #fbbf24; font-family: monospace;">1894.0</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">ESP32 Quadrature Encoder Count</div>
+              </div>
+
+              <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">WHEEL DIAMETER</div>
+                <div id="v2-const-val-diameter" style="font-size: 1.2rem; font-weight: bold; color: var(--cyan-glow); font-family: monospace;">0.065 m</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Physical Tire Outer Diameter</div>
+              </div>
+
+              <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">EFFECTIVE TRACK WIDTH</div>
+                <div id="v2-const-val-track" style="font-size: 1.2rem; font-weight: bold; color: #a855f7; font-family: monospace;">0.382 m</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Effective Wheel Spacing Width</div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -1771,236 +2270,11 @@
           </div>
         </section>
 
-        <!-- PHASE 3 — RAISED-WHEEL MAINTENANCE PANEL -->
-        <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
-            <h2>🛠️ Phase 3 — Individual-Wheel Maintenance Testing</h2>
-            <span id="maint-status-badge" class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Locked</span>
-          </div>
-
-          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
-            <!-- Left Column: Controls & Safety Ack -->
-            <div style="flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 15px;">
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📋 Maintenance Safety Verification</h3>
-                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px;">
-                  <input type="checkbox" id="maint-safety-chk" style="accent-color: var(--primary); cursor: pointer;">
-                  <span>I confirm the rover is physically raised and supported with all 4 wheels completely off the floor.</span>
-                </label>
-              </div>
-
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">⚙️ Individual Wheel Controls (PWM: 50, Timeout: 2.0s)</h3>
-                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-                  Each button invokes the safe <code>/api/maintenance/run_test</code> endpoint for 2.0 seconds and auto-stops.
-                  <br>Wheel Mappings: <code>m1</code>: Left Front | <code>m2</code>: Right Front | <code>m3</code>: Left Rear | <code>m4</code>: Right Rear
-                </p>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
-                  <button id="btn-m1-fwd" class="btn btn-primary" onclick="runSingleMotorTest(0, 'forward')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m1 FWD (Left Front)</button>
-                  <button id="btn-m1-rev" class="btn btn-secondary" onclick="runSingleMotorTest(0, 'reverse')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m1 REV (Left Front)</button>
-
-                  <button id="btn-m2-fwd" class="btn btn-primary" onclick="runSingleMotorTest(1, 'forward')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m2 FWD (Right Front)</button>
-                  <button id="btn-m2-rev" class="btn btn-secondary" onclick="runSingleMotorTest(1, 'reverse')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m2 REV (Right Front)</button>
-
-                  <button id="btn-m3-fwd" class="btn btn-primary" onclick="runSingleMotorTest(2, 'forward')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m3 FWD (Left Rear)</button>
-                  <button id="btn-m3-rev" class="btn btn-secondary" onclick="runSingleMotorTest(2, 'reverse')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m3 REV (Left Rear)</button>
-
-                  <button id="btn-m4-fwd" class="btn btn-primary" onclick="runSingleMotorTest(3, 'forward')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m4 FWD (Right Rear)</button>
-                  <button id="btn-m4-rev" class="btn btn-secondary" onclick="runSingleMotorTest(3, 'reverse')" style="font-weight: bold; padding: 10px; border-radius: 6px;">m4 REV (Right Rear)</button>
-                <button id="btn-stop-all-maint" class="btn" onclick="stopAllMaintenance()" style="width: 100%; font-weight: bold; padding: 12px; border-radius: 6px; background: #ef4444; color: #fff; border: none; font-size: 14px; cursor: pointer;">🛑 STOP ALL (Emergency Stop & Lock Output)</button>
-            <!-- Right Column: Prominent Per-Test Results Card -->
-            <div style="flex: 1.5; min-width: 350px; display: flex; flex-direction: column; gap: 15px;">
-              <div id="maint-test-result-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px;">
-                  <h3 style="margin: 0; color: var(--accent);">📊 Individual Wheel Test Result Card</h3>
-                  <button id="btn-clear-test-result" onclick="clearTestResult()" style="background: #374151; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px;">Clear Test Result</button>
-                </div>
-
-                <!-- Failure Diagnostic Banner -->
-                <div id="maint-test-error-banner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; border-radius: 8px; padding: 10px; margin-bottom: 12px; font-weight: bold; font-size: 13px;">
-                  ⚠️ <span id="maint-test-error-msg">No test run yet.</span>
-                </div>
-
-                <!-- Test Summary Grid -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace; font-size: 12px; margin-bottom: 15px;">
-                  <div>Target Motor:</div><div id="maint-test-motor" style="font-weight: bold; color: var(--accent);">--</div>
-                  <div>Wheel Mapping:</div><div id="maint-test-label" style="font-weight: bold;">--</div>
-                  <div>Commanded PWM/Dir:</div><div id="maint-test-cmd" style="font-weight: bold;">--</div>
-                  <div>Elapsed Test Time:</div><div id="maint-test-time" style="font-weight: bold;">--</div>
-                  <div>Auto-Stop Status:</div><div id="maint-test-autostop" style="font-weight: bold; color: #10b981;">--</div>
-                  <div>Rover Armed State:</div><div id="maint-test-armed" style="font-weight: bold; color: #6b7280;">Disarmed</div>
-                  <div>Target Motor Delta:</div><div id="maint-test-delta-enc" style="font-weight: bold; font-size: 14px;">--</div>
-                  <div>Encoder Activity:</div><div id="maint-test-steady" style="font-weight: bold;">--</div>
-                  <div>Cross-Motor Isolation:</div><div id="maint-test-isolation" style="font-weight: bold;">--</div>
-                </div>
-
-                <!-- Four Encoder Snapshot & Delta Table -->
-                <h4 style="margin: 0 0 8px 0; color: var(--text-muted); font-size: 12px;">Four-Wheel Encoder Snapshot & Per-Test Deltas:</h4>
-                <table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px; text-align: left;">
-                  <thead>
-                    <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted);">
-                      <th style="padding: 6px;">Wheel</th>
-                      <th style="padding: 6px;">Start Count</th>
-                      <th style="padding: 6px;">End Count</th>
-                      <th style="padding: 6px;">Per-Test Delta</th>
-                      <th style="padding: 6px;">Isolation Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                      <td style="padding: 6px; font-weight: bold; color: var(--cyan-glow);">m1 (Left Front)</td>
-                      <td id="enc-start-m1" style="padding: 6px;">--</td>
-                      <td id="enc-end-m1" style="padding: 6px;">--</td>
-                      <td id="enc-delta-m1" style="padding: 6px; font-weight: bold;">--</td>
-                      <td id="enc-iso-m1" style="padding: 6px;">--</td>
-                    </tr>
-                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                      <td style="padding: 6px; font-weight: bold; color: var(--green-glow);">m2 (Right Front)</td>
-                      <td id="enc-start-m2" style="padding: 6px;">--</td>
-                      <td id="enc-end-m2" style="padding: 6px;">--</td>
-                      <td id="enc-delta-m2" style="padding: 6px; font-weight: bold;">--</td>
-                      <td id="enc-iso-m2" style="padding: 6px;">--</td>
-                    </tr>
-                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                      <td style="padding: 6px; font-weight: bold; color: var(--cyan-glow);">m3 (Left Rear)</td>
-                      <td id="enc-start-m3" style="padding: 6px;">--</td>
-                      <td id="enc-end-m3" style="padding: 6px;">--</td>
-                      <td id="enc-delta-m3" style="padding: 6px; font-weight: bold;">--</td>
-                      <td id="enc-iso-m3" style="padding: 6px;">--</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 6px; font-weight: bold; color: var(--green-glow);">m4 (Right Rear)</td>
-                      <td id="enc-start-m4" style="padding: 6px;">--</td>
-                      <td id="enc-end-m4" style="padding: 6px;">--</td>
-                      <td id="enc-delta-m4" style="padding: 6px; font-weight: bold;">--</td>
-                      <td id="enc-iso-m4" style="padding: 6px;">--</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </section>
-
-      <!-- Section: Experimental Closed-Loop Calibration Tests -->
-        <section class="panel glass" style="grid-column: span 12; margin-top: 20px;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-            <h2 style="margin:0; color: var(--cyan-glow);">🎯 Experimental Closed-Loop Calibration Tests</h2>
-            <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Restricted Closed-Loop Motion</span>
-          </div>
-
-          <!-- Warning Box -->
-          <div class="auto-calib-warning-box" style="margin-bottom: 20px;">
-            <strong style="color: #ffb700; font-size: 0.95rem;">⚠️ SAFETY WARNING:</strong>
-            <br>• The rover will move automatically.
-            <br>• Use only on a clear, level floor.
-            <br>• Remain ready to press E-stop at all times.
-          </div>
-
-          <!-- AUTOMATIC MOVEMENT ACTIVE Banner (Hidden when idle) -->
-          <div id="auto-calib-active-banner" class="auto-calib-banner auto-calib-active-banner" style="display: none; margin-bottom: 20px;">
-            ⚠️ AUTOMATIC MOVEMENT ACTIVE — REMAIN NEAR E-STOP ⚠️
-          </div>
-
-          <!-- Control Buttons -->
-          <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
-            <button id="btn-auto-fwd-1m" class="btn btn-primary btn-auto-fwd-1m" onclick="promptAutoCalib('forward_1m')" style="flex: 1; min-width: 180px; font-weight: bold; background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);">
-              🚗 Auto 1 m Forward
-            </button>
-            <button id="btn-auto-turn-left" class="btn btn-primary btn-auto-turn-left" onclick="promptAutoCalib('turn_left_90')" style="flex: 1; min-width: 180px; font-weight: bold; background: linear-gradient(135deg, #7e22ce 0%, #6b21a8 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff; box-shadow: 0 4px 12px rgba(126, 34, 206, 0.3);">
-              ↺ Auto 90° Left
-            </button>
-            <button id="btn-auto-turn-right" class="btn btn-primary btn-auto-turn-right" onclick="promptAutoCalib('turn_right_90')" style="flex: 1; min-width: 180px; font-weight: bold; background: linear-gradient(135deg, #059669 0%, #047857 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);">
-              ↻ Auto 90° Right
-            </button>
-            <button id="btn-auto-abort" class="btn btn-danger" onclick="abortAutoCalibrationTest()" style="flex: 1; min-width: 180px; font-weight: bold; background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); border: none; padding: 12px; border-radius: 8px; cursor: pointer; color: #fff; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);">
-              🛑 Abort Test
-            </button>
-          </div>
-
-          <!-- Live Telemetry & Progress HUD -->
-          <div id="auto-calib-hud" class="auto-calib-hud" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
-            <h3 style="margin-top:0; margin-bottom:15px; color: var(--primary); font-size: 1rem; display: flex; align-items: center; justify-content: space-between;">
-              <span>📊 Live Closed-Loop Progress & Safety HUD</span>
-              <span id="auto-calib-hud-phase" class="badge auto-calib-hud-phase" style="background: rgba(255,255,255,0.1); color: #fff;">IDLE</span>
-            </h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; font-family: monospace; font-size: 13px;">
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">ACTIVE TEST</div>
-                <div id="auto-calib-val-test" class="auto-calib-val-test" style="font-weight: bold; color: var(--cyan-glow); font-size: 14px;">None</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">ELAPSED TIME</div>
-                <div id="auto-calib-val-elapsed" class="auto-calib-val-elapsed" style="font-weight: bold; color: #fff; font-size: 14px;">0.0 s</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">MEASURED DISTANCE</div>
-                <div id="auto-calib-val-dist" class="auto-calib-val-dist" style="font-weight: bold; color: #38bdf8; font-size: 14px;">0.000 m</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">MEASURED YAW</div>
-                <div id="auto-calib-val-yaw" class="auto-calib-val-yaw" style="font-weight: bold; color: #a855f7; font-size: 14px;">0.0°</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">TELEMETRY / ODOM AGE</div>
-                <div id="auto-calib-val-ages" class="auto-calib-val-ages" style="font-weight: bold; color: #10b981; font-size: 14px;">0ms / 0ms</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">MOTOR COMMAND</div>
-                <div id="auto-calib-val-cmd" class="auto-calib-val-cmd" style="font-weight: bold; color: #fbbf24; font-size: 14px;">[0, 0, 0, 0]</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--text-muted); font-size: 11px;">STOP REASON</div>
-                <div id="auto-calib-val-reason" class="auto-calib-val-reason" style="font-weight: bold; color: var(--text-muted); font-size: 14px;">None</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Completion Result Card -->
-          <div id="auto-calib-result-card" class="auto-calib-result-card" style="display: none; background: rgba(13, 17, 39, 0.9); border: 1px solid var(--cyan-glow); border-radius: 12px; padding: 20px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 15px;">
-              <h3 style="margin: 0; color: #fff;">📋 Automatic Calibration Test Result Card</h3>
-              <span id="auto-calib-result-badge" class="badge auto-calib-result-badge" style="font-weight: bold; font-size: 14px; padding: 6px 16px; border-radius: 20px;">UNKNOWN</span>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; font-size: 13px;">
-              <div>
-                <div style="color: var(--text-muted);">Requested Test:</div>
-                <div id="res-test-type" class="res-test-type" style="font-weight: bold; color: var(--cyan-glow);">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Starting Pose (x, y, yaw):</div>
-                <div id="res-start-pose" class="res-start-pose" style="font-weight: bold; color: #fff; font-family: monospace;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Ending Pose (x, y, yaw):</div>
-                <div id="res-ending-pose" class="res-ending-pose" style="font-weight: bold; color: #fff; font-family: monospace;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Measured Distance:</div>
-                <div id="res-measured-dist" class="res-measured-dist" style="font-weight: bold; color: #38bdf8;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Measured Yaw Change:</div>
-                <div id="res-measured-yaw" class="res-measured-yaw" style="font-weight: bold; color: #a855f7;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Target Errors (Dist / Yaw):</div>
-                <div id="res-target-errors" class="res-target-errors" style="font-weight: bold; color: #fbbf24;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Elapsed Duration:</div>
-                <div id="res-elapsed-time" class="res-elapsed-time" style="font-weight: bold; color: #fff;">-</div>
-              </div>
-              <div>
-                <div style="color: var(--text-muted);">Stop Reason & Safety:</div>
-                <div id="res-stop-reason" class="res-stop-reason" style="font-weight: bold; color: #f43f5e;">-</div>
-              </div>
-              <div style="grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: 10px;">
-                <button id="btn-clear-calib-result" class="btn" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff;">Dismiss Result</button>
-              </div>
-            </div>
-          </div>
+        <!-- LEGACY COMPATIBILITY NOTICE FOR CALIBRATION TOOLS -->
+        <section class="panel glass" style="grid-column: span 12; margin-top: 20px; text-align: center; padding: 30px; background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px;">
+          <h3 style="color: var(--cyan-glow); margin-bottom: 10px; font-size: 1.2rem;">🛡️ Wheel Verification & Auto Calibration Tools Have Moved</h3>
+          <p style="color: var(--text-muted); margin-bottom: 20px; font-size: 0.9rem;">Individual wheel testing and closed-loop automatic calibration floor tests have been migrated to the primary Calibration tab.</p>
+          <button class="btn btn-primary legacy-redirect-btn" data-legacy-target="tab-calibration-v2" style="font-weight: bold; padding: 10px 20px; border-radius: 8px;">Open Calibration Tab</button>
         </section>
 
       </main>
@@ -2009,151 +2283,11 @@
     <!-- Motion Calibration & Backtrack Tab -->
     <div id="tab-motion-cal" class="tab-content">
       <main class="dashboard-grid">
-        <!-- 1. Distance Calibration Card -->
-        <section class="panel glass" style="grid-column: span 6;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>📏 Distance Calibration (2-Meter)</h2>
-            <span id="cal-dist-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Idle</span>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 15px;">
-            <div style="background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.15); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.4;">
-              <strong>Procedure:</strong> Ensure at least 8 feet of clear floor. Hold the gamepad deadman and click <em>Run 2-Meter Distance Test</em>. The rover will drive straight forward and stop at 2.00m reported odometry. Measure the actual physical distance traveled and enter it below. Run this test twice to calibrate wheel diameter.
-            </div>
-
-            <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; font-size: 13px;">
-              <span style="font-weight: bold; color: var(--text-muted);">Current Wheel Diameter:</span>
-              <span id="cal-dist-current-diameter" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">-- mm</span>
-            </div>
-
-            <button id="btn-cal-run-distance" class="btn" style="background: var(--primary-grad); font-weight: bold; padding: 10px; width: 100%; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startDistanceTest()">🚗 Run 2-Meter Distance Test</button>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 11px; color: var(--text-muted);">Trial 1 Actual (meters):</label>
-                <input type="number" id="cal-dist-trial1" step="0.001" placeholder="e.g. 1.98" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 13px;">
-              </div>
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 11px; color: var(--text-muted);">Trial 2 Actual (meters):</label>
-                <input type="number" id="cal-dist-trial2" step="0.001" placeholder="e.g. 1.99" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 13px;">
-              </div>
-            </div>
-
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 5px;">
-              <div style="display: flex; justify-content: space-between;">
-                <span>Trial 1 Proposed Dia:</span><span id="cal-dist-prop1">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span>Trial 2 Proposed Dia:</span><span id="cal-dist-prop2">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; font-weight: bold; border-top: 1px solid var(--border); padding-top: 5px; margin-top: 5px; color: var(--accent);">
-                <span>Average Proposed Dia:</span><span id="cal-dist-avg" style="color: var(--cyan-glow);">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span>Difference Percentage:</span><span id="cal-dist-diff" style="font-weight: bold;">-- %</span>
-              </div>
-            </div>
-
-            <div id="cal-dist-warning" style="display: none; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 8px; font-size: 11px; color: #fca5a5; text-align: center;">
-              ⚠️ Trial differences exceed 3%. Recalibration required.
-            </div>
-
-            <div style="display: flex; gap: 8px; margin-top: 5px;">
-              <button id="btn-cal-dist-apply" class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: not-allowed; color: #fff; opacity: 0.6;" disabled onclick="applyWheelCalibration()">Apply</button>
-              <button id="btn-cal-dist-reject" class="btn" style="flex: 0.8; background: #ef4444; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="clearDistanceTrials()">Reject</button>
-              <button id="btn-cal-dist-restore" class="btn" style="flex: 1; background: #4b5563; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Prev</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- 2. Rotation Calibration Card -->
-        <section class="panel glass" style="grid-column: span 6;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>🔄 Rotation Calibration (360°)</h2>
-            <span id="cal-rot-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Idle</span>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 15px;">
-            <div style="background: rgba(168, 85, 247, 0.03); border: 1px solid rgba(168, 85, 247, 0.15); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.4;">
-              <strong>Procedure:</strong> Place the rover on a consistent surface. Hold the deadman and run both the Clockwise (CW) and Counterclockwise (CCW) 360° tests. The rover will rotate on the spot. Measure the physical rotation error and enter the actual physical rotation angle below.
-            </div>
-
-            <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; font-size: 13px;">
-              <span style="font-weight: bold; color: var(--text-muted);">Current Effective Track Width:</span>
-              <span id="cal-rot-current-width" style="font-family: monospace; font-weight: bold; color: #a855f7;">-- mm</span>
-            </div>
-
-            <!-- Compass heading visualizer -->
-            <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 5px;">
-              <div style="display: flex; flex-direction: column; gap: 2px;">
-                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-family: monospace;">Chassis Heading</span>
-                <span id="cal-rot-compass-angle" style="font-family: monospace; font-size: 14px; color: #a855f7; font-weight: bold;">0.0°</span>
-              </div>
-              <div style="position: relative; width: 64px; height: 64px; border-radius: 50%; border: 2px dashed rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.03); display: flex; align-items: center; justify-content: center;">
-                <span style="position: absolute; top: 1px; font-size: 7px; font-weight: bold; color: var(--text-muted);">N</span>
-                <span style="position: absolute; right: 2px; font-size: 7px; font-weight: bold; color: var(--text-muted);">E</span>
-                <span style="position: absolute; bottom: 1px; font-size: 7px; font-weight: bold; color: var(--text-muted);">S</span>
-                <span style="position: absolute; left: 2px; font-size: 7px; font-weight: bold; color: var(--text-muted);">W</span>
-                <svg viewBox="0 0 100 100" style="width: 38px; height: 38px;">
-                  <g id="cal-rot-arrow-group" style="transform-origin: 50px 50px; transition: transform 0.05s linear; transform: rotate(0deg);">
-                    <polygon points="50,10 65,45 55,45 55,90 45,90 45,45 35,45" fill="#a855f7" filter="drop-shadow(0 0 3px rgba(168, 85, 247, 0.6))" />
-                    <circle cx="50" cy="50" r="3" fill="#fff" />
-                  </g>
-                </svg>
-              </div>
-            </div>
-
-            <!-- Real-time visual rotation feedback -->
-            <div id="cal-rot-realtime-display" style="display: none; text-align: center; margin-bottom: 10px; padding: 12px; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 8px;">
-              <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-family: monospace;">System Est. Rotation (Yaw)</div>
-              <div id="cal-rot-realtime-value" style="font-size: 2.2rem; font-weight: bold; color: #a855f7; text-shadow: 0 0 10px rgba(168, 85, 247, 0.5); font-family: monospace; margin: 4px 0;">0.0°</div>
-              <div style="font-size: 0.75rem; color: #f87171; font-weight: bold; line-height: 1.3;">⚠️ Release Deadman Switch at exactly 360° physical rotation!</div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <button id="btn-cal-run-rot-cw" class="btn" style="background: linear-gradient(135deg, #a855f7, #7c3aed); font-weight: bold; padding: 10px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startRotationTest(true)">🔄 CW 360° Test</button>
-              <button id="btn-cal-run-rot-ccw" class="btn" style="background: linear-gradient(135deg, #a855f7, #7c3aed); font-weight: bold; padding: 10px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startRotationTest(false)">🔄 CCW 360° Test</button>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <button id="btn-cal-verify-rot-cw" class="btn" style="background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.4); font-weight: bold; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff; font-size: 11px;" onclick="startRotationVerification(true)">✅ Verify CW (Auto-Stop)</button>
-              <button id="btn-cal-verify-rot-ccw" class="btn" style="background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.4); font-weight: bold; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff; font-size: 11px;" onclick="startRotationVerification(false)">✅ Verify CCW (Auto-Stop)</button>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 11px; color: var(--text-muted);">CW Actual Angle (deg):</label>
-                <input type="number" id="cal-rot-cw-angle" placeholder="e.g. 358" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 13px;">
-              </div>
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 11px; color: var(--text-muted);">CCW Actual Angle (deg):</label>
-                <input type="number" id="cal-rot-ccw-angle" placeholder="e.g. 362" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 6px; border-radius: 4px; font-size: 13px;">
-              </div>
-            </div>
-
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 5px;">
-              <div style="display: flex; justify-content: space-between;">
-                <span>CW Proposed Width:</span><span id="cal-rot-prop1">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span>CCW Proposed Width:</span><span id="cal-rot-prop2">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; font-weight: bold; border-top: 1px solid var(--border); padding-top: 5px; margin-top: 5px; color: var(--accent);">
-                <span>Average Proposed Width:</span><span id="cal-rot-avg" style="color: #a855f7;">-- mm</span>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span>Difference Percentage:</span><span id="cal-rot-diff" style="font-weight: bold;">-- %</span>
-              </div>
-            </div>
-
-            <div id="cal-rot-warning" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 8px; font-size: 11px; color: #fde68a; text-align: center;">
-              ⚠️ Trial differences exceed 5%. Report: likely skid or surface inconsistency.
-            </div>
-
-            <div style="display: flex; gap: 8px; margin-top: 5px;">
-              <button id="btn-cal-rot-apply" class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: not-allowed; color: #fff; opacity: 0.6;" disabled onclick="applyTrackWidthCalibration()">Apply</button>
-              <button id="btn-cal-rot-reject" class="btn" style="flex: 0.8; background: #ef4444; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="clearRotationTrials()">Reject</button>
-              <button id="btn-cal-rot-restore" class="btn" style="flex: 1; background: #4b5563; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Prev</button>
-            </div>
-          </div>
+        <!-- LEGACY NOTICE: MOTION CALIBRATION & REPEATABILITY -->
+        <section class="panel glass" style="grid-column: span 12; text-align: center; padding: 25px; background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; margin-bottom: 20px;">
+          <h3 style="color: var(--cyan-glow); margin-bottom: 8px; font-size: 1.1rem;">🛡️ Advanced Motion Calibration & Repeatability Database Have Moved</h3>
+          <p style="color: var(--text-muted); margin-bottom: 15px; font-size: 0.85rem;">2m distance tuning, 360° rotation tuning, repeatability history, and export tools are now unified in the primary Calibration tab.</p>
+          <button class="btn btn-primary legacy-redirect-btn" data-legacy-target="tab-calibration-v2" style="font-weight: bold; padding: 8px 16px; border-radius: 6px;">Open Calibration Tab</button>
         </section>
 
         <!-- 3. Straight Out-and-Back Validation Card -->
@@ -2243,93 +2377,6 @@
               </div>
               <button class="btn" style="background: #4b5563; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="logBacktrackTrial()">Log Backtrack Validation</button>
             </div>
-          </div>
-        </section>
-
-        <!-- 5. Database Log & Storage Panel -->
-        <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>🎛️ Calibration Database & Storage</h2>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <label style="font-size: 12px; color: var(--text-muted); font-weight: bold;">Surface Type:</label>
-              <select id="cal-surface-type" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;" onchange="saveSurfaceType()">
-                <option value="Carpet">Carpet</option>
-                <option value="Hardwood">Hardwood</option>
-                <option value="Concrete">Concrete</option>
-                <option value="Tile">Tile</option>
-                <option value="Linoleum">Linoleum</option>
-              </select>
-            </div>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 15px;">
-
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
-              <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px;">
-                <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 5px;">Current Configuration:</div>
-                <div>Wheel Diameter: <span id="db-cur-diameter" style="font-family: monospace;">--</span> mm</div>
-                <div>Effective Track Width: <span id="db-cur-track" style="font-family: monospace;">--</span> mm</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px;">
-                <div style="font-weight: bold; color: var(--accent); margin-bottom: 5px;">Proposed Configuration:</div>
-                <div>Wheel Diameter: <span id="db-prop-diameter" style="font-family: monospace;">--</span> mm</div>
-                <div>Effective Track Width: <span id="db-prop-track" style="font-family: monospace;">--</span> mm</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px;">
-                <div style="font-weight: bold; color: var(--text-muted); margin-bottom: 5px;">Previous Configuration:</div>
-                <div>Wheel Diameter: <span id="db-prev-diameter" style="font-family: monospace;">--</span> mm</div>
-                <div>Effective Track Width: <span id="db-prev-track" style="font-family: monospace;">--</span> mm</div>
-              </div>
-            </div>
-
-            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-              <button class="btn" style="flex: 1.2; background: #10b981; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="applyRecommendedCalibration()">Apply Recommended Calibration</button>
-              <button class="btn" style="flex: 0.8; background: #4b5563; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="restorePreviousCalibration()">Restore Previous Calibration</button>
-              <a href="/api/calibration/repeatability/export/json" target="_blank" class="btn" style="flex: 1; background: #0284c7; font-weight: bold; text-align: center; display: inline-block; padding: 10px 0; border-radius: 6px; color: #fff; text-decoration: none;">📥 Export JSON</a>
-              <a href="/api/calibration/repeatability/export/csv" target="_blank" class="btn" style="flex: 1; background: #059669; font-weight: bold; text-align: center; display: inline-block; padding: 10px 0; border-radius: 6px; color: #fff; text-decoration: none;">📊 Export CSV</a>
-              <button class="btn" style="flex: 0.8; background: #dc2626; font-weight: bold; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="clearRepeatabilityHistory()">🗑️ Clear History</button>
-            </div>
-
-            <!-- Repeatability Session Statistics & Recommended Run HUD -->
-            <div id="repeatability-stats-hud" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; font-family: monospace; font-size: 12px;">
-              <div style="font-weight: bold; color: var(--cyan-glow); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-                <span>📊 Repeatability Session Statistics</span>
-                <span id="rep-val-passrate" style="color: #10b981;">Pass Rate: --%</span>
-              </div>
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; font-size: 11px;">
-                <div>Total Runs: <span id="rep-val-count" style="font-weight: bold; color: #fff;">0</span></div>
-                <div>Dist Mean Err: <span id="rep-val-dist-mean" style="font-weight: bold; color: #38bdf8;">--</span></div>
-                <div>Dist Std Dev: <span id="rep-val-dist-std" style="font-weight: bold; color: #38bdf8;">--</span></div>
-                <div>Yaw Mean Err: <span id="rep-val-yaw-mean" style="font-weight: bold; color: #a855f7;">--</span></div>
-                <div>Norm Yaw Std: <span id="rep-val-yaw-std" style="font-weight: bold; color: #a855f7;">--</span></div>
-              </div>
-              <div style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; font-size: 11px; display: flex; gap: 12px; flex-wrap: wrap;">
-                <div>Fwd 1m: <span id="rep-rec-fwd" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
-                <div>Left 90°: <span id="rep-rec-left" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
-                <div>Right 90°: <span id="rep-rec-right" style="font-weight: bold; color: #fbbf24;">0/5</span></div>
-                <div>Total Rec: <span id="rep-rec-total" style="font-weight: bold; color: var(--cyan-glow);">0/15</span></div>
-              </div>
-            </div>
-
-            <!-- History Logs Table -->
-            <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
-              <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
-                <thead>
-                  <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border); color: var(--text-muted);">
-                    <th style="padding: 8px 10px;">Date/Time</th>
-                    <th style="padding: 8px 10px;">Test Type</th>
-                    <th style="padding: 8px 10px;">Surface</th>
-                    <th style="padding: 8px 10px;">Firmware</th>
-                    <th style="padding: 8px 10px;">Results Summary</th>
-                  </tr>
-                </thead>
-                <tbody id="cal-history-table-body">
-                  <tr>
-                    <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No logs available in database.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
           </div>
         </section>
       </main>

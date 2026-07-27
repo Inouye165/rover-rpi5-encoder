@@ -1799,6 +1799,7 @@ function renderStage3V2Panels() {
   renderAutonomyV2();
   renderSensorsV2Summary();
   renderDiagnosticsV2();
+  if (typeof updateCalibrationReadiness === 'function') updateCalibrationReadiness();
 }
 
 function renderDriveV2Status() {
@@ -2132,10 +2133,15 @@ function updateLidarTabState() {
 }
 
 function activateTopTab(targetTabId) {
-  // Stage 4 Safety Requirement: Switching away from Drive tab immediately stops motors
+  // Stage 4 & 5 Safety Requirement: Switching away from Drive or Calibration tab immediately stops motors / aborts tests
   if (activeTopTabId === 'tab-drive-v2' && targetTabId !== 'tab-drive-v2') {
     if (typeof driveRover === 'function') {
       driveRover('stop');
+    }
+  }
+  if (activeTopTabId === 'tab-calibration-v2' && targetTabId !== 'tab-calibration-v2') {
+    if (typeof abortAutoCalibrationTest === 'function') {
+      abortAutoCalibrationTest();
     }
   }
 
@@ -2173,6 +2179,16 @@ function activateTopTab(targetTabId) {
 }
 
 function activateLegacySubTab(legacyTabId) {
+  // Safety check when leaving legacy calibrate or motion cal tabs
+  if ((activeLegacySubTabId === 'tab-calibrate' || activeLegacySubTabId === 'tab-motion-cal') && legacyTabId !== activeLegacySubTabId) {
+    if (typeof stopAllMaintenance === 'function') {
+      stopAllMaintenance();
+    }
+    if (typeof abortAutoCalibrationTest === 'function') {
+      abortAutoCalibrationTest();
+    }
+  }
+
   activeLegacySubTabId = legacyTabId;
 
   // Toggle sub-navigation button active states
@@ -2213,13 +2229,17 @@ legacySubButtons.forEach(btn => {
   });
 });
 
-// Bind Legacy Redirect Quick Buttons (e.g., "Open Current Legacy Drive Controls")
+// Bind Legacy Redirect Quick Buttons (e.g., "Open Current Legacy Drive Controls" or "Open Calibration Tab")
 document.querySelectorAll('.legacy-redirect-btn').forEach(btn => {
   btn.addEventListener('click', (e) => {
     e.preventDefault();
     const legacyTarget = btn.dataset.legacyTarget || 'tab-dashboard';
-    activateTopTab('tab-legacy');
-    activateLegacySubTab(legacyTarget);
+    if (legacyTarget.endsWith('-v2') || ['tab-drive-v2', 'tab-autonomy-v2', 'tab-sensors-v2', 'tab-calibration-v2', 'tab-diagnostics-v2'].includes(legacyTarget)) {
+      activateTopTab(legacyTarget);
+    } else {
+      activateTopTab('tab-legacy');
+      activateLegacySubTab(legacyTarget);
+    }
   });
 });
 
@@ -5191,8 +5211,111 @@ function startAutoCalibPolling() {
   }, 200);
 }
 
+function updateCalibrationReadiness() {
+  const badge = document.getElementById('v2-calib-readiness-badge');
+  const elArmed = document.getElementById('v2-calib-readiness-armed');
+  const elActive = document.getElementById('v2-calib-readiness-active');
+  const elSerial = document.getElementById('v2-calib-readiness-serial');
+  const elTelem = document.getElementById('v2-calib-readiness-telemetry');
+  const elOdom = document.getElementById('v2-calib-readiness-odom');
+  const elEstop = document.getElementById('v2-calib-readiness-estop');
+  const elDia = document.getElementById('v2-calib-readiness-diameter');
+  const elTrack = document.getElementById('v2-calib-readiness-trackwidth');
+  const elTicks = document.getElementById('v2-calib-readiness-ticks');
+  const banner = document.getElementById('v2-calib-readiness-banner');
+
+  const st = window.roverState || {};
+  const drv = st.drive || {};
+  const conn = st.connection || {};
+
+  const isArmed = !!drv.armed;
+  const isAutoActive = !!(window.lastAutoCalibStatus && window.lastAutoCalibStatus.active);
+  const serialOk = !!conn.serial;
+  const wsOk = !!conn.ws;
+  const estopActive = !!drv.estop;
+  const telemAge = conn.telemAgeMs !== undefined ? conn.telemAgeMs : 9999;
+  const odomAge = conn.odomAgeMs !== undefined ? conn.odomAgeMs : 9999;
+  const telemOk = telemAge < 2000;
+  const odomOk = odomAge < 2000;
+
+  if (elArmed) {
+    elArmed.textContent = isArmed ? 'ARMED' : 'Disarmed';
+    elArmed.style.color = isArmed ? '#f59e0b' : '#10b981';
+  }
+  if (elActive) {
+    elActive.textContent = isAutoActive ? 'ACTIVE' : 'Idle';
+    elActive.style.color = isAutoActive ? '#f59e0b' : '#38bdf8';
+  }
+  if (elSerial) {
+    elSerial.textContent = (serialOk && wsOk) ? 'Connected' : 'Disconnected';
+    elSerial.style.color = (serialOk && wsOk) ? '#10b981' : '#ef4444';
+  }
+  if (elTelem) {
+    elTelem.textContent = telemOk ? 'Fresh' : 'Stale';
+    elTelem.style.color = telemOk ? '#10b981' : '#ef4444';
+  }
+  if (elOdom) {
+    elOdom.textContent = odomOk ? 'Fresh' : 'Stale';
+    elOdom.style.color = odomOk ? '#10b981' : '#ef4444';
+  }
+  if (elEstop) {
+    elEstop.textContent = estopActive ? 'ACTIVE' : 'Clear';
+    elEstop.style.color = estopActive ? '#ef4444' : '#10b981';
+  }
+
+  // Active parameter readouts
+  const diaVal = currentWheelDiameter || 0.065;
+  const trackVal = currentTrackWidth || 0.382;
+  const wheelDiaMm = diaVal * 1000.0;
+  const trackMm = trackVal * 1000.0;
+  const ticksPerRev = 1894.0;
+
+  if (elDia) elDia.textContent = `${diaVal.toFixed(3)} m (${wheelDiaMm.toFixed(1)} mm)`;
+  if (elTrack) elTrack.textContent = `${trackVal.toFixed(3)} m (${trackMm.toFixed(1)} mm)`;
+  if (elTicks) elTicks.textContent = `${ticksPerRev.toFixed(1)}`;
+
+  // Also update Constants Readout section (#v2-calib-val-dia-m, etc.)
+  const cDiaM = document.getElementById('v2-calib-val-dia-m');
+  const cDiaMm = document.getElementById('v2-calib-val-dia-mm');
+  const cTrackM = document.getElementById('v2-calib-val-track-m');
+  const cTrackMm = document.getElementById('v2-calib-val-track-mm');
+  const cTicks = document.getElementById('v2-calib-val-ticks');
+
+  if (cDiaM) cDiaM.textContent = `${diaVal.toFixed(3)} m`;
+  if (cDiaMm) cDiaMm.textContent = `${wheelDiaMm.toFixed(1)} mm`;
+  if (cTrackM) cTrackM.textContent = `${trackVal.toFixed(3)} m`;
+  if (cTrackMm) cTrackMm.textContent = `${trackMm.toFixed(1)} mm`;
+  if (cTicks) cTicks.textContent = `${ticksPerRev.toFixed(1)}`;
+
+  // Check overall readiness
+  let issues = [];
+  if (!wsOk || !serialOk) issues.push('Serial connection disconnected');
+  if (!telemOk) issues.push('Telemetry stale or missing');
+  if (!odomOk) issues.push('Odometry stale or missing');
+  if (estopActive) issues.push('E-stop active');
+
+  const isReady = issues.length === 0;
+
+  if (badge) {
+    badge.textContent = isReady ? 'READY' : 'NOT READY';
+    badge.style.background = isReady ? '#10b981' : '#ef4444';
+    badge.style.color = '#fff';
+  }
+
+  if (banner) {
+    if (!isReady) {
+      banner.style.display = 'block';
+      banner.textContent = `⚠️ Safety Gate Inhibited: ${issues.join(' | ')}`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+}
+
 function updateAutoCalibUI(status) {
   if (!status) return;
+  window.lastAutoCalibStatus = status;
+  updateCalibrationReadiness();
 
   const setText = (idOrClass, val) => {
     document.querySelectorAll('#' + idOrClass + ', .' + idOrClass).forEach(el => {
@@ -5259,6 +5382,7 @@ function updateAutoCalibUI(status) {
 
 // Query initial automatic calibration status on page load
 document.addEventListener('DOMContentLoaded', () => {
+  updateCalibrationReadiness();
   fetch('/api/calibration/auto/status')
     .then(res => res.json())
     .then(data => {
