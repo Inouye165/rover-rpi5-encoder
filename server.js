@@ -1836,7 +1836,7 @@ wss.on('connection', (ws) => {
         case 'flash_reset':
         case 'read_flash':
           console.warn(`[Legacy command ignored] type: ${msg.type}`);
-          broadcast({ type: 'message', data: `Note: Command "${msg.type}" is not supported on the ROS Expansion Board V3.0 binary protocol.` });
+          broadcast({ type: 'message', data: `Note: Command "${msg.type}" is not supported on the Maker ESP32 binary protocol.` });
           break;
 
         default:
@@ -3019,9 +3019,11 @@ app.get('/api/encoders', (req, res) => {
 });
 
 app.get('/api/drive/status', (req, res) => {
+  const statusObj = latestNormalDriveStatus ? { ...latestNormalDriveStatus, cmdSource: cmdSource } : { armed: false, cmdSource: cmdSource };
   res.json({
     ok: true,
-    status: latestNormalDriveStatus || { armed: false },
+    status: statusObj,
+    cmdSource: cmdSource,
     floorTesting,
     backtracking,
     recording,

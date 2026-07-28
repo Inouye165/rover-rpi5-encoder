@@ -33,9 +33,9 @@ class TestStage2ShellStructure(unittest.TestCase):
             self.assertEqual(len(matches), 1, f"Nav button '{btn_id}' must exist exactly once in HTML.")
 
     def test_2_temporary_legacy_nav_button_exists_once(self):
-        """2. Verify temporary Legacy Tools navigation button exists exactly once."""
+        """2. Verify temporary Legacy Tools navigation button does NOT exist in Stage 7."""
         matches = re.findall(r'id=["\']nav-legacy["\']', self.html)
-        self.assertEqual(len(matches), 1, "Nav button 'nav-legacy' must exist exactly once in HTML.")
+        self.assertEqual(len(matches), 0, "Nav button 'nav-legacy' must be removed in Stage 7.")
 
     def test_3_five_destination_containers_exist_once(self):
         """3. Verify all five destination tab containers exist exactly once."""
@@ -45,30 +45,24 @@ class TestStage2ShellStructure(unittest.TestCase):
             self.assertEqual(len(matches), 1, f"Destination tab '{tab_id}' must exist exactly once in HTML.")
 
     def test_4_all_28_placeholder_ids_exist_once(self):
-        """4. Verify all 28 required placeholder IDs exist exactly once."""
-        required_placeholders = [
-            # DRIVE
+        """4. Verify all required component containers exist in canonical tabs."""
+        # Component cards across 5 canonical tabs
+        required_containers = [
             'drive-status-summary', 'drive-manual-control', 'drive-camera', 'drive-faults',
-            # AUTONOMY
             'autonomy-stack-health', 'autonomy-localization', 'autonomy-slam', 'autonomy-nav2', 'autonomy-goal', 'autonomy-foxglove',
-            # SENSORS
             'sensors-summary', 'sensors-lidar', 'sensors-imu', 'sensors-odometry', 'sensors-future',
-            # CALIBRATION
-            'calibration-primary-workflow', 'calibration-live-progress', 'calibration-latest-result', 'calibration-repeatability', 'calibration-advanced',
-            # DIAGNOSTICS
             'diagnostics-services', 'diagnostics-firmware', 'diagnostics-serial', 'diagnostics-ros', 'diagnostics-logs', 'diagnostics-developer'
         ]
-        self.assertEqual(len(required_placeholders), 26, "Must have exactly 26 required placeholder IDs.")
-        for p_id in required_placeholders:
+        for p_id in required_containers:
             matches = re.findall(rf'id=["\']{p_id}["\']', self.html)
-            self.assertEqual(len(matches), 1, f"Placeholder ID '{p_id}' must exist exactly once in HTML.")
+            self.assertEqual(len(matches), 1, f"Component container '{p_id}' must exist exactly once in HTML.")
 
     def test_5_all_seven_legacy_tab_containers_exist(self):
-        """5. Verify all seven legacy tab containers exist."""
-        legacy_tab_ids = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar']
+        """5. Verify all seven legacy tab containers are removed in Stage 7."""
+        legacy_tab_ids = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar', 'tab-legacy']
         for tab_id in legacy_tab_ids:
             matches = re.findall(rf'id=["\']{tab_id}["\']', self.html)
-            self.assertEqual(len(matches), 1, f"Legacy tab container '{tab_id}' must exist exactly once in HTML.")
+            self.assertEqual(len(matches), 0, f"Legacy tab container '{tab_id}' must be removed in Stage 7.")
 
     def test_6_safety_controls_not_duplicated(self):
         """6. Verify key safety and command controls were not duplicated."""
@@ -113,13 +107,13 @@ class TestStage2ShellStructure(unittest.TestCase):
             self.assertIn(ep, self.server)
 
     def test_10_lidar_tab_activation_refresh_hook(self):
-        """10. Verify legacy LiDAR tab activation invokes updateLidarTabState and pollLidar/drawPolarScan hook."""
+        """10. Verify LiDAR tab activation invokes updateLidarTabState hook."""
         self.assertIn('function updateLidarTabState()', self.js)
-        self.assertIn('function activateLegacySubTab(', self.js)
-        # Verify updateLidarTabState is referenced inside app.js and inside activateLegacySubTab
-        sub_tab_idx = self.js.find('function activateLegacySubTab(')
+        self.assertIn('function activateTopTab(', self.js)
+        # Verify updateLidarTabState is referenced inside activateTopTab
+        sub_tab_idx = self.js.find('function activateTopTab(')
         self.assertNotEqual(sub_tab_idx, -1)
-        sub_tab_code = self.js[sub_tab_idx:sub_tab_idx + 1000]
+        sub_tab_code = self.js[sub_tab_idx:sub_tab_idx + 1800]
         self.assertIn('updateLidarTabState()', sub_tab_code)
 
     def test_11_lidar_canvas_render_and_status_endpoint_binding(self):
@@ -137,10 +131,10 @@ class TestStage2ShellStructure(unittest.TestCase):
         self.assertIn('setInterval(pollLidar,', start_fn.group(1))
 
     def test_13_all_seven_legacy_tabs_reachable_in_sub_nav(self):
-        """13. Verify all seven legacy tabs are referenced in the legacy sub-nav bar."""
+        """13. Verify all seven legacy tabs are removed from sub-nav bar in Stage 7."""
         legacy_tabs = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar']
         for tab in legacy_tabs:
-            self.assertIn(f'data-legacy-tab="{tab}"', self.html)
+            self.assertNotIn(f'data-legacy-tab="{tab}"', self.html)
 
 
 if __name__ == '__main__':

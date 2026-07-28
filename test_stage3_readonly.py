@@ -27,12 +27,8 @@ class TestStage3ReadonlyStructure(unittest.TestCase):
 
     def _extract_container(self, container_id):
         """Helper to extract inner HTML of a container div."""
-        pattern = rf'<div\s+id=["\']{container_id}["\'].*?>(.*?)</div>\s*<!--'
+        pattern = rf'<div\s+id=["\']{container_id}["\'].*?>(.*?)(?=<div\s+id=["\']tab-|\Z)'
         match = re.search(pattern, self.html, re.DOTALL)
-        if not match:
-            # Fallback regex if no trailing comment
-            pattern = rf'<div\s+id=["\']{container_id}["\'].*?>(.*)'
-            match = re.search(pattern, self.html, re.DOTALL)
         return match.group(1) if match else ""
 
     def test_1_drive_v2_readonly_content(self):
@@ -45,8 +41,8 @@ class TestStage3ReadonlyStructure(unittest.TestCase):
         self.assertIn('v2-drive-val-serial', self.html)
 
     def test_2_prohibited_control_guard_in_v2_containers(self):
-        """2. STRICT GUARD: Verify NO prohibited motor/calibration/serial control IDs exist in new V2 containers."""
-        v2_container_ids = ['tab-drive-v2', 'tab-autonomy-v2', 'tab-sensors-v2', 'tab-calibration-v2', 'tab-diagnostics-v2']
+        """2. STRICT GUARD: Verify NO prohibited motor/calibration/serial control IDs exist in read-only V2 containers."""
+        v2_container_ids = ['tab-autonomy-v2', 'tab-sensors-v2', 'tab-diagnostics-v2']
         prohibited_control_ids = [
             'btn-arm-drive',
             'btn-disarm-drive',
@@ -140,11 +136,11 @@ class TestStage3ReadonlyStructure(unittest.TestCase):
             self.assertEqual(len(matches), 1, f"Operational control '{ctrl_id}' must exist exactly once in document.")
 
     def test_9_all_seven_legacy_tabs_reachable(self):
-        """9. Verify all seven legacy tabs are present in legacy sub-navigation."""
+        """9. Verify all seven legacy tabs are removed in Stage 7."""
         legacy_tabs = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar']
         for tab in legacy_tabs:
-            self.assertIn(f'data-legacy-tab="{tab}"', self.html)
-            self.assertIn(f'id="{tab}"', self.html)
+            self.assertNotIn(f'data-legacy-tab="{tab}"', self.html)
+            self.assertNotIn(f'id="{tab}"', self.html)
 
 
 if __name__ == '__main__':

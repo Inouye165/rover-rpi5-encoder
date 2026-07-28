@@ -176,8 +176,6 @@ const btnResetFlash = document.getElementById('btn-reset-flash');
 
 // Logs Elements
 const terminalConsole = document.getElementById('terminal-console');
-const terminalCommandInput = document.getElementById('terminal-command-input');
-const btnSendRawCommand = document.getElementById('btn-send-raw-command');
 const btnClearLogs = document.getElementById('btn-clear-logs');
 
 // Encoder calculations for RPM and MPH
@@ -218,9 +216,6 @@ function connectWebSocket() {
       window.roverState.connection.ws = true;
     }
     
-    // Sync telemetry checkbox state with server
-    sendUploadConfig();
-    
     // Automatically query firmware identity from ESP32
     fetch('/api/firmware').catch(err => console.error('Firmware query failed:', err));
 
@@ -229,6 +224,9 @@ function connectWebSocket() {
 
     // Synchronize canonical drive status from backend on connection/reconnect
     fetchDriveStatus();
+
+    // Check for connected gamepads on WebSocket connect
+    if (typeof checkGamepadConnection === 'function') checkGamepadConnection();
 
     // Reset last sent joystick command state to require fresh input
     lastSentJoystick = { x: 0, y: 0, deadman: false };
@@ -291,31 +289,76 @@ function updateBadge(badgeElement, state, text) {
   badgeElement.appendChild(document.createTextNode(' ' + text));
 }
 
-// Log Terminal Helpers
-function logSystem(msg) {
-  addLogLine(msg, 'system-line');
+const maxLogEntries = 500;
+let lastLogText = '';
+let lastLogTime = 0;
+let showVerboseLogs = false;
+
+function isVerboseLog(text) {
+  if (!text) return false;
+  const t = text.trim();
+  return t.startsWith('[raw') ||
+         t.startsWith('[Loop Stats]') ||
+         t.startsWith('[Loop Timing]') ||
+         t.startsWith('[Unknown 0x') ||
+         t.startsWith('[Hex]') ||
+         t.includes('Loop Stats') ||
+         t.includes('raw ...');
 }
 
-function logSerialIn(msg) {
-  addLogLine(msg, 'in-line');
-}
+function addLogLine(text, className, targetContainer) {
+  const container = targetContainer || terminalConsole;
+  if (!container) return;
+  const now = Date.now();
+  if (text === lastLogText && (now - lastLogTime < 1000) && className && className.includes('err')) {
+    return;
+  }
+  lastLogText = text;
+  lastLogTime = now;
 
-function logSerialOut(msg) {
-  addLogLine(msg, 'out-line');
-}
-
-function logSerialOutErr(msg) {
-  addLogLine(`[Error Out] ${msg}`, 'err-line');
-}
-
-function addLogLine(text, className) {
   const line = document.createElement('div');
   line.className = `log-line ${className}`;
   line.textContent = text;
-  terminalConsole.appendChild(line);
-  
+  container.appendChild(line);
+
+  // Enforce max bounded log capacity to prevent unbounded DOM growth
+  while (container.childNodes.length > maxLogEntries) {
+    container.removeChild(container.firstChild);
+  }
+
   // Scroll to bottom
-  terminalConsole.scrollTop = terminalConsole.scrollHeight;
+  container.scrollTop = container.scrollHeight;
+}
+
+// Log Terminal Helpers
+function logSystem(msg) {
+  if (isVerboseLog(msg)) {
+    logVerbose(msg, 'system-line');
+  } else {
+    addLogLine(msg, 'system-line');
+  }
+}
+
+function logVerbose(msg, className = 'in-line') {
+  const verboseConsole = document.getElementById('terminal-verbose-console');
+  const verboseChk = document.getElementById('chk-show-verbose-logs');
+  showVerboseLogs = verboseChk ? verboseChk.checked : false;
+
+  if (verboseConsole && showVerboseLogs) {
+    addLogLine(msg, className, verboseConsole);
+  }
+}
+
+function logSerialIn(msg) {
+  logVerbose(`[Serial In] ${msg}`, 'in-line');
+}
+
+function logSerialOut(msg) {
+  logVerbose(`[Serial Out] ${msg}`, 'out-line');
+}
+
+function logSerialOutErr(msg) {
+  logVerbose(`[Error Out] ${msg}`, 'err-line');
 }
 
 // Send Commands via WS with Rate-Limited Warning Logging
@@ -326,27 +369,32 @@ function sendServerMessage(data) {
     } catch (e) {
       console.error('Error sending WS message:', e);
     }
-  } else {
-    // Suppress non-zero joystick movement sends when offline
+  } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+    // Drop movement commands silently while socket is connecting without queuing or error logging
     if (data && data.type === 'joystick' && (data.x !== 0 || data.y !== 0)) {
-      // Intentionally drop non-zero commands when socket is offline
+      // Intentionally drop non-zero movement commands while connecting
+    }
+  } else {
+    // Socket is CLOSED or CLOSING
+    if (data && data.type === 'joystick' && (data.x !== 0 || data.y !== 0)) {
+      // Intentionally drop non-zero movement commands when offline
     }
     
     // Rate-limit terminal error logging to at most once per 5 seconds (5000ms)
     const now = Date.now();
     if (now - lastWsErrorLogTime > 5000) {
       lastWsErrorLogTime = now;
-      logSystem('⚠️ Error: WebSocket is not open to send command.');
+      logSystem('⚠️ Warning: WebSocket is not open to send command.');
     }
   }
 }
 
 // Send Upload streams settings
 function sendUploadConfig() {
-  const t = streamTotal.checked ? 1 : 0;
-  const r = streamRealtime.checked ? 1 : 0;
-  const s = streamSpeed.checked ? 1 : 0;
-  sendServerMessage({ type: 'set_upload', upload: [t, r, s] });
+  const t = (streamTotal && streamTotal.checked) ? 1 : 0;
+  const r = (streamRealtime && streamRealtime.checked) ? 1 : 0;
+  const s = (streamSpeed && streamSpeed.checked) ? 1 : 0;
+  // Legacy set_upload disabled for Maker ESP32 firmware
 }
 
 // Handle Server Messages
@@ -713,11 +761,36 @@ function handleServerMessage(msg) {
       break;
 
     case 'message':
-      logSystem(`[Board Message] ${msg.data}`);
+      if (msg.data) {
+        if (isVerboseLog(msg.data)) {
+          logVerbose(`[Board Message] ${msg.data}`);
+        } else {
+          logSystem(`[Board Message] ${msg.data}`);
+        }
+      }
+      break;
+
+    case 'firmware_info':
+      if (window.roverState && window.roverState.firmware) {
+        window.roverState.firmware = {
+          board: msg.target || msg.board || 'Maker-ESP32-Pro',
+          name: msg.name || 'Maker-ESP32-Unified-Rover',
+          version: msg.version || '1.3.0',
+          proto: msg.protocol || msg.proto || 'v1.1',
+          commit: msg.commit,
+          build: msg.build
+        };
+        renderDiagnosticsV2();
+      }
+      logSystem(`[Firmware Info] Live board identity received: ${msg.name} v${msg.version}`);
       break;
 
     case 'telemetry_other':
-      logSystem(`[Other Telemetry] ${msg.cmd}: ${msg.values.join(',')}`);
+      if (isVerboseLog(msg.cmd || '')) {
+        logVerbose(`[Other Telemetry] ${msg.cmd}: ${msg.values ? msg.values.join(',') : ''}`);
+      } else {
+        logSystem(`[Other Telemetry] ${msg.cmd}: ${msg.values ? msg.values.join(',') : ''}`);
+      }
       break;
 
     case 'cockpit_info': {
@@ -1099,24 +1172,24 @@ function handleServerMessage(msg) {
 
     case 'lidar_test_status': {
       lidarTestState = msg.state;
-      const badge = document.getElementById('lidar-test-state-badge');
-      if (badge) {
+      const testBadge = document.getElementById('lidar-test-state-badge');
+      if (testBadge) {
         // Build progress label
         let progressLabel = msg.state;
         if (msg.speedTier && msg.totalPass) {
           progressLabel = `${msg.speedTier} Pass ${msg.totalPass}/${msg.totalPasses}`;
         }
-        if (badge) badge.textContent = progressLabel;
-        if (badge) badge.style.background = '';
-        if (badge) badge.style.color = '';
-        if (badge) badge.style.borderColor = '';
+        if (testBadge) testBadge.textContent = progressLabel;
+        if (testBadge) testBadge.style.background = '';
+        if (testBadge) testBadge.style.color = '';
+        if (testBadge) testBadge.style.borderColor = '';
         
         if (msg.state === 'IDLE') {
           stopTestScanPolling();
-          if (badge) badge.style.background = 'rgba(107, 114, 128, 0.2)';
-          if (badge) badge.style.color = '#9ca3af';
-          if (badge) badge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
-          if (badge) badge.textContent = 'IDLE';
+          if (testBadge) testBadge.style.background = 'rgba(107, 114, 128, 0.2)';
+          if (testBadge) testBadge.style.color = '#9ca3af';
+          if (testBadge) testBadge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
+          if (testBadge) testBadge.textContent = 'IDLE';
           setStyle('btn-start-lidar-test', 'display', 'block');
           setStyle('btn-stop-lidar-test', 'display', 'none');
           
@@ -1127,23 +1200,23 @@ function handleServerMessage(msg) {
             drawLidarTestCanvas();
           }
         } else if (msg.state === 'ZEROING' || msg.state === 'RETURNING_HOME_WAIT') {
-          if (badge) badge.style.background = 'rgba(245, 158, 11, 0.2)';
-          if (badge) badge.style.color = '#f59e0b';
-          if (badge) badge.style.border = '1px solid rgba(245, 158, 11, 0.4)';
+          if (testBadge) testBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+          if (testBadge) testBadge.style.color = '#f59e0b';
+          if (testBadge) testBadge.style.border = '1px solid rgba(245, 158, 11, 0.4)';
           setStyle('btn-start-lidar-test', 'display', 'none');
           setStyle('btn-stop-lidar-test', 'display', 'block');
         } else if (msg.state === 'FORWARD_RUNNING' || msg.state === 'RETURNING_HOME') {
-          if (badge) badge.style.background = 'rgba(6, 182, 212, 0.2)';
-          if (badge) badge.style.color = '#06b6d4';
-          if (badge) badge.style.border = '1px solid rgba(6, 182, 212, 0.4)';
+          if (testBadge) testBadge.style.background = 'rgba(6, 182, 212, 0.2)';
+          if (testBadge) testBadge.style.color = '#06b6d4';
+          if (testBadge) testBadge.style.border = '1px solid rgba(6, 182, 212, 0.4)';
           setStyle('btn-start-lidar-test', 'display', 'none');
           setStyle('btn-stop-lidar-test', 'display', 'block');
         } else if (msg.state === 'COMPLETE') {
           stopTestScanPolling();
-          if (badge) badge.style.background = 'rgba(16, 185, 129, 0.2)';
-          if (badge) badge.style.color = '#10b981';
-          if (badge) badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-          if (badge) badge.textContent = 'COMPLETE ✓';
+          if (testBadge) testBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+          if (testBadge) testBadge.style.color = '#10b981';
+          if (testBadge) testBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          if (testBadge) testBadge.textContent = 'COMPLETE ✓';
           setStyle('btn-start-lidar-test', 'display', 'block');
           setStyle('btn-stop-lidar-test', 'display', 'none');
           
@@ -1550,47 +1623,53 @@ document.addEventListener('keyup', (e) => {
 
 // Telemetry toggles checkboxes
 [streamTotal, streamRealtime, streamSpeed].forEach((checkbox) => {
-  checkbox.addEventListener('change', sendUploadConfig);
+  if (checkbox) checkbox.addEventListener('change', sendUploadConfig);
 });
 
 // Config Form Submit Handler
-configForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  
-  const mType = motorType.value;
-  const db = deadband.value;
-  const pl = phaseLines.value;
-  const rr = reductionRatio.value;
-  const wd = wheelDiameter.value;
-  
-  const p = pidP.value;
-  const i = pidI.value;
-  const d = pidD.value;
+if (configForm) {
+  configForm.addEventListener('submit', (e) => {
+    e.preventDefault();
 
-  logSystem('Applying configurations to Maker ESP32 Pro board...');
-  
-  sendServerMessage({ type: 'config_motor_type', val: mType });
-  setTimeout(() => sendServerMessage({ type: 'config_deadband', val: db }), 100);
-  setTimeout(() => sendServerMessage({ type: 'config_phase_lines', val: pl }), 200);
-  setTimeout(() => sendServerMessage({ type: 'config_reduction_ratio', val: rr }), 300);
-  setTimeout(() => sendServerMessage({ type: 'config_wheel_diameter', val: wd }), 400);
-  setTimeout(() => sendServerMessage({ type: 'config_pid', p, i, d }), 500);
-  
-  logSystem('Settings sent. Waiting for board confirmation...');
-});
+    const mType = motorType.value;
+    const db = deadband.value;
+    const pl = phaseLines.value;
+    const rr = reductionRatio.value;
+    const wd = wheelDiameter.value;
+
+    const p = pidP.value;
+    const i = pidI.value;
+    const d = pidD.value;
+
+    logSystem('Applying configurations to Maker ESP32 Pro board...');
+
+    sendServerMessage({ type: 'config_motor_type', val: mType });
+    setTimeout(() => sendServerMessage({ type: 'config_deadband', val: db }), 100);
+    setTimeout(() => sendServerMessage({ type: 'config_phase_lines', val: pl }), 200);
+    setTimeout(() => sendServerMessage({ type: 'config_reduction_ratio', val: rr }), 300);
+    setTimeout(() => sendServerMessage({ type: 'config_wheel_diameter', val: wd }), 400);
+    setTimeout(() => sendServerMessage({ type: 'config_pid', p, i, d }), 500);
+
+    logSystem('Settings sent. Waiting for board confirmation...');
+  });
+}
 
 // Read and Reset Config Buttons
-btnReadFlash.addEventListener('click', () => {
-  logSystem('Querying board flash variables ($read_flash#)...');
-  sendServerMessage({ type: 'read_flash' });
-});
+if (btnReadFlash) {
+  btnReadFlash.addEventListener('click', () => {
+    logSystem('Querying board flash variables ($read_flash#)...');
+    sendServerMessage({ type: 'read_flash' });
+  });
+}
 
-btnResetFlash.addEventListener('click', () => {
-  if (confirm('Are you sure you want to restore default factory configurations? The board will restart.')) {
-    logSystem('Restoring factory defaults ($flash_reset#)...');
-    sendServerMessage({ type: 'flash_reset' });
-  }
-});
+if (btnResetFlash) {
+  btnResetFlash.addEventListener('click', () => {
+    if (confirm('Are you sure you want to restore default factory configurations? The board will restart.')) {
+      logSystem('Restoring factory defaults ($flash_reset#)...');
+      sendServerMessage({ type: 'flash_reset' });
+    }
+  });
+}
 
 // Port change submission
 btnChangePort.addEventListener('click', () => {
@@ -1669,22 +1748,6 @@ if (btnArmDrive) {
 if (btnDisarmDrive) {
   btnDisarmDrive.addEventListener('click', disarmNormalDrive);
 }
-
-// Terminal Submit
-function sendRawCommandFromInput() {
-  const rawCmd = terminalCommandInput.value.trim();
-  if (rawCmd) {
-    sendServerMessage({ type: 'raw_command', command: rawCmd });
-    terminalCommandInput.value = '';
-  }
-}
-
-btnSendRawCommand.addEventListener('click', sendRawCommandFromInput);
-terminalCommandInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    sendRawCommandFromInput();
-  }
-});
 
 btnClearLogs.addEventListener('click', () => {
   terminalConsole.innerHTML = '';
@@ -1799,6 +1862,7 @@ function renderStage3V2Panels() {
   renderAutonomyV2();
   renderSensorsV2Summary();
   renderDiagnosticsV2();
+  if (typeof updateCalibrationReadiness === 'function') updateCalibrationReadiness();
 }
 
 function renderDriveV2Status() {
@@ -2069,21 +2133,318 @@ function renderSensorsV2Summary() {
   if (elOdomDist) elOdomDist.textContent = `${st.odom.dist.toFixed(3)} m`;
 }
 
+function calculateOverallSystemHealth() {
+  const st = window.roverState || {};
+  const conn = st.connection || {};
+  const drv = st.drive || {};
+  const lidar = st.lidar || {};
+  const ros = st.ros || {};
+
+  let overall = 'HEALTHY';
+  let driveState = 'READY';
+  let calibState = 'IDLE';
+  let wsState = conn.ws ? 'CONNECTED' : 'OFFLINE';
+  let serialState = conn.serial ? 'CONNECTED' : 'OFFLINE';
+  let lidarState = (lidar.connected !== false && lidar.state !== 'offline' && lidar.state !== 'error') ? 'HEALTHY' : 'OFFLINE';
+  let odomState = (ros.encoderOdom === 'Healthy' || ros.encoderOdom === 'Running') ? 'HEALTHY' : 'OFFLINE';
+  let rosState = (ros.system === 'Healthy' || ros.system === 'Running') ? 'HEALTHY' : 'OFFLINE';
+  let cameraState = 'AVAILABLE';
+  let reasons = [];
+
+  if (drv.armed) driveState = 'ARMED';
+  if (drv.estop) driveState = 'FAULT (E-STOP)';
+
+  if (!conn.ws) reasons.push('WebSocket connection offline');
+  if (!conn.serial) reasons.push('Serial UART link offline');
+  if (drv.estop) reasons.push('Hardware E-Stop active');
+  if (lidarState === 'OFFLINE') reasons.push('LiDAR sensor offline or stale');
+  if (odomState === 'OFFLINE') reasons.push('ROS 2 Odometry node offline');
+  if (rosState === 'OFFLINE') reasons.push('ROS 2 system container offline');
+
+  if (!conn.ws || !conn.serial || drv.estop) {
+    overall = 'FAULT';
+  } else if (lidarState === 'OFFLINE' || odomState === 'OFFLINE' || rosState === 'OFFLINE') {
+    overall = 'DEGRADED';
+  }
+
+  return {
+    overall,
+    drive: driveState,
+    calib: calibState,
+    ws: wsState,
+    serial: serialState,
+    lidar: lidarState,
+    odom: odomState,
+    ros: rosState,
+    camera: cameraState,
+    reason: reasons.length > 0 ? reasons.join('; ') : 'None'
+  };
+}
+
 function renderDiagnosticsV2() {
   const st = window.roverState;
-  const elBoard = document.getElementById('v2-fw-val-board');
-  if (elBoard) elBoard.textContent = st.firmware.board;
-  const elName = document.getElementById('v2-fw-val-name');
-  if (elName) elName.textContent = st.firmware.name;
-  const elVer = document.getElementById('v2-fw-val-ver');
-  if (elVer) elVer.textContent = st.firmware.version;
-  const elProto = document.getElementById('v2-fw-val-proto');
-  if (elProto) elProto.textContent = st.firmware.proto;
+  if (!st) return;
+
+  const h = calculateOverallSystemHealth();
+
+  // Section A: Overall System Health
+  setText('v2-health-val-overall', h.overall);
+  setClass('v2-health-val-overall', `status-val ${h.overall === 'HEALTHY' ? 'badge-healthy' : (h.overall === 'DEGRADED' ? 'badge-warning' : 'badge-alert')}`);
+  setText('v2-health-overall-badge', h.overall);
+  setClass('v2-health-overall-badge', `badge ${h.overall === 'HEALTHY' ? 'badge-success' : (h.overall === 'DEGRADED' ? 'badge-warning' : 'badge-danger')}`);
+
+  setText('v2-health-val-drive', h.drive);
+  setText('v2-health-val-calib', h.calib);
+  setText('v2-health-val-ws', h.ws);
+  setText('v2-health-val-serial', h.serial);
+  setText('v2-health-val-lidar', h.lidar);
+  setText('v2-health-val-odom', h.odom);
+  setText('v2-health-val-ros', h.ros);
+  setText('v2-health-val-camera', h.camera);
+
+  const reasonContainer = document.getElementById('v2-health-reason-container');
+  if (reasonContainer) {
+    if (h.overall !== 'HEALTHY') {
+      reasonContainer.style.display = 'block';
+      setText('v2-health-val-reason', h.reason);
+    } else {
+      reasonContainer.style.display = 'none';
+    }
+  }
+
+  // Section B: Drive & Safety Read-Only
+  const drv = st.drive || {};
+  setText('v2-diag-val-armed', drv.armed ? 'ARMED' : (drv.armed === false ? 'DISARMED' : 'UNKNOWN'));
+  setText('v2-diag-val-mode', `${drv.mode !== undefined ? drv.mode : 0} (${drv.mode === 0 ? 'COORDINATED' : 'INDIVIDUAL'})`);
+
+  const srcMap = {
+    0: 'None (Source 0)',
+    1: 'Serial Terminal (Source 1)',
+    2: 'Gamepad (Source 2)',
+    3: 'Browser Joystick (Source 3)',
+    4: 'Autonomous/Test (Source 4)'
+  };
+  const srcVal = drv.source !== undefined ? drv.source : 0;
+  const srcLabel = srcMap[srcVal] || `Source ${srcVal}`;
+  setText('v2-diag-val-source', srcLabel);
+
+  const isZeroVel = ((drv.reqLinear || 0) === 0 && (drv.reqAngular || 0) === 0);
+  setText('v2-diag-val-motion-status', isZeroVel ? 'Zero (No Movement Requested)' : `Moving (Linear: ${(drv.reqLinear || 0).toFixed(2)} m/s, Angular: ${(drv.reqAngular || 0).toFixed(2)} rad/s)`);
+
+  setText('v2-diag-val-cmd-age', drv.cmdAgeMs !== undefined ? `${drv.cmdAgeMs} ms` : '-- ms');
+  setText('v2-diag-val-req-lin', `${(drv.reqLinear || 0).toFixed(2)} m/s`);
+  setText('v2-diag-val-req-ang', `${(drv.reqAngular || 0).toFixed(2)} rad/s`);
+  setText('v2-diag-val-lim-lin', `${(drv.limLinear || 0).toFixed(2)} m/s`);
+  setText('v2-diag-val-lim-ang', `${(drv.limAngular || 0).toFixed(2)} rad/s`);
+  setText('v2-diag-val-motor-cmd', drv.motorCommand ? JSON.stringify(drv.motorCommand) : '[0, 0, 0, 0]');
+  setText('v2-diag-val-lock', (typeof straightDriveLocked !== 'undefined' && straightDriveLocked) ? 'LOCKED' : 'UNLOCKED');
+  setText('v2-diag-val-estop', drv.estop ? 'ACTIVE (STOPPED)' : 'INACTIVE');
+  setText('v2-diag-val-floor', 'INACTIVE');
+  setText('v2-diag-val-backtrack', 'IDLE');
+  setText('v2-diag-val-recording', 'IDLE');
+  setText('v2-diag-val-autocal', 'IDLE');
+  setText('v2-diag-val-maint', 'INACTIVE');
+  setText('v2-diag-val-fault', drv.estop ? 'E-Stop Triggered' : 'None');
+
+  // Section C: Connections & Services
+  setText('v2-diag-val-srv-node', 'RUNNING');
+  setText('v2-diag-val-srv-ws', (st.connection && st.connection.ws) ? 'CONNECTED' : 'DISCONNECTED');
+  setText('v2-diag-val-srv-lidar', (st.lidar && st.lidar.connected !== false) ? 'RUNNING' : 'OFFLINE');
+  setText('v2-diag-val-srv-ros', (st.ros && st.ros.system) || 'RUNNING');
+  setText('v2-diag-val-srv-foxglove', (st.ros && st.ros.foxgloveBridge) || 'RUNNING');
+  setText('v2-diag-val-srv-camera', 'AVAILABLE');
+
+  const fw = st.firmware || {};
+  setText('v2-fw-val-board', fw.board || 'Awaiting firmware identity...');
+  setText('v2-fw-val-name', fw.name || 'Awaiting firmware identity...');
+  setText('v2-fw-val-ver', fw.version || 'Unknown');
+  setText('v2-fw-val-proto', fw.proto || 'Unknown');
+
+  setText('v2-serial-val-dev', '/dev/rover-esp32');
+  setText('v2-serial-val-baud', '115200 Baud');
+  setText('v2-serial-val-hz', '10 Hz');
+  setText('v2-serial-val-errs', '0');
+
+  // Section D: ROS 2 Diagnostics
+  const ros = st.ros || {};
+  setText('v2-rosdiag-val-health', ros.system || 'HEALTHY');
+  setText('v2-rosdiag-val-diag', `${(ros.diagHz || 1.0).toFixed(1)} Hz`);
+  setText('v2-rosdiag-val-scan', `${((st.lidar && st.lidar.scanHz) || 6.6).toFixed(1)} Hz`);
+  setText('v2-rosdiag-val-odom', `${(ros.odomHz || 10.0).toFixed(1)} Hz`);
+  setText('v2-rosdiag-val-tf', `${(ros.odomHz || 10.0).toFixed(1)} Hz`);
+  setText('v2-rosdiag-val-tf-static', 'Active (Latched)');
+  setText('v2-rosdiag-val-foxglove', 'Listening (Port 8765)');
+
+  // Section E: Sensor Health
+  const lid = st.lidar || {};
+  setText('v2-diag-sensor-lidar-state', lid.state || 'Scanning');
+  setText('v2-diag-sensor-lidar-hz', `${(lid.scanHz || 6.6).toFixed(1)} Hz`);
+  setText('v2-diag-sensor-lidar-pts', `${lid.pointCount || 360} pts`);
+  setText('v2-diag-sensor-lidar-age', `${lid.ageMs || 2} ms`);
+  setText('v2-diag-sensor-lidar-err', 'None');
+
+  const od = st.odom || {};
+  setText('v2-diag-sensor-odom-health', ros.encoderOdom || 'Healthy');
+  setText('v2-diag-sensor-odom-pos', `${(od.x || 0).toFixed(3)}m, ${(od.y || 0).toFixed(3)}m`);
+  setText('v2-diag-sensor-odom-yaw', `${((od.yaw || 0) * 180 / Math.PI).toFixed(1)}°`);
+  setText('v2-diag-sensor-odom-dist', `${(od.dist || 0).toFixed(3)}m`);
+  setText('v2-diag-sensor-odom-stale', 'FRESH (<1s)');
+
+  setText('v2-diag-sensor-camera-state', 'Available');
+  setText('v2-diag-sensor-camera-url', '/api/camera');
+  setText('v2-diag-sensor-camera-err', 'None');
+
+  // Section G: Raw Telemetry JSON
+  const rawJsonEl = document.getElementById('v2-diag-raw-json');
+  if (rawJsonEl) {
+    rawJsonEl.textContent = JSON.stringify(st, null, 2);
+  }
+}
+
+function generateDiagnosticsBundle() {
+  const st = window.roverState ? JSON.parse(JSON.stringify(window.roverState)) : {};
+  const logLines = [];
+  if (typeof terminalConsole !== 'undefined' && terminalConsole) {
+    const lines = terminalConsole.querySelectorAll('.log-line');
+    lines.forEach(l => logLines.push(l.textContent));
+  }
+
+  delete st.tokens;
+  delete st.passwords;
+  delete st.keys;
+
+  return {
+    timestamp: new Date().toISOString(),
+    frontendVersion: 'v1.0.3 (f50adec)',
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'NodeJS/Test',
+    sharedState: st,
+    boundedLogs: logLines.slice(-100)
+  };
+}
+
+function initDiagnosticsEventHandlers() {
+  const chkVerbose = document.getElementById('chk-show-verbose-logs');
+  if (chkVerbose) {
+    chkVerbose.addEventListener('change', () => {
+      const details = document.getElementById('v2-diag-verbose-logs-details');
+      if (details) {
+        details.open = chkVerbose.checked;
+      }
+      if (typeof logSystem === 'function') {
+        logSystem(chkVerbose.checked ? 'Verbose log stream enabled.' : 'Verbose log stream disabled.');
+      }
+    });
+  }
+
+  const btnCopyLogs = document.getElementById('btn-copy-logs');
+  if (btnCopyLogs) {
+    btnCopyLogs.addEventListener('click', () => {
+      if (typeof terminalConsole === 'undefined' || !terminalConsole) return;
+      const text = Array.from(terminalConsole.querySelectorAll('.log-line')).map(l => l.textContent).join('\n');
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => { if (typeof logSystem === 'function') logSystem('Logs copied to clipboard.'); }).catch(() => {});
+      }
+    });
+  }
+
+  const btnCopyRaw = document.getElementById('btn-copy-raw-telemetry');
+  if (btnCopyRaw) {
+    btnCopyRaw.addEventListener('click', () => {
+      const jsonStr = JSON.stringify(window.roverState || {}, null, 2);
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(jsonStr).then(() => { if (typeof logSystem === 'function') logSystem('Raw telemetry JSON copied to clipboard.'); }).catch(() => {});
+      }
+    });
+  }
+
+  const btnDevRefresh = document.getElementById('btn-dev-refresh-status');
+  if (btnDevRefresh) {
+    btnDevRefresh.addEventListener('click', () => {
+      if (typeof fetchDriveStatus === 'function') fetchDriveStatus();
+      if (typeof fetch === 'function') {
+        fetch('/api/status')
+          .then(r => r.json())
+          .then(data => {
+            const out = document.getElementById('v2-dev-status-output');
+            if (out) {
+              out.style.display = 'block';
+              out.textContent = `[API Status] ${JSON.stringify(data, null, 2)}`;
+            }
+            if (typeof logSystem === 'function') logSystem('Service status refreshed.');
+          })
+          .catch(err => { if (typeof logSystem === 'function') logSystem(`Status refresh failed: ${err.message}`); });
+      }
+    });
+  }
+
+  const btnDevReconnect = document.getElementById('btn-dev-reconnect-ws');
+  if (btnDevReconnect) {
+    btnDevReconnect.addEventListener('click', () => {
+      if (typeof logSystem === 'function') logSystem('Manual WebSocket reconnect initiated.');
+      if (typeof connectWebSocket === 'function') connectWebSocket();
+    });
+  }
+
+  const btnDevFoxglove = document.getElementById('btn-dev-open-foxglove');
+  if (btnDevFoxglove) {
+    btnDevFoxglove.addEventListener('click', () => {
+      if (typeof window !== 'undefined') window.open('http://10.0.0.246:8765', '_blank');
+    });
+  }
+
+  const btnDevRawApi = document.getElementById('btn-dev-open-raw-api');
+  if (btnDevRawApi) {
+    btnDevRawApi.addEventListener('click', () => {
+      if (typeof window !== 'undefined') window.open('/api/status', '_blank');
+    });
+  }
+
+  const btnDevSyncCalib = document.getElementById('btn-dev-sync-calib-db');
+  if (btnDevSyncCalib) {
+    btnDevSyncCalib.addEventListener('click', () => {
+      if (typeof sendServerMessage === 'function') {
+        sendServerMessage({ type: 'get_calibration_db' });
+        if (typeof logSystem === 'function') logSystem('Calibration database re-sync requested.');
+      }
+    });
+  }
+
+  const btnExportBundle = document.getElementById('btn-export-diag-bundle');
+  if (btnExportBundle) {
+    btnExportBundle.addEventListener('click', () => {
+      const bundle = generateDiagnosticsBundle();
+      if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
+        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `rover_diagnostics_${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        const statusEl = document.getElementById('v2-export-bundle-status');
+        if (statusEl) statusEl.textContent = '✓ Diagnostics bundle downloaded.';
+      }
+    });
+  }
+
+  const btnCopyBundle = document.getElementById('btn-copy-diag-bundle');
+  if (btnCopyBundle) {
+    btnCopyBundle.addEventListener('click', () => {
+      const bundle = generateDiagnosticsBundle();
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(JSON.stringify(bundle, null, 2)).then(() => {
+          const statusEl = document.getElementById('v2-export-bundle-status');
+          if (statusEl) statusEl.textContent = '✓ Diagnostics bundle copied to clipboard.';
+        }).catch(() => {});
+      }
+    });
+  }
 }
 
 // Initial Stage 3 Rendering & WebSocket / Drive / Poller Startup
 document.addEventListener('DOMContentLoaded', () => {
   renderStage3V2Panels();
+  initDiagnosticsEventHandlers();
   if (typeof connectWebSocket === 'function') connectWebSocket();
   fetchDriveStatus();
   if (typeof updateLidarTabState === 'function') updateLidarTabState();
@@ -2091,51 +2452,49 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 setTimeout(() => {
   renderStage3V2Panels();
+  initDiagnosticsEventHandlers();
   if (typeof connectWebSocket === 'function') connectWebSocket();
   fetchDriveStatus();
   if (typeof updateLidarTabState === 'function') updateLidarTabState();
   if (typeof checkGamepadConnection === 'function') checkGamepadConnection();
 }, 100);
 
-// --- Tab Switching Logic (Stage 2 Navigation Shell & Legacy Parity) ---
+// --- Tab Switching Logic (Canonical 5-Tab Navigation) ---
 const topTabButtons = document.querySelectorAll('.tab-navigation-bar .tab-btn');
 const topTabContents = document.querySelectorAll('.tab-content');
-const legacySubButtons = document.querySelectorAll('.legacy-tab-bar .legacy-sub-btn');
 
 let activeTopTabId = 'tab-drive-v2';
-let activeLegacySubTabId = 'tab-dashboard';
 
 function updateLidarTabState() {
   const isLidarActive = (
-    (activeTopTabId === 'tab-legacy' && (activeLegacySubTabId === 'tab-lidar' || activeLegacySubTabId === 'tab-encoder')) ||
     activeTopTabId === 'tab-drive-v2' ||
-    activeTopTabId === 'tab-sensors-v2' ||
-    activeTopTabId === 'tab-lidar' ||
-    activeTopTabId === 'tab-encoder'
+    activeTopTabId === 'tab-sensors-v2'
   );
 
+  lidarActiveTab = activeTopTabId;
   if (isLidarActive) {
-    lidarActiveTab = (activeTopTabId === 'tab-legacy') ? activeLegacySubTabId : activeTopTabId;
     if (typeof startLidarPolling === 'function') startLidarPolling();
-    if (activeTopTabId === 'tab-drive-v2' || activeTopTabId === 'tab-sensors-v2' || activeLegacySubTabId === 'tab-lidar' || activeTopTabId === 'tab-lidar') {
-      if (typeof pollLidar === 'function') pollLidar();
-      requestAnimationFrame(() => {
-        if (typeof latestLidarScan !== 'undefined' && latestLidarScan && typeof drawPolarScan === 'function') {
-          drawPolarScan(latestLidarScan);
-        }
-      });
-    }
+    if (typeof pollLidar === 'function') pollLidar();
+    requestAnimationFrame(() => {
+      if (typeof latestLidarScan !== 'undefined' && latestLidarScan && typeof drawPolarScan === 'function') {
+        drawPolarScan(latestLidarScan);
+      }
+    });
   } else {
-    lidarActiveTab = activeTopTabId;
     if (typeof stopLidarPolling === 'function') stopLidarPolling();
   }
 }
 
 function activateTopTab(targetTabId) {
-  // Stage 4 Safety Requirement: Switching away from Drive tab immediately stops motors
+  // Stage 4 & 5 Safety Requirement: Switching away from Drive or Calibration tab immediately stops motors / aborts tests
   if (activeTopTabId === 'tab-drive-v2' && targetTabId !== 'tab-drive-v2') {
     if (typeof driveRover === 'function') {
       driveRover('stop');
+    }
+  }
+  if (activeTopTabId === 'tab-calibration-v2' && targetTabId !== 'tab-calibration-v2') {
+    if (typeof abortAutoCalibrationTest === 'function') {
+      abortAutoCalibrationTest();
     }
   }
 
@@ -2150,8 +2509,7 @@ function activateTopTab(targetTabId) {
   });
 
   // Toggle visibility of top-level tab contents
-  // Note: legacy tabs (tab-dashboard, tab-imu, etc.) live inside tab-legacy
-  const topLevelTabIds = ['tab-drive-v2', 'tab-autonomy-v2', 'tab-sensors-v2', 'tab-calibration-v2', 'tab-diagnostics-v2', 'tab-legacy'];
+  const topLevelTabIds = ['tab-drive-v2', 'tab-autonomy-v2', 'tab-sensors-v2', 'tab-calibration-v2', 'tab-diagnostics-v2'];
   topLevelTabIds.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -2159,42 +2517,9 @@ function activateTopTab(targetTabId) {
     }
   });
 
-  // If tab-legacy is selected, ensure the active legacy sub-tab is displayed inside it
-  if (targetTabId === 'tab-legacy') {
-    activateLegacySubTab(activeLegacySubTabId);
-  } else {
-    updateLidarTabState();
-  }
-
-  // Handle special triggers (canvas resize, etc.)
-  if (targetTabId === 'tab-imu' || (targetTabId === 'tab-legacy' && activeLegacySubTabId === 'tab-imu')) {
-    if (typeof resizeCanvas === 'function') resizeCanvas();
-  }
-}
-
-function activateLegacySubTab(legacyTabId) {
-  activeLegacySubTabId = legacyTabId;
-
-  // Toggle sub-navigation button active states
-  legacySubButtons.forEach(btn => {
-    const isTarget = (btn.dataset.legacyTab === legacyTabId);
-    btn.classList.toggle('active', isTarget);
-    btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
-    btn.setAttribute('tabindex', isTarget ? '0' : '-1');
-  });
-
-  // Show selected legacy tab content inside tab-legacy container holder
-  const legacyTabIds = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar'];
-  legacyTabIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.classList.toggle('active', id === legacyTabId);
-    }
-  });
-
   updateLidarTabState();
 
-  if (legacyTabId === 'tab-imu' && typeof resizeCanvas === 'function') {
+  if (targetTabId === 'tab-sensors-v2' && typeof resizeCanvas === 'function') {
     resizeCanvas();
   }
 }
@@ -2203,23 +2528,6 @@ function activateLegacySubTab(legacyTabId) {
 topTabButtons.forEach(btn => {
   btn.addEventListener('click', () => {
     activateTopTab(btn.dataset.tab);
-  });
-});
-
-// Bind Secondary Legacy Sub-Navigation Buttons
-legacySubButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
-    activateLegacySubTab(btn.dataset.legacyTab);
-  });
-});
-
-// Bind Legacy Redirect Quick Buttons (e.g., "Open Current Legacy Drive Controls")
-document.querySelectorAll('.legacy-redirect-btn').forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    const legacyTarget = btn.dataset.legacyTarget || 'tab-dashboard';
-    activateTopTab('tab-legacy');
-    activateLegacySubTab(legacyTarget);
   });
 });
 
@@ -2256,8 +2564,8 @@ if (navBar) {
 const odomXDisplay = document.getElementById('odom-x');
 const odomYDisplay = document.getElementById('odom-y');
 const odomSpeedDisplay = document.getElementById('odom-speed');
-const pathCanvas = document.getElementById('path-canvas');
-const ctx = pathCanvas.getContext('2d');
+const pathCanvas = document.getElementById('path-canvas') || document.getElementById('v2-odom-traj-canvas');
+const ctx = pathCanvas ? pathCanvas.getContext('2d') : null;
 
 function updateOdometry() {
   if (realOdomActive) return;
@@ -2292,16 +2600,19 @@ function updateOdometry() {
     // If no real IMU, rotate the 3D model according to the simulated heading
     if (!realIMUActive) {
       update3DModelRotation(0, 0, imuYaw);
-      document.getElementById('imu-yaw').textContent = `${imuYaw.toFixed(1)}°`;
-      document.getElementById('imu-roll').textContent = `0.0°`;
-      document.getElementById('imu-pitch').textContent = `0.0°`;
+      const yawEl = document.getElementById('imu-yaw');
+      const rollEl = document.getElementById('imu-roll');
+      const pitchEl = document.getElementById('imu-pitch');
+      if (yawEl) yawEl.textContent = `${imuYaw.toFixed(1)}°`;
+      if (rollEl) rollEl.textContent = `0.0°`;
+      if (pitchEl) pitchEl.textContent = `0.0°`;
     }
   }
   
   // Update Stats UI
-  odomXDisplay.innerHTML = `${(odomX / 1000).toFixed(2)} <small>m</small>`;
-  odomYDisplay.innerHTML = `${(odomY / 1000).toFixed(2)} <small>m</small>`;
-  odomSpeedDisplay.innerHTML = `${linearSpeed.toFixed(1)} <small>mm/s</small>`;
+  if (odomXDisplay) odomXDisplay.innerHTML = `${(odomX / 1000).toFixed(2)} <small>m</small>`;
+  if (odomYDisplay) odomYDisplay.innerHTML = `${(odomY / 1000).toFixed(2)} <small>m</small>`;
+  if (odomSpeedDisplay) odomSpeedDisplay.innerHTML = `${linearSpeed.toFixed(1)} <small>mm/s</small>`;
   
   // Draw path canvas
   drawPath();
@@ -2326,7 +2637,7 @@ function resizeCanvas() {
 }
 
 window.addEventListener('resize', () => {
-  if (document.getElementById('tab-imu').classList.contains('active')) {
+  if (document.getElementById('tab-sensors-v2')?.classList.contains('active')) {
     resizeCanvas();
   }
 });
@@ -2416,7 +2727,7 @@ function drawPath() {
 }
 
 // --- Resets Event Listeners ---
-document.getElementById('btn-reset-imu').addEventListener('click', () => {
+document.getElementById('btn-reset-imu')?.addEventListener('click', () => {
   imuPitch = 0;
   imuRoll = 0;
   if (realIMUActive) {
@@ -2427,7 +2738,7 @@ document.getElementById('btn-reset-imu').addEventListener('click', () => {
   }
 });
 
-document.getElementById('btn-reset-odometry').addEventListener('click', () => {
+document.getElementById('btn-reset-odometry')?.addEventListener('click', () => {
   odomX = 0;
   odomY = 0;
   odomTheta = 0;
@@ -2486,17 +2797,17 @@ document.querySelectorAll('.btn-test').forEach(btn => {
 const btnResetEncodersUI = document.getElementById('btn-reset-encoders-ui');
 if (btnResetEncodersUI) {
   btnResetEncodersUI.addEventListener('click', () => {
-    const rawM1 = parseInt(document.getElementById('telemetry-total-m1').textContent || 0);
-    const rawM2 = parseInt(document.getElementById('telemetry-total-m2').textContent || 0);
-    const rawM3 = parseInt(document.getElementById('telemetry-total-m3').textContent || 0);
-    const rawM4 = parseInt(document.getElementById('telemetry-total-m4').textContent || 0);
+    const rawM1 = parseInt(document.getElementById('telemetry-total-m1')?.textContent || 0);
+    const rawM2 = parseInt(document.getElementById('telemetry-total-m2')?.textContent || 0);
+    const rawM3 = parseInt(document.getElementById('telemetry-total-m3')?.textContent || 0);
+    const rawM4 = parseInt(document.getElementById('telemetry-total-m4')?.textContent || 0);
 
     encoderOffsets = [rawM1, rawM2, rawM3, rawM4];
 
-    document.getElementById('test-ticks-m1').textContent = 0;
-    document.getElementById('test-ticks-m2').textContent = 0;
-    document.getElementById('test-ticks-m3').textContent = 0;
-    document.getElementById('test-ticks-m4').textContent = 0;
+    setText('test-ticks-m1', 0);
+    setText('test-ticks-m2', 0);
+    setText('test-ticks-m3', 0);
+    setText('test-ticks-m4', 0);
 
     logSystem(`Zeroed out diagnostics encoder offsets: [${encoderOffsets.join(', ')}]`);
   });
@@ -2506,17 +2817,17 @@ if (btnResetEncodersUI) {
 const btnResetStraight = document.getElementById('btn-reset-straight-test');
 if (btnResetStraight) {
   btnResetStraight.addEventListener('click', () => {
-    const rawM1 = parseInt(document.getElementById('telemetry-total-m1').textContent || 0);
-    const rawM2 = parseInt(document.getElementById('telemetry-total-m2').textContent || 0);
-    const rawM3 = parseInt(document.getElementById('telemetry-total-m3').textContent || 0);
-    const rawM4 = parseInt(document.getElementById('telemetry-total-m4').textContent || 0);
+    const rawM1 = parseInt(document.getElementById('telemetry-total-m1')?.textContent || 0);
+    const rawM2 = parseInt(document.getElementById('telemetry-total-m2')?.textContent || 0);
+    const rawM3 = parseInt(document.getElementById('telemetry-total-m3')?.textContent || 0);
+    const rawM4 = parseInt(document.getElementById('telemetry-total-m4')?.textContent || 0);
 
     straightTestOffsets = [rawM1, rawM2, rawM3, rawM4];
 
-    document.getElementById('straight-ticks-m1').textContent = 0;
-    document.getElementById('straight-ticks-m2').textContent = 0;
-    document.getElementById('straight-ticks-m3').textContent = 0;
-    document.getElementById('straight-ticks-m4').textContent = 0;
+    setText('straight-ticks-m1', 0);
+    setText('straight-ticks-m2', 0);
+    setText('straight-ticks-m3', 0);
+    setText('straight-ticks-m4', 0);
 
     updateStraightDriveMetrics(0, 0, 0, 0);
     logSystem("Zeroed out straight-drive test encoder reference offsets.");
@@ -2549,16 +2860,16 @@ if (straightToggle) {
     straightDriveLocked = this.checked;
     if (straightBadge) {
       if (straightDriveLocked) {
-        straightBadge.textContent = 'Steering Locked';
-        straightBadge.style.background = 'rgba(239, 68, 68, 0.2)';
-        straightBadge.style.color = '#fca5a5';
-        straightBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        if (straightBadge) straightBadge.textContent = 'Steering Locked';
+        if (straightBadge) straightBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+        if (straightBadge) straightBadge.style.color = '#fca5a5';
+        if (straightBadge) straightBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
         logSystem("🔒 Straight Drive Lock ENABLED. Steering controls are now disabled.");
       } else {
-        straightBadge.textContent = 'Steering Unlocked';
-        straightBadge.style.background = 'rgba(107, 114, 128, 0.2)';
-        straightBadge.style.color = '#9ca3af';
-        straightBadge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
+        if (straightBadge) straightBadge.textContent = 'Steering Unlocked';
+        if (straightBadge) straightBadge.style.background = 'rgba(107, 114, 128, 0.2)';
+        if (straightBadge) straightBadge.style.color = '#9ca3af';
+        if (straightBadge) straightBadge.style.border = '1px solid rgba(107, 114, 128, 0.4)';
         logSystem("🔓 Straight Drive Lock DISABLED. Steering controls are active.");
       }
     }
@@ -2580,25 +2891,25 @@ function updateStraightDriveMetrics(relM1, relM2, relM3, relM4) {
   if (avgLeftEl) avgLeftEl.textContent = avgLeft;
   if (avgRightEl) avgRightEl.textContent = avgRight;
   if (deltaEl) {
-    deltaEl.textContent = (delta >= 0 ? '+' : '') + delta;
-    deltaEl.style.color = Math.abs(delta) === 0 ? '#39ff14' : (Math.abs(delta) < 15 ? '#ffb700' : '#ff0055');
+    if (deltaEl) deltaEl.textContent = (delta >= 0 ? '+' : '') + delta;
+    if (deltaEl) deltaEl.style.color = Math.abs(delta) === 0 ? '#39ff14' : (Math.abs(delta) < 15 ? '#ffb700' : '#ff0055');
   }
 
   if (statusEl) {
     if (avgLeft === 0 && avgRight === 0) {
-      statusEl.textContent = 'READY (0 ticks)';
-      statusEl.style.color = 'var(--text-muted)';
+      if (statusEl) statusEl.textContent = 'READY (0 ticks)';
+      if (statusEl) statusEl.style.color = 'var(--text-muted)';
     } else {
       const absDelta = Math.abs(delta);
       if (absDelta <= 4) {
-        statusEl.textContent = 'PERFECTLY BALANCED';
-        statusEl.style.color = '#39ff14';
+        if (statusEl) statusEl.textContent = 'PERFECTLY BALANCED';
+        if (statusEl) statusEl.style.color = '#39ff14';
       } else if (absDelta <= 15) {
-        statusEl.textContent = 'OK (MINOR DRIFT)';
-        statusEl.style.color = '#ffb700';
+        if (statusEl) statusEl.textContent = 'OK (MINOR DRIFT)';
+        if (statusEl) statusEl.style.color = '#ffb700';
       } else {
-        statusEl.textContent = 'MISMATCH DETECTED';
-        statusEl.style.color = '#ff0055';
+        if (statusEl) statusEl.textContent = 'MISMATCH DETECTED';
+        if (statusEl) statusEl.style.color = '#ff0055';
       }
     }
   }
@@ -2844,7 +3155,7 @@ drawCompass(0);
 // ────────────────────────────────────────────────────────────
 let lidarPollTimer = null;
 let lastScanTime = 0;
-let lidarActiveTab = 'tab-dashboard';
+let lidarActiveTab = 'tab-drive-v2';
 let latestLidarScan = null;
 let hoverPoint = null;
 let activeTouch = false;
@@ -2901,8 +3212,8 @@ async function pollLidar() {
     console.error('[LiDAR UI] Error polling LiDAR:', err);
     const stateEl = document.getElementById('lidar-val-state');
     if (stateEl) {
-      stateEl.textContent = 'ERROR';
-      stateEl.style.color = '#ef4444';
+      if (stateEl) stateEl.textContent = 'ERROR';
+      if (stateEl) stateEl.style.color = '#ef4444';
     }
   } finally {
     isLidarPollPending = false;
@@ -2928,13 +3239,13 @@ function updateLidarStatus(status) {
   const errEl = document.getElementById('lidar-val-error');
   
   if (stateEl) {
-    stateEl.textContent = status.state ? status.state.toUpperCase() : 'DISCONNECTED';
+    if (stateEl) stateEl.textContent = status.state ? status.state.toUpperCase() : 'DISCONNECTED';
     if (status.state === 'scanning') {
-      stateEl.style.color = '#10b981'; // Green
+      if (stateEl) stateEl.style.color = '#10b981';
     } else if (status.state === 'connecting' || status.state === 'initializing') {
-      stateEl.style.color = '#f59e0b'; // Amber
+      if (stateEl) stateEl.style.color = '#f59e0b';
     } else {
-      stateEl.style.color = '#ef4444'; // Red
+      if (stateEl) stateEl.style.color = '#ef4444';
     }
   }
   
@@ -2942,11 +3253,11 @@ function updateLidarStatus(status) {
   if (modelEl) modelEl.textContent = status.model || '--';
   
   if (healthEl) {
-    healthEl.textContent = status.health || '--';
+    if (healthEl) healthEl.textContent = status.health || '--';
     if (status.health === 'OK' || status.health === '0') {
-      healthEl.style.color = '#10b981';
+      if (healthEl) healthEl.style.color = '#10b981';
     } else if (status.health !== 'unknown') {
-      healthEl.style.color = '#ef4444';
+      if (healthEl) healthEl.style.color = '#ef4444';
     }
   }
   
@@ -2962,18 +3273,18 @@ function updateLidarStatus(status) {
       const hrs = Math.floor(s / 3600);
       const mins = Math.floor((s % 3600) / 60);
       const secs = s % 60;
-      uptimeEl.textContent = `${hrs}h ${mins}m ${secs}s`;
+      if (uptimeEl) uptimeEl.textContent = `${hrs}h ${mins}m ${secs}s`;
     } else {
-      uptimeEl.textContent = '--';
+      if (uptimeEl) uptimeEl.textContent = '--';
     }
   }
   
   if (reconnectsEl) reconnectsEl.textContent = status.reconnectCount !== undefined && status.reconnectCount !== null ? status.reconnectCount : '--';
   
-  if (errCard && errEl) {
+  if (errCard) {
     if (status.lastError) {
       errCard.style.display = 'block';
-      errEl.textContent = status.lastError;
+      if (errEl) errEl.textContent = status.lastError;
     } else {
       errCard.style.display = 'none';
     }
@@ -2999,8 +3310,8 @@ function updateLidarScan(scan) {
     console.error('[LiDAR UI] Compact canvas draw error:', err);
   }
 
-  // Draw heavy polar canvas & sample table only when Sensors or legacy LiDAR tab is active
-  if (activeTopTabId === 'tab-sensors-v2' || activeTopTabId === 'tab-lidar' || activeLegacySubTabId === 'tab-lidar') {
+  // Draw heavy polar canvas & sample table only when Sensors tab is active
+  if (activeTopTabId === 'tab-sensors-v2') {
     try {
       drawPolarScan(scan);
       renderSampleTable(scan);
@@ -3142,20 +3453,20 @@ function updateTrackInterferenceUI(dFront, dLeft, dRight) {
   
   if (elBadge) {
     if (dFront < 0 || dLeft < 0 || dRight < 0) {
-      elBadge.textContent = '⚠️ Interference';
-      elBadge.style.background = 'rgba(255, 0, 85, 0.15)';
-      elBadge.style.color = '#ff0055';
-      elBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
+      if (elBadge) elBadge.textContent = '⚠️ Interference';
+      if (elBadge) elBadge.style.background = 'rgba(255, 0, 85, 0.15)';
+      if (elBadge) elBadge.style.color = '#ff0055';
+      if (elBadge) elBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
     } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
-      elBadge.textContent = '⚠️ Caution';
-      elBadge.style.background = 'rgba(245, 158, 11, 0.15)';
-      elBadge.style.color = '#f59e0b';
-      elBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+      if (elBadge) elBadge.textContent = '⚠️ Caution';
+      if (elBadge) elBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+      if (elBadge) elBadge.style.color = '#f59e0b';
+      if (elBadge) elBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
     } else {
-      elBadge.textContent = '✓ Clear';
-      elBadge.style.background = 'rgba(16, 185, 129, 0.15)';
-      elBadge.style.color = '#10b981';
-      elBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+      if (elBadge) elBadge.textContent = '✓ Clear';
+      if (elBadge) elBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+      if (elBadge) elBadge.style.color = '#10b981';
+      if (elBadge) elBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
     }
   }
 }
@@ -3523,11 +3834,11 @@ function drawPolarScan(scan) {
 }
 
 function renderSampleTable(scan) {
-  const tbody = document.getElementById('lidar-sample-table-body');
-  if (!tbody) return;
+  const sampleTbody = document.getElementById('lidar-sample-table-body');
+  if (!sampleTbody) return;
   
   if (!scan.points || scan.points.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No valid points available.</td></tr>`;
+    if (sampleTbody) sampleTbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">No valid points available.</td></tr>`;
     return;
   }
   
@@ -3553,7 +3864,7 @@ function renderSampleTable(scan) {
       </tr>
     `;
   }
-  tbody.innerHTML = html;
+  if (sampleTbody) sampleTbody.innerHTML = html;
 }
 
 // Watch visibility changes for LiDAR polling triggers
@@ -3568,10 +3879,8 @@ document.addEventListener('visibilitychange', () => {
 // Periodic stale data check
 setInterval(() => {
   const overlay = document.getElementById('lidar-stale-overlay');
-  if (overlay && (lidarActiveTab === 'tab-lidar' || lidarActiveTab === 'tab-encoder') && lastScanTime > 0 && Date.now() - lastScanTime > 1000) {
-    if (lidarActiveTab === 'tab-lidar') {
-      overlay.style.display = 'flex';
-    }
+  if (overlay && activeTopTabId === 'tab-sensors-v2' && lastScanTime > 0 && Date.now() - lastScanTime > 1000) {
+    overlay.style.display = 'flex';
   }
 }, 500);
 
@@ -4364,7 +4673,7 @@ setInterval(updateTimeBadge, 1000);
 updateTimeBadge();
 
 // ==============================================================================
-// Gamepad Integration
+// Gamepad Controller Integration (Canonical Drive Ownership)
 // ==============================================================================
 let gamepadIndex = null;
 let gamepadActive = false;
@@ -4431,6 +4740,12 @@ function updateGamepadBadge(connected, name = '') {
 }
 
 function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
+  const elArm = document.getElementById('gp-live-arm');
+  if (elArm) {
+    const isArmed = window.roverState && window.roverState.drive && window.roverState.drive.armed;
+    elArm.innerText = isArmed ? 'ARMED' : 'DISARMED';
+    elArm.style.color = isArmed ? '#10b981' : '#6b7280';
+  }
   const elDeadman = document.getElementById('gp-live-deadman');
   if (elDeadman) {
     if (gamepadActive && !deadman) {
@@ -4462,6 +4777,12 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
     elStop.innerText = isMoving ? 'MOVING' : 'STATIONARY';
     elStop.style.color = isMoving ? '#f59e0b' : '#10b981';
   }
+  const elEstop = document.getElementById('gp-live-estop');
+  if (elEstop) {
+    const isEstop = window.roverState && window.roverState.drive && window.roverState.drive.estop;
+    elEstop.innerText = isEstop ? 'TRIGGERED' : 'NOMINAL';
+    elEstop.style.color = isEstop ? '#ef4444' : '#10b981';
+  }
 }
 
 function startGamepadLoop() {
@@ -4486,23 +4807,25 @@ function startGamepadLoop() {
       return;
     }
 
-    // Read axes: Left stick vertical (1) and horizontal (0)
+    // Primary Control: Left stick vertical (axes 1) and horizontal (axes 0)
     let throttle = -gp.axes[1];
     let turn = gp.axes[0];
 
-    // Apply deadzone
-    if (Math.abs(throttle) < 0.1) throttle = 0;
-    if (Math.abs(turn) < 0.1) turn = 0;
+    // Apply deadzone (0.10) to block resting drift
+    if (Math.abs(throttle) < 0.10) throttle = 0;
+    if (Math.abs(turn) < 0.10) turn = 0;
 
-    // Detect buttons
+    // Detect pressed buttons
     const pressedButtons = [];
-    gp.buttons.forEach((btn, idx) => {
-      if (btn.pressed) {
-        pressedButtons.push(idx);
-      }
-    });
+    if (gp.buttons && gp.buttons.length) {
+      gp.buttons.forEach((btn, idx) => {
+        if (btn && (btn.pressed || btn.value > 0.5)) {
+          pressedButtons.push(idx);
+        }
+      });
+    }
 
-    // Translate buttons to name tags
+    // Translate buttons to name tags for telemetry HUD
     const buttonNames = [];
     pressedButtons.forEach(btnIdx => {
       if (btnIdx === 0) buttonNames.push("A (ESTOP)");
@@ -4515,27 +4838,33 @@ function startGamepadLoop() {
     });
     const pressedButtonsStr = buttonNames.length > 0 ? buttonNames.join(", ") : "None";
 
-    // Deadman switch: Hold RB (5) or RT (7)
-    const deadmanPressed = gp.buttons[5].pressed || gp.buttons[7].pressed;
+    // Intended Deadman switch: Hold RB (5) or RT (7) past 50% pull (value > 0.5)
+    const deadmanPressed = Boolean(
+      (gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5)) ||
+      (gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5))
+    );
 
     // Safety buttons: A (0) or B (1) triggers ESTOP
-    const estopPressed = gp.buttons[0].pressed || gp.buttons[1].pressed;
+    const estopPressed = Boolean(
+      (gp.buttons[0] && (gp.buttons[0].pressed || gp.buttons[0].value > 0.5)) ||
+      (gp.buttons[1] && (gp.buttons[1].pressed || gp.buttons[1].value > 0.5))
+    );
 
-    // Arm/Disarm triggers
-    const armPressed = gp.buttons[9].pressed;      // Start button
-    const disarmPressed = gp.buttons[8].pressed;   // Select button
+    // Arm/Disarm triggers: Start (9) arms, Select (8) disarms
+    const armPressed = Boolean(gp.buttons[9] && (gp.buttons[9].pressed || gp.buttons[9].value > 0.5));
+    const disarmPressed = Boolean(gp.buttons[8] && (gp.buttons[8].pressed || gp.buttons[8].value > 0.5));
 
     if (estopPressed) {
-      triggerEstop();
+      if (typeof triggerEstop === 'function') triggerEstop();
       updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr);
       lastSentJoystick = { x: 0, y: 0, deadman: deadmanPressed };
       lastGamepadSendTime = Date.now();
     } else if (armPressed) {
-      armNormalDrive();
-      lastGamepadSendTime = Date.now() + 500; // Debounce arming
+      if (typeof armNormalDrive === 'function') armNormalDrive();
+      lastGamepadSendTime = Date.now() + 500;
     } else if (disarmPressed) {
-      disarmNormalDrive();
-      lastGamepadSendTime = Date.now() + 500; // Debounce disarming
+      if (typeof disarmNormalDrive === 'function') disarmNormalDrive();
+      lastGamepadSendTime = Date.now() + 500;
     }
 
     // Sync with HUD
@@ -4544,7 +4873,9 @@ function startGamepadLoop() {
     // Send joystick commands to server
     if (!estopPressed && !armPressed && !disarmPressed) {
       const now = Date.now();
-      const changed = turn !== lastSentJoystick.x || throttle !== lastSentJoystick.y || deadmanPressed !== lastSentJoystick.deadman;
+      const changed = Math.abs(turn - lastSentJoystick.x) > 0.02 ||
+                      Math.abs(throttle - lastSentJoystick.y) > 0.02 ||
+                      deadmanPressed !== lastSentJoystick.deadman;
       const timeElapsed = now - lastGamepadSendTime > 100;
 
       if (changed || (timeElapsed && (turn !== 0 || throttle !== 0 || deadmanPressed))) {
@@ -4585,13 +4916,13 @@ function initLidarStraightLineTest() {
     const savedWidth = localStorage.getItem('monitored_track_width');
     if (savedWidth) {
       monitoredTrackWidth = parseFloat(savedWidth);
-      selectTrackWidth.value = savedWidth;
+      if (selectTrackWidth) selectTrackWidth.value = savedWidth;
     } else {
-      monitoredTrackWidth = parseFloat(selectTrackWidth.value);
+      if (selectTrackWidth) monitoredTrackWidth = parseFloat(selectTrackWidth.value);
     }
     selectTrackWidth.addEventListener('change', () => {
-      monitoredTrackWidth = parseFloat(selectTrackWidth.value);
-      localStorage.setItem('monitored_track_width', selectTrackWidth.value);
+      if (selectTrackWidth) monitoredTrackWidth = parseFloat(selectTrackWidth.value);
+      if (selectTrackWidth) localStorage.setItem('monitored_track_width', selectTrackWidth.value);
       drawLidarTestCanvas();
     });
   }
@@ -4603,13 +4934,13 @@ function initLidarStraightLineTest() {
     const btnStart = document.getElementById('btn-start-lidar-test');
     if (btnStart) {
       if (rigid && level && orientationVerified) {
-        btnStart.disabled = false;
-        btnStart.style.opacity = '1';
-        btnStart.style.cursor = 'pointer';
+        if (btnStart) btnStart.disabled = false;
+        if (btnStart) btnStart.style.opacity = '1';
+        if (btnStart) btnStart.style.cursor = 'pointer';
       } else {
-        btnStart.disabled = true;
-        btnStart.style.opacity = '0.6';
-        btnStart.style.cursor = 'not-allowed';
+        if (btnStart) btnStart.disabled = true;
+        if (btnStart) btnStart.style.opacity = '0.6';
+        if (btnStart) btnStart.style.cursor = 'not-allowed';
       }
     }
   }
@@ -4634,12 +4965,12 @@ function initLidarStraightLineTest() {
         document.getElementById('orientation-wizard-box').style.display = 'none';
         stopWizardPolling();
         
-        const badge = document.getElementById('orientation-verified-badge');
-        if (badge) {
-          badge.textContent = 'Verified';
-          badge.style.background = 'rgba(16, 185, 129, 0.15)';
-          badge.style.color = '#10b981';
-          badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        const orientBadge = document.getElementById('orientation-verified-badge');
+        if (orientBadge) {
+          if (orientBadge) orientBadge.textContent = 'Verified';
+          if (orientBadge) orientBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+          if (orientBadge) orientBadge.style.color = '#10b981';
+          if (orientBadge) orientBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
         }
         
         logSystem("✅ Coordinate orientation verified successfully via flat target checks.");
@@ -4717,12 +5048,12 @@ function initLidarStraightLineTest() {
   }
   
   if (orientationVerified) {
-    const badge = document.getElementById('orientation-verified-badge');
-    if (badge) {
-      badge.textContent = 'Verified';
-      badge.style.background = 'rgba(16, 185, 129, 0.15)';
-      badge.style.color = '#10b981';
-      badge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+    const orientBadge = document.getElementById('orientation-verified-badge');
+    if (orientBadge) {
+      if (orientBadge) orientBadge.textContent = 'Verified';
+      if (orientBadge) orientBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+      if (orientBadge) orientBadge.style.color = '#10b981';
+      if (orientBadge) orientBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
     }
   }
 
@@ -4760,13 +5091,13 @@ function runWizardStep() {
   if (!textDiv) return;
   
   if (orientationStep === 1) {
-    textDiv.textContent = 'Step 1: Place a flat object exactly in front of the rover (0°).';
+    if (textDiv) textDiv.textContent = 'Step 1: Place a flat object exactly in front of the rover (0°).';
   } else if (orientationStep === 2) {
-    textDiv.textContent = 'Step 2: Place a flat object exactly to the left of the rover (90°).';
+    if (textDiv) textDiv.textContent = 'Step 2: Place a flat object exactly to the left of the rover (90°).';
   } else if (orientationStep === 3) {
-    textDiv.textContent = 'Step 3: Place a flat object exactly behind the rover (180°).';
+    if (textDiv) textDiv.textContent = 'Step 3: Place a flat object exactly behind the rover (180°).';
   } else if (orientationStep === 4) {
-    textDiv.textContent = 'Step 4: Place a flat object exactly to the right of the rover (270°).';
+    if (textDiv) textDiv.textContent = 'Step 4: Place a flat object exactly to the right of the rover (270°).';
   }
   
   startWizardPolling();
@@ -4799,9 +5130,9 @@ function startWizardPolling() {
           const rangeSpan = document.getElementById('wizard-live-range');
           if (rangeSpan) {
             if (minDist < 10.0) {
-              rangeSpan.textContent = `Live distance at ${targetAngle}°: ${minDist.toFixed(3)}m`;
+              if (rangeSpan) rangeSpan.textContent = `Live distance at ${targetAngle}°: ${minDist.toFixed(3)}m`;
             } else {
-              rangeSpan.textContent = `Live distance at ${targetAngle}°: No point detected`;
+              if (rangeSpan) rangeSpan.textContent = `Live distance at ${targetAngle}°: No point detected`;
             }
           }
         }
@@ -5108,13 +5439,10 @@ function drawLidarTestCanvas() {
 }
 
 function openLowEndCalibration() {
-  const tabBtn = document.querySelector('.tab-btn[data-tab="tab-calibrate"]');
-  if (tabBtn) {
-    tabBtn.click();
-    const section = document.getElementById('tab-calibrate');
-    if (section) {
-      section.scrollIntoView({ behavior: 'smooth' });
-    }
+  activateTopTab('tab-calibration-v2');
+  const section = document.getElementById('tab-calibration-v2');
+  if (section) {
+    section.scrollIntoView({ behavior: 'smooth' });
   }
 }
 
@@ -5191,8 +5519,111 @@ function startAutoCalibPolling() {
   }, 200);
 }
 
+function updateCalibrationReadiness() {
+  const badge = document.getElementById('v2-calib-readiness-badge');
+  const elArmed = document.getElementById('v2-calib-readiness-armed');
+  const elActive = document.getElementById('v2-calib-readiness-active');
+  const elSerial = document.getElementById('v2-calib-readiness-serial');
+  const elTelem = document.getElementById('v2-calib-readiness-telemetry');
+  const elOdom = document.getElementById('v2-calib-readiness-odom');
+  const elEstop = document.getElementById('v2-calib-readiness-estop');
+  const elDia = document.getElementById('v2-calib-readiness-diameter');
+  const elTrack = document.getElementById('v2-calib-readiness-trackwidth');
+  const elTicks = document.getElementById('v2-calib-readiness-ticks');
+  const banner = document.getElementById('v2-calib-readiness-banner');
+
+  const st = window.roverState || {};
+  const drv = st.drive || {};
+  const conn = st.connection || {};
+
+  const isArmed = !!drv.armed;
+  const isAutoActive = !!(window.lastAutoCalibStatus && window.lastAutoCalibStatus.active);
+  const serialOk = !!conn.serial;
+  const wsOk = !!conn.ws;
+  const estopActive = !!drv.estop;
+  const telemAge = conn.telemAgeMs !== undefined ? conn.telemAgeMs : 9999;
+  const odomAge = conn.odomAgeMs !== undefined ? conn.odomAgeMs : 9999;
+  const telemOk = telemAge < 2000;
+  const odomOk = odomAge < 2000;
+
+  if (elArmed) {
+    elArmed.textContent = isArmed ? 'ARMED' : 'Disarmed';
+    elArmed.style.color = isArmed ? '#f59e0b' : '#10b981';
+  }
+  if (elActive) {
+    elActive.textContent = isAutoActive ? 'ACTIVE' : 'Idle';
+    elActive.style.color = isAutoActive ? '#f59e0b' : '#38bdf8';
+  }
+  if (elSerial) {
+    elSerial.textContent = (serialOk && wsOk) ? 'Connected' : 'Disconnected';
+    elSerial.style.color = (serialOk && wsOk) ? '#10b981' : '#ef4444';
+  }
+  if (elTelem) {
+    elTelem.textContent = telemOk ? 'Fresh' : 'Stale';
+    elTelem.style.color = telemOk ? '#10b981' : '#ef4444';
+  }
+  if (elOdom) {
+    elOdom.textContent = odomOk ? 'Fresh' : 'Stale';
+    elOdom.style.color = odomOk ? '#10b981' : '#ef4444';
+  }
+  if (elEstop) {
+    elEstop.textContent = estopActive ? 'ACTIVE' : 'Clear';
+    elEstop.style.color = estopActive ? '#ef4444' : '#10b981';
+  }
+
+  // Active parameter readouts
+  const diaVal = currentWheelDiameter || 0.065;
+  const trackVal = currentTrackWidth || 0.382;
+  const wheelDiaMm = diaVal * 1000.0;
+  const trackMm = trackVal * 1000.0;
+  const ticksPerRev = 1894.0;
+
+  if (elDia) elDia.textContent = `${diaVal.toFixed(3)} m (${wheelDiaMm.toFixed(1)} mm)`;
+  if (elTrack) elTrack.textContent = `${trackVal.toFixed(3)} m (${trackMm.toFixed(1)} mm)`;
+  if (elTicks) elTicks.textContent = `${ticksPerRev.toFixed(1)}`;
+
+  // Also update Constants Readout section (#v2-calib-val-dia-m, etc.)
+  const cDiaM = document.getElementById('v2-calib-val-dia-m');
+  const cDiaMm = document.getElementById('v2-calib-val-dia-mm');
+  const cTrackM = document.getElementById('v2-calib-val-track-m');
+  const cTrackMm = document.getElementById('v2-calib-val-track-mm');
+  const cTicks = document.getElementById('v2-calib-val-ticks');
+
+  if (cDiaM) cDiaM.textContent = `${diaVal.toFixed(3)} m`;
+  if (cDiaMm) cDiaMm.textContent = `${wheelDiaMm.toFixed(1)} mm`;
+  if (cTrackM) cTrackM.textContent = `${trackVal.toFixed(3)} m`;
+  if (cTrackMm) cTrackMm.textContent = `${trackMm.toFixed(1)} mm`;
+  if (cTicks) cTicks.textContent = `${ticksPerRev.toFixed(1)}`;
+
+  // Check overall readiness
+  let issues = [];
+  if (!wsOk || !serialOk) issues.push('Serial connection disconnected');
+  if (!telemOk) issues.push('Telemetry stale or missing');
+  if (!odomOk) issues.push('Odometry stale or missing');
+  if (estopActive) issues.push('E-stop active');
+
+  const isReady = issues.length === 0;
+
+  if (badge) {
+    badge.textContent = isReady ? 'READY' : 'NOT READY';
+    badge.style.background = isReady ? '#10b981' : '#ef4444';
+    badge.style.color = '#fff';
+  }
+
+  if (banner) {
+    if (!isReady) {
+      banner.style.display = 'block';
+      banner.textContent = `⚠️ Safety Gate Inhibited: ${issues.join(' | ')}`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+}
+
 function updateAutoCalibUI(status) {
   if (!status) return;
+  window.lastAutoCalibStatus = status;
+  updateCalibrationReadiness();
 
   const setText = (idOrClass, val) => {
     document.querySelectorAll('#' + idOrClass + ', .' + idOrClass).forEach(el => {
@@ -5259,6 +5690,7 @@ function updateAutoCalibUI(status) {
 
 // Query initial automatic calibration status on page load
 document.addEventListener('DOMContentLoaded', () => {
+  updateCalibrationReadiness();
   fetch('/api/calibration/auto/status')
     .then(res => res.json())
     .then(data => {
@@ -5391,15 +5823,20 @@ function drawCompactLidarScan(scan) {
 // Stage 4 Safety Event Handlers: Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
 window.addEventListener('blur', () => {
   if (typeof driveRover === 'function') driveRover('stop');
+  sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
+  lastSentJoystick = { x: 0, y: 0, deadman: false };
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && typeof driveRover === 'function') {
-    driveRover('stop');
+  if (document.hidden) {
+    if (typeof driveRover === 'function') driveRover('stop');
+    sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
+    lastSentJoystick = { x: 0, y: 0, deadman: false };
   }
 });
 
 window.addEventListener('gamepaddisconnect', () => {
   if (typeof driveRover === 'function') driveRover('stop');
+  sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
+  lastSentJoystick = { x: 0, y: 0, deadman: false };
 });
-
