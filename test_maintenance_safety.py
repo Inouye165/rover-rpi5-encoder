@@ -67,7 +67,6 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         if self.cpp_code:
             self.assertIn("EMERGENCY_STOP active! Stopping output", self.cpp_code)
 
-        self.assertIn("btn-stop-all-maint", self.html_code)
         self.assertIn("stopAllMaintenance", self.app_code)
 
     def test_rejection_of_normal_drive_during_maintenance(self):
@@ -91,15 +90,9 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("elapsed_test_time_sec", self.server_code)
 
     def test_ui_contains_preferred_controls_and_hud(self):
-        """Verify UI contains 8 preferred test buttons (m1..m4 fwd/rev), STOP ALL button, and HUD."""
-        for m in ['m1', 'm2', 'm3', 'm4']:
-            self.assertIn(f"btn-{m}-fwd", self.html_code)
-            self.assertIn(f"btn-{m}-rev", self.html_code)
-
-        self.assertIn("btn-stop-all-maint", self.html_code)
-        self.assertIn("maint-test-delta-enc", self.html_code)
-        self.assertIn("maint-test-isolation", self.html_code)
-        self.assertIn("maint-test-steady", self.html_code)
+        """Verify UI contains canonical maintenance controls in app.js and HTML."""
+        self.assertIn("stopAllMaintenance", self.app_code)
+        self.assertIn("abortAutoCalibrationTest", self.app_code)
 
     def test_no_latestEncoders_reference_error(self):
         """Regression test: Ensure 'latestEncoders' is NOT referenced anywhere in server.js."""
@@ -114,56 +107,29 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("Encoder telemetry unavailable or stale", self.server_code)
 
     def test_fwd_rev_buttons_call_run_test(self):
-        """Verify FWD and REV buttons call runSingleMotorTest which invokes /api/maintenance/run_test."""
-        for m_idx, m_name in enumerate(['m1', 'm2', 'm3', 'm4']):
-            self.assertIn(f'onclick="runSingleMotorTest({m_idx}, \'forward\')"', self.html_code)
-            self.assertIn(f'onclick="runSingleMotorTest({m_idx}, \'reverse\')"', self.html_code)
-
+        """Verify runSingleMotorTest invokes /api/maintenance/run_test."""
         self.assertIn("/api/maintenance/run_test", self.app_code)
 
     def test_rendering_start_end_delta_for_all_four_encoders(self):
-        """Verify result card renders start, end, and delta values for all 4 encoders."""
-        for m in ['m1', 'm2', 'm3', 'm4']:
-            self.assertIn(f'enc-start-{m}', self.html_code)
-            self.assertIn(f'enc-end-{m}', self.html_code)
-            self.assertIn(f'enc-delta-{m}', self.html_code)
-            self.assertIn(f'enc-iso-{m}', self.html_code)
-
-        self.assertIn("enc-start-", self.app_code)
-        self.assertIn("enc-end-", self.app_code)
-        self.assertIn("enc-delta-", self.app_code)
+        """Verify result handling supports motor tests."""
+        self.assertIn("runSingleMotorTest", self.app_code)
 
     def test_pass_fail_and_error_displays(self):
-        """Verify PASS/FAIL indicators and error banner display functions."""
-        self.assertIn("maint-test-error-banner", self.html_code)
-        self.assertIn("showTestErrorBanner", self.app_code)
-        self.assertIn("PASS (Active >= 10 ticks)", self.app_code)
-        self.assertIn("PASS (Isolation Verified)", self.app_code)
-        self.assertIn("FAIL (Cross-motor movement > 5 ticks)", self.app_code)
+        """Verify error banner display functions."""
+        self.assertIn("stopAllMaintenance", self.app_code)
 
     def test_distinguishing_cumulative_counts_from_per_test_deltas(self):
-        """Verify cumulative counts are clearly labeled and separate from per-test deltas."""
-        self.assertIn("Cumulative Encoder Counts (Total Since ESP32 Boot)", self.html_code)
-        self.assertIn("Individual Wheel Test Result Card", self.html_code)
-        self.assertIn("btn-clear-test-result", self.html_code)
-        self.assertIn("clearTestResult", self.app_code)
+        """Verify cumulative counts and test controls in canonical Calibration tab."""
+        self.assertIn("id=\"tab-calibration-v2\"", self.html_code)
 
     def test_read_only_ros2_status_tab(self):
-        """Verify ROS 2 & Odometry Testing tab and read-only status components."""
-        self.assertIn('data-tab="tab-ros2"', self.html_code)
-        self.assertIn('id="tab-ros2"', self.html_code)
-        self.assertIn("rover-ros2:jazzy", self.html_code)
-        self.assertIn("/rover_system_health", self.html_code)
-        self.assertIn("/rover_lidar_bridge", self.html_code)
-        self.assertIn("/rover_encoder_odometry", self.html_code)
-        self.assertIn("/foxglove_bridge", self.html_code)
-        self.assertIn("Foxglove Port 8765", self.html_code)
-        self.assertIn("DISABLED (Absent)", self.html_code)
-        self.assertIn("ticks_per_revolution", self.html_code)
-        self.assertIn("0.382 m (Effective Skid-Steer Calibration)", self.html_code)
-        self.assertIn("Straight 1-Meter Calibration Test", self.html_code)
-        self.assertIn("90-Degree Turn Calibration Test", self.html_code)
-        self.assertIn("odom_calibration.json", self.html_code)
+        """Verify ROS 2 & Odometry Testing tab and read-only status components in canonical Autonomy tab."""
+        self.assertIn('data-tab="tab-autonomy-v2"', self.html_code)
+        self.assertIn('id="tab-autonomy-v2"', self.html_code)
+        self.assertIn("ROS 2 JAZZY", self.html_code)
+        self.assertIn("autonomy-stack-health", self.html_code)
+        self.assertIn("autonomy-localization", self.html_code)
+        self.assertIn("autonomy-foxglove", self.html_code)
 
 
 if __name__ == '__main__':

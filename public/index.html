@@ -58,7 +58,6 @@
       <button class="tab-btn" id="nav-sensors" data-tab="tab-sensors-v2" role="tab" aria-selected="false" aria-controls="tab-sensors-v2" tabindex="-1">📡 Sensors</button>
       <button class="tab-btn" id="nav-calibration" data-tab="tab-calibration-v2" role="tab" aria-selected="false" aria-controls="tab-calibration-v2" tabindex="-1">🛡️ Calibration</button>
       <button class="tab-btn" id="nav-diagnostics" data-tab="tab-diagnostics-v2" role="tab" aria-selected="false" aria-controls="tab-diagnostics-v2" tabindex="-1">💻 Diagnostics</button>
-      <button class="tab-btn legacy-btn" id="nav-legacy" data-tab="tab-legacy" role="tab" aria-selected="false" aria-controls="tab-legacy" tabindex="-1">🛠️ Legacy Tools</button>
     </nav>
 
     <!-- Top Level Destination Tab 1: Drive V2 -->
@@ -68,10 +67,6 @@
           <div class="v2-shell-title-box">
             <h2>🎮 Drive Control Room</h2>
             <p>Primary operational cockpit for manual rover teleoperation, live drive status, camera feed, and safety oversight.</p>
-          </div>
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Stage 4 — Manual Driving Active</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-dashboard">Open Legacy Tools</button>
           </div>
         </div>
 
@@ -301,10 +296,6 @@
             <h2>🤖 Autonomy & Navigation Stack</h2>
             <p>Monitor ROS 2 navigation stack, SLAM mapping, localization state, Nav2 lifecycle, goal progress, and Foxglove access.</p>
           </div>
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy ROS 2 Area</button>
-          </div>
         </div>
 
         <div class="v2-placeholder-grid">
@@ -374,11 +365,6 @@
           <div class="v2-shell-title-box">
             <h2>📡 Sensor Payloads & Telemetry</h2>
             <p>Real-time inspection of RPLIDAR C1 360° scans, 3D IMU attitude, wheel odometry trajectories, and sensor health.</p>
-          </div>
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-lidar">Open Current Legacy LiDAR Monitor</button>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-imu">Open Current Legacy IMU & Position Tracking</button>
           </div>
         </div>
 
@@ -461,11 +447,6 @@
           <div class="v2-shell-title-box">
             <h2>🛡️ Kinematic Calibration & Commissioning</h2>
             <p>Unified calibration workflow for wheel verification, closed-loop 1 m / 90° tests, repeatability verification, and advanced tuning.</p>
-          </div>
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Migration in Progress — Stage 2 Shell</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-calibrate">Open Current Legacy Calibration & Safety</button>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-motion-cal">Open Current Legacy Motion Cal Area</button>
           </div>
         </div>
 
@@ -1002,1490 +983,304 @@
       <div class="v2-shell-container">
         <div class="v2-shell-header">
           <div class="v2-shell-title-box">
-            <h2>💻 System Diagnostics & Terminal</h2>
-            <p>Deep-dive system diagnostics, service rate monitors, serial link parameters, raw driver logs, and command terminal.</p>
-          </div>
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <span class="v2-migration-badge">Stage 3 — Read-Only Status Active</span>
-            <button class="btn btn-secondary btn-small legacy-redirect-btn" data-legacy-target="tab-ros2">Open Current Legacy Diagnostics / ROS 2 Area</button>
+            <h2>💻 System Diagnostics, Health & Logs</h2>
+            <p>Comprehensive live system health, connection status, ROS 2 stack monitoring, sensor diagnostics, real-time driver logs, and developer tools.</p>
           </div>
         </div>
 
-        <div class="v2-placeholder-grid">
-          <div class="v2-card" id="diagnostics-services">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+
+          <!-- Section A: Overall System Health Summary -->
+          <div class="v2-card" id="diagnostics-overall-health">
             <div class="v2-card-header">
-              <h3>🛠️ System Services Status</h3>
+              <h3>🩺 Overall System Health Summary</h3>
+              <span id="v2-health-overall-badge" class="badge badge-success">HEALTHY</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Overall Status:</span> <span id="v2-health-val-overall" class="status-val badge-healthy">HEALTHY</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Drive System:</span> <span id="v2-health-val-drive" class="status-val">READY</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Calibration State:</span> <span id="v2-health-val-calib" class="status-val">IDLE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">WebSocket Connection:</span> <span id="v2-health-val-ws" class="status-val badge-healthy">CONNECTED</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Serial Link:</span> <span id="v2-health-val-serial" class="status-val badge-healthy">CONNECTED</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">LiDAR Sensor:</span> <span id="v2-health-val-lidar" class="status-val badge-healthy">HEALTHY</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Odometry Bridge:</span> <span id="v2-health-val-odom" class="status-val badge-healthy">HEALTHY</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">ROS 2 Stack:</span> <span id="v2-health-val-ros" class="status-val badge-healthy">HEALTHY</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Camera Stream:</span> <span id="v2-health-val-camera" class="status-val">AVAILABLE</span></div>
+            </div>
+            <div id="v2-health-reason-container" style="display: none; margin-top: 10px; padding: 8px 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; font-size: 12px; color: #fca5a5;">
+              <strong>Active Reason:</strong> <span id="v2-health-val-reason">None</span>
+            </div>
+          </div>
+
+          <!-- Section B: Drive & Safety State -->
+          <div class="v2-card" id="diagnostics-drive-safety">
+            <div class="v2-card-header">
+              <h3>🛡️ Drive & Safety Read-Only Diagnostics</h3>
               <span class="badge badge-info">READ-ONLY</span>
             </div>
             <div class="v2-status-grid">
-              <div class="v2-status-item"><span class="v2-status-label">Node.js Cockpit Server:</span> <span id="v2-diag-val-srv-node" class="status-val badge-healthy">RUNNING</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">LiDAR Python Sidecar:</span> <span id="v2-diag-val-srv-lidar" class="status-val badge-healthy">RUNNING</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">ROS 2 Odometry Bridge:</span> <span id="v2-diag-val-srv-ros" class="status-val badge-healthy">RUNNING</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-diag-val-srv-foxglove" class="status-val badge-healthy">RUNNING</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Armed State:</span> <span id="v2-diag-val-armed" class="status-val">DISARMED</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Control Mode:</span> <span id="v2-diag-val-mode" class="status-val">0 (COORDINATED)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Command Source:</span> <span id="v2-diag-val-source" class="status-val">0 (None)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Motion Request:</span> <span id="v2-diag-val-motion-status" class="status-val">Zero (No Movement Requested)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Last Command Age:</span> <span id="v2-diag-val-cmd-age" class="status-val">-- ms</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Requested Linear Vel:</span> <span id="v2-diag-val-req-lin" class="status-val">0.00 m/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Requested Angular Vel:</span> <span id="v2-diag-val-req-ang" class="status-val">0.00 rad/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Limited Linear Vel:</span> <span id="v2-diag-val-lim-lin" class="status-val">0.00 m/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Limited Angular Vel:</span> <span id="v2-diag-val-lim-ang" class="status-val">0.00 rad/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Motor Command Values:</span> <span id="v2-diag-val-motor-cmd" class="status-val">[0, 0, 0, 0]</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Straight Drive Lock:</span> <span id="v2-diag-val-lock" class="status-val">UNLOCKED</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Hardware E-Stop:</span> <span id="v2-diag-val-estop" class="status-val">INACTIVE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Floor Speed Limit:</span> <span id="v2-diag-val-floor" class="status-val">INACTIVE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Path Backtracking:</span> <span id="v2-diag-val-backtrack" class="status-val">IDLE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Path Recording:</span> <span id="v2-diag-val-recording" class="status-val">IDLE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Auto Calibration Phase:</span> <span id="v2-diag-val-autocal" class="status-val">IDLE</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Maintenance Mode:</span> <span id="v2-diag-val-maint" class="status-val">INACTIVE</span></div>
+              <div class="v2-status-item" style="grid-column: span 2;"><span class="v2-status-label">Latest Fault / Rejection:</span> <span id="v2-diag-val-fault" class="status-val">None</span></div>
+            </div>
+            <div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-small legacy-redirect-btn" data-target-tab="tab-drive-v2">🎮 Go to Primary Drive Tab for Teleoperation</button>
+              <button class="btn btn-secondary btn-small legacy-redirect-btn" data-target-tab="tab-calibration-v2">🛡️ Go to Calibration Tab for Maintenance</button>
             </div>
           </div>
-          <div class="v2-card" id="diagnostics-firmware">
-            <div class="v2-card-header">
-              <h3>🆔 Firmware & Binary Protocol Identity</h3>
-              <span class="badge badge-info">ESP32</span>
+
+          <!-- Section C: Connections and Services -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px;">
+            <div class="v2-card" id="diagnostics-services">
+              <div class="v2-card-header">
+                <h3>🛠️ System Services Status</h3>
+                <span class="badge badge-info">HTTP / WS</span>
+              </div>
+              <div class="v2-status-grid">
+                <div class="v2-status-item"><span class="v2-status-label">Node.js Cockpit Server:</span> <span id="v2-diag-val-srv-node" class="status-val badge-healthy">RUNNING</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Cockpit WebSocket:</span> <span id="v2-diag-val-srv-ws" class="status-val badge-healthy">CONNECTED</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">LiDAR Python Sidecar:</span> <span id="v2-diag-val-srv-lidar" class="status-val badge-healthy">RUNNING</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">ROS 2 Odometry Bridge:</span> <span id="v2-diag-val-srv-ros" class="status-val badge-healthy">RUNNING</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge (Port 8765):</span> <span id="v2-diag-val-srv-foxglove" class="status-val badge-healthy">RUNNING</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Camera Stream:</span> <span id="v2-diag-val-srv-camera" class="status-val">AVAILABLE</span></div>
+              </div>
             </div>
-            <div class="v2-status-grid">
-              <div class="v2-status-item"><span class="v2-status-label">Target Board:</span> <span id="v2-fw-val-board" class="status-val">Maker ESP32 Pro</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Firmware Name:</span> <span id="v2-fw-val-name" class="status-val">esp-maker-usba-4motor</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Firmware Version:</span> <span id="v2-fw-val-ver" class="status-val">1.0.0</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Binary Protocol:</span> <span id="v2-fw-val-proto" class="status-val">Binary Packet v1</span></div>
+            <div class="v2-card" id="diagnostics-firmware">
+              <div class="v2-card-header">
+                <h3>🆔 Live Board Firmware Identity</h3>
+                <span class="badge badge-info">ESP32 TELEMETRY</span>
+              </div>
+              <div class="v2-status-grid">
+                <div class="v2-status-item"><span class="v2-status-label">Target Board:</span> <span id="v2-fw-val-board" class="status-val">Awaiting firmware identity...</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Firmware Name:</span> <span id="v2-fw-val-name" class="status-val">Awaiting firmware identity...</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Firmware Version:</span> <span id="v2-fw-val-ver" class="status-val">Unknown</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Binary Protocol:</span> <span id="v2-fw-val-proto" class="status-val">Unknown</span></div>
+              </div>
+            </div>
+            <div class="v2-card" id="diagnostics-serial">
+              <div class="v2-card-header">
+                <h3>🔌 Serial Link Diagnostics</h3>
+                <span class="badge badge-info">UART</span>
+              </div>
+              <div class="v2-status-grid">
+                <div class="v2-status-item"><span class="v2-status-label">Serial Device:</span> <span id="v2-serial-val-dev" class="status-val">/dev/rover-esp32</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Baud Rate:</span> <span id="v2-serial-val-baud" class="status-val">115200 Baud</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Telemetry Rate:</span> <span id="v2-serial-val-hz" class="status-val">10 Hz</span></div>
+                <div class="v2-status-item"><span class="v2-status-label">Packet Errors:</span> <span id="v2-serial-val-errs" class="status-val">0</span></div>
+              </div>
             </div>
           </div>
-          <div class="v2-card" id="diagnostics-serial">
+
+          <!-- Section D: ROS 2 and Navigation Stack -->
+          <div class="v2-card" id="diagnostics-ros2-nav">
             <div class="v2-card-header">
-              <h3>🔌 Serial Link Diagnostics</h3>
-              <span class="badge badge-info">UART</span>
-            </div>
-            <div class="v2-status-grid">
-              <div class="v2-status-item"><span class="v2-status-label">Serial Device:</span> <span id="v2-serial-val-dev" class="status-val">/dev/rover-esp32</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Baud Rate:</span> <span id="v2-serial-val-baud" class="status-val">115200 Baud</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Telemetry Rate:</span> <span id="v2-serial-val-hz" class="status-val">10 Hz</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Packet Errors:</span> <span id="v2-serial-val-errs" class="status-val">0</span></div>
-            </div>
-          </div>
-          <div class="v2-card" id="diagnostics-ros">
-            <div class="v2-card-header">
-              <h3>📡 ROS 2 Topic & TF Diagnostics</h3>
+              <h3>📡 ROS 2 & Navigation Stack Diagnostics</h3>
               <span class="badge badge-info">ROS 2</span>
             </div>
-            <div class="v2-status-grid">
+            <div class="v2-status-grid" id="diagnostics-ros">
+              <div class="v2-status-item"><span class="v2-status-label">ROS 2 Node Health:</span> <span id="v2-rosdiag-val-health" class="status-val badge-healthy">HEALTHY</span></div>
               <div class="v2-status-item"><span class="v2-status-label">/diagnostics Topic:</span> <span id="v2-rosdiag-val-diag" class="status-val">1.0 Hz</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">/scan Topic:</span> <span id="v2-rosdiag-val-scan" class="status-val">6.6 Hz</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">/odom Topic:</span> <span id="v2-rosdiag-val-odom" class="status-val">10.0 Hz</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">/tf Topic:</span> <span id="v2-rosdiag-val-tf" class="status-val">10.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/scan (LiDAR) Topic:</span> <span id="v2-rosdiag-val-scan" class="status-val">6.6 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/odom (Odometry) Topic:</span> <span id="v2-rosdiag-val-odom" class="status-val">10.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/tf (odom -> base_link):</span> <span id="v2-rosdiag-val-tf" class="status-val">10.0 Hz</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/tf_static (base_link -> laser):</span> <span id="v2-rosdiag-val-tf-static" class="status-val">Active (Latched)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Foxglove Bridge:</span> <span id="v2-rosdiag-val-foxglove" class="status-val">Listening (Port 8765)</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Nav2 Stack:</span> <span class="badge badge-warning">Not implemented</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">SLAM Mapping:</span> <span class="badge badge-warning">Not implemented</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">/cmd_vel Motor Support:</span> <span class="badge badge-warning">Disabled (Not implemented)</span></div>
             </div>
-          </div>
-          <div class="v2-placeholder-card" id="diagnostics-logs">
-            <span class="card-label">Placeholder Region: diagnostics-logs (Stage 6)</span>
-            <h3>Live Driver Logs</h3>
-            <p>Destination for real-time driver log stream and console clear action.</p>
-          </div>
-          <div class="v2-placeholder-card" id="diagnostics-developer">
-            <span class="card-label">Placeholder Region: diagnostics-developer (Stage 6)</span>
-            <h3>Developer & Packet Tools</h3>
-            <p>Destination for raw hex serial command prompt and calibration database raw JSON inspector.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Temporary Legacy Tools Access Container -->
-    <div id="tab-legacy" class="tab-content" role="tabpanel" aria-labelledby="nav-legacy">
-      <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 12px; padding: 15px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-        <div>
-          <h3 style="margin: 0 0 4px 0; color: #c084fc; font-size: 1.1rem;">🛠️ Temporary Legacy Tools & Historical Interfaces</h3>
-          <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">Access all seven original cockpit tabs during Stage 2 migration. All legacy controls and IDs remain 100% active.</p>
-        </div>
-        <span class="v2-migration-badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border-color: rgba(168, 85, 247, 0.4);">STAGE 2 LEGACY PARITY</span>
-      </div>
-
-      <nav class="legacy-tab-bar" role="tablist" aria-label="Legacy Sub-Navigation">
-        <button class="legacy-sub-btn active" data-legacy-tab="tab-dashboard" role="tab" aria-selected="true" aria-controls="tab-dashboard">🎮 Cockpit Dashboard</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-imu" role="tab" aria-selected="false" aria-controls="tab-imu">🧭 IMU & Position Tracking</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-encoder" role="tab" aria-selected="false" aria-controls="tab-encoder">🔍 Encoder & Rotate Testing</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-ros2" data-tab="tab-ros2" role="tab" aria-selected="false" aria-controls="tab-ros2">🤖 ROS 2 & Odometry Testing</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-calibrate" role="tab" aria-selected="false" aria-controls="tab-calibrate">🛡️ Calibration & Safety</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-motion-cal" role="tab" aria-selected="false" aria-controls="tab-motion-cal">🎛️ Motion Cal & Backtrack</button>
-        <button class="legacy-sub-btn" data-legacy-tab="tab-lidar" role="tab" aria-selected="false" aria-controls="tab-lidar">📡 LiDAR Monitor</button>
-      </nav>
-
-      <div class="legacy-tab-container-holder">
-        <!-- Tab Contents -->
-        <div id="tab-dashboard" class="tab-content active">
-      <!-- Main Grid Dashboard -->
-      <main class="dashboard-grid">
-
-      <!-- Left Column: Legacy Dashboard Compatibility Banner -->
-      <section class="panel controls-panel glass">
-        <div class="panel-header">
-          <h2>🛠️ Legacy Cockpit Dashboard</h2>
-        </div>
-
-        <div class="v2-card" style="margin-bottom: 20px; border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.05);">
-          <div class="v2-card-header">
-            <h3 style="color: #c084fc;">🎮 Manual Driving Controls Moved to Drive Tab</h3>
-            <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc;">STAGE 4 MIGRATED</span>
-          </div>
-          <p style="color: var(--text-muted); font-size: 0.88rem; margin: 10px 0; line-height: 1.4;">
-            The manual driving controls, direction pad, speed sliders, arming switches, and live RPi camera feed have been migrated to the primary <strong>Drive</strong> tab for an integrated teleoperation cockpit experience.
-          </p>
-          <button class="btn legacy-redirect-btn" data-target-tab="tab-drive-v2" style="align-self: flex-start; padding: 10px 18px;">
-            👉 Open Primary Drive Tab
-          </button>
-        </div>
-      </section>
-
-
-      <!-- Center & Right: Wheel Telemetry Grid -->
-      <section class="telemetry-section">
-        <div class="panel telemetry-panel glass">
-          <div class="panel-header">
-            <h2>📊 Real-time Wheel Telemetry</h2>
-            <div class="stream-control">
-              <label><input type="checkbox" id="stream-total" checked> Total Ticks</label>
-              <label><input type="checkbox" id="stream-realtime" checked> Real-time (10ms)</label>
-              <label><input type="checkbox" id="stream-speed" checked> Speed (mm/s)</label>
-            </div>
+            <details style="margin-top: 12px;" id="v2-ros-topic-details">
+              <summary style="cursor: pointer; color: var(--cyan-glow); font-size: 13px; font-weight: bold;">View Detailed ROS 2 Topic & Frame Table</summary>
+              <div style="margin-top: 10px; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border); text-align: left; color: var(--text-muted);">
+                      <th style="padding: 6px;">Topic / Frame</th>
+                      <th style="padding: 6px;">Type / Parent</th>
+                      <th style="padding: 6px;">Target Rate</th>
+                      <th style="padding: 6px;">Observed Rate</th>
+                      <th style="padding: 6px;">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 6px; color: var(--primary);">/scan</td>
+                      <td style="padding: 6px;">sensor_msgs/msg/LaserScan</td>
+                      <td style="padding: 6px;">6.5 Hz</td>
+                      <td style="padding: 6px;" id="v2-tbl-scan-hz">6.6 Hz</td>
+                      <td style="padding: 6px; color: #10b981;">Active</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 6px; color: var(--primary);">/odom</td>
+                      <td style="padding: 6px;">nav_msgs/msg/Odometry</td>
+                      <td style="padding: 6px;">10.0 Hz</td>
+                      <td style="padding: 6px;" id="v2-tbl-odom-hz">10.0 Hz</td>
+                      <td style="padding: 6px; color: #10b981;">Active</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 6px; color: var(--primary);">/tf</td>
+                      <td style="padding: 6px;">odom ➔ base_link</td>
+                      <td style="padding: 6px;">10.0 Hz</td>
+                      <td style="padding: 6px;" id="v2-tbl-tf-hz">10.0 Hz</td>
+                      <td style="padding: 6px; color: #10b981;">Active</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                      <td style="padding: 6px; color: var(--primary);">/tf_static</td>
+                      <td style="padding: 6px;">base_link ➔ laser</td>
+                      <td style="padding: 6px;">Latched</td>
+                      <td style="padding: 6px;">1.0 Hz</td>
+                      <td style="padding: 6px; color: #10b981;">Active</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </div>
 
-          <div class="wheels-grid">
-            <!-- FRONT LEFT - M1 -->
-            <div class="wheel-card" id="card-m1">
-              <div class="card-header">
-                <h3>Front Left <span>(M1)</span></h3>
-                <span class="dir-badge status-indicator off">STOP</span>
-              </div>
-              <div class="wheel-visual-wrapper">
-                <div class="wheel-visual">
-                  <div class="tire-treads"></div>
-                  <div class="wheel-hub"></div>
-                </div>
-              </div>
-              <div class="telemetry-readouts">
-                <div class="readout-item">
-                  <span class="label">Speed (MPH)</span>
-                  <span class="value" id="telemetry-speed-m1">0.00 <small>mph</small></span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">RPM</span>
-                  <span class="value" id="telemetry-real-m1">0.0</span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">Total Ticks</span>
-                  <span class="value" id="telemetry-total-m1">0</span>
-                </div>
-              </div>
+          <!-- Section E: Sensor Health -->
+          <div class="v2-card" id="diagnostics-sensor-health">
+            <div class="v2-card-header">
+              <h3>📡 Sensor Suite Health & Telemetry</h3>
+              <span class="badge badge-info">SENSORS</span>
             </div>
-
-            <!-- FRONT RIGHT - M3 -->
-            <div class="wheel-card" id="card-m3">
-              <div class="card-header">
-                <h3>Front Right <span>(M3)</span></h3>
-                <span class="dir-badge status-indicator off">STOP</span>
-              </div>
-              <div class="wheel-visual-wrapper">
-                <div class="wheel-visual">
-                  <div class="tire-treads"></div>
-                  <div class="wheel-hub"></div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px;">
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <h4 style="margin: 0 0 8px 0; color: var(--primary);">LiDAR (RPLIDAR C1)</h4>
+                <div style="font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 4px;">
+                  <div>Status: <span id="v2-diag-sensor-lidar-state" style="color: #10b981; font-weight: bold;">Scanning</span></div>
+                  <div>Scan Rate: <span id="v2-diag-sensor-lidar-hz">6.6 Hz</span></div>
+                  <div>Point Count: <span id="v2-diag-sensor-lidar-pts">360 pts</span></div>
+                  <div>Data Age: <span id="v2-diag-sensor-lidar-age">2 ms</span></div>
+                  <div>Last Error: <span id="v2-diag-sensor-lidar-err" style="color: var(--text-muted);">None</span></div>
                 </div>
               </div>
-              <div class="telemetry-readouts">
-                <div class="readout-item">
-                  <span class="label">Speed (MPH)</span>
-                  <span class="value" id="telemetry-speed-m3">0.00 <small>mph</small></span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">RPM</span>
-                  <span class="value" id="telemetry-real-m3">0.0</span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">Total Ticks</span>
-                  <span class="value" id="telemetry-total-m3">0</span>
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <h4 style="margin: 0 0 8px 0; color: var(--primary);">Wheel Odometry Node</h4>
+                <div style="font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 4px;">
+                  <div>Node Health: <span id="v2-diag-sensor-odom-health" style="color: #10b981; font-weight: bold;">Healthy</span></div>
+                  <div>Pose (X, Y): <span id="v2-diag-sensor-odom-pos">0.000m, 0.000m</span></div>
+                  <div>Heading (Yaw): <span id="v2-diag-sensor-odom-yaw">0.0°</span></div>
+                  <div>L/R Distance: <span id="v2-diag-sensor-odom-dist">0.000m / 0.000m</span></div>
+                  <div>Stale Threshold: <span id="v2-diag-sensor-odom-stale" style="color: #10b981;">FRESH (&lt;1s)</span></div>
                 </div>
               </div>
-            </div>
-
-            <!-- REAR LEFT - M2 -->
-            <div class="wheel-card" id="card-m2">
-              <div class="card-header">
-                <h3>Rear Left <span>(M2)</span></h3>
-                <span class="dir-badge status-indicator off">STOP</span>
-              </div>
-              <div class="wheel-visual-wrapper">
-                <div class="wheel-visual">
-                  <div class="tire-treads"></div>
-                  <div class="wheel-hub"></div>
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <h4 style="margin: 0 0 8px 0; color: var(--primary);">Camera & Visual Stream</h4>
+                <div style="font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 4px;">
+                  <div>Stream State: <span id="v2-diag-sensor-camera-state" style="color: #10b981; font-weight: bold;">Available</span></div>
+                  <div>Stream URL: <span id="v2-diag-sensor-camera-url">/api/camera</span></div>
+                  <div>Last Load Error: <span id="v2-diag-sensor-camera-err" style="color: var(--text-muted);">None</span></div>
                 </div>
               </div>
-              <div class="telemetry-readouts">
-                <div class="readout-item">
-                  <span class="label">Speed (MPH)</span>
-                  <span class="value" id="telemetry-speed-m2">0.00 <small>mph</small></span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">RPM</span>
-                  <span class="value" id="telemetry-real-m2">0.0</span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">Total Ticks</span>
-                  <span class="value" id="telemetry-total-m2">0</span>
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <h4 style="margin: 0 0 8px 0; color: var(--primary);">IMU Sensor</h4>
+                <div style="font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 4px;">
+                  <div>Status: <span id="v2-diag-sensor-imu-state" class="badge badge-warning">Not implemented</span></div>
+                  <div>Summary: <span style="color: var(--text-muted);">Not hardware-integrated</span></div>
                 </div>
               </div>
-            </div>
-
-            <!-- REAR RIGHT - M4 -->
-            <div class="wheel-card" id="card-m4">
-              <div class="card-header">
-                <h3>Rear Right <span>(M4)</span></h3>
-                <span class="dir-badge status-indicator off">STOP</span>
-              </div>
-              <div class="wheel-visual-wrapper">
-                <div class="wheel-visual">
-                  <div class="tire-treads"></div>
-                  <div class="wheel-hub"></div>
-                </div>
-              </div>
-              <div class="telemetry-readouts">
-                <div class="readout-item">
-                  <span class="label">Speed (MPH)</span>
-                  <span class="value" id="telemetry-speed-m4">0.00 <small>mph</small></span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">RPM</span>
-                  <span class="value" id="telemetry-real-m4">0.0</span>
-                </div>
-                <div class="readout-item">
-                  <span class="label">Total Ticks</span>
-                  <span class="value" id="telemetry-total-m4">0</span>
+              <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                <h4 style="margin: 0 0 8px 0; color: var(--primary);">Ultrasonic & Cliff Sensors</h4>
+                <div style="font-size: 12px; font-family: monospace; display: flex; flex-direction: column; gap: 4px;">
+                  <div>Status: <span id="v2-diag-sensor-ultrasonic-state" class="badge badge-warning">Not implemented</span></div>
+                  <div>Summary: <span style="color: var(--text-muted);">Not hardware-integrated</span></div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Configurations & Parameters -->
-        <div class="panel config-panel glass">
-          <div class="panel-header">
-            <h2>⚙️ Board Configurations & Tuning</h2>
-          </div>
-          <form id="config-form" class="config-grid">
-            <div class="form-group">
-              <label for="motor-type">Motor Type</label>
-              <select id="motor-type">
-                <option value="1">1: 520 Motor</option>
-                <option value="2">2: 310 Motor</option>
-                <option value="3" selected>3: TT Motor (With Encoder)</option>
-                <option value="4">4: TT Motor (Without Encoder)</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="deadband">Deadband Pulse (0-3600)</label>
-              <input type="number" id="deadband" min="0" max="3600" value="1600">
-            </div>
-
-            <div class="form-group">
-              <label for="phase-lines">Encoder Phase Lines</label>
-              <input type="number" id="phase-lines" min="1" max="100" value="11">
-            </div>
-
-            <div class="form-group">
-              <label for="reduction-ratio">Reduction Ratio</label>
-              <input type="number" id="reduction-ratio" min="1" max="1000" value="30">
-            </div>
-
-            <div class="form-group">
-              <label for="wheel-diameter">Wheel Diameter (mm)</label>
-              <input type="number" id="wheel-diameter" min="1" max="200" value="67">
-            </div>
-
-            <!-- PID Control Tuning -->
-            <div class="pid-group">
-              <label>PID Coefficients</label>
-              <div class="pid-inputs">
-                <input type="number" id="pid-p" step="0.01" min="0" max="100" value="0.80" placeholder="P">
-                <input type="number" id="pid-i" step="0.01" min="0" max="100" value="0.06" placeholder="I">
-                <input type="number" id="pid-d" step="0.01" min="0" max="100" value="0.50" placeholder="D">
-              </div>
-            </div>
-
-            <div class="form-buttons">
-              <button type="button" class="btn btn-secondary" id="btn-read-flash">Query Flash Info</button>
-              <button type="button" class="btn btn-warning" id="btn-reset-flash">Reset Defaults</button>
-              <button type="submit" class="btn btn-primary">Apply Settings to Board</button>
-            </div>
-          </form>
-        </div>
-      </section>
-
-    </main>
-    </div> <!-- End Dashboard Tab -->
-
-    <!-- IMU and Position Tracking Tab -->
-    <div id="tab-imu" class="tab-content">
-      <main class="imu-grid">
-        <!-- Left: 3D Attitude visualizer -->
-        <section class="panel orientation-panel glass">
-          <div class="panel-header">
-            <h2>🧭 3D Rover Attitude</h2>
-            <button class="btn btn-small" id="btn-reset-imu">Reset Orientation</button>
-          </div>
-          <div class="scene-3d-wrapper">
-            <div class="scene-3d">
-              <div class="rover-3d" id="rover-3d-model">
-                <div class="face front">FRONT</div>
-                <div class="face back">BACK</div>
-                <div class="face left">LEFT</div>
-                <div class="face right">RIGHT</div>
-                <div class="face top">MAKER ESP32 PRO</div>
-                <div class="face bottom">CHASSIS</div>
-                <div class="wheel-3d fl"></div>
-                <div class="wheel-3d fr"></div>
-                <div class="wheel-3d rl"></div>
-                <div class="wheel-3d rr"></div>
-              </div>
-            </div>
-          </div>
-          <div class="attitude-gauges">
-            <div class="gauge-card">
-              <span class="label">Roll</span>
-              <span class="value" id="imu-roll">0.0°</span>
-            </div>
-            <div class="gauge-card">
-              <span class="label">Pitch</span>
-              <span class="value" id="imu-pitch">0.0°</span>
-            </div>
-            <div class="gauge-card">
-              <span class="label">Yaw</span>
-              <span class="value" id="imu-yaw">0.0°</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- Center: Sensor readings -->
-        <section class="panel sensors-panel glass">
-          <div class="panel-header">
-            <h2>📈 IMU Sensor Readings</h2>
-          </div>
-          <div class="sensor-readouts-grid">
-            <div class="sensor-readout-group">
-              <h3>Accelerometer</h3>
-              <div class="sensor-row">
-                <span class="label">X-Axis</span>
-                <span class="value" id="imu-ax">0.00 <small>g</small></span>
-              </div>
-              <div class="sensor-row">
-                <span class="label">Y-Axis</span>
-                <span class="value" id="imu-ay">0.00 <small>g</small></span>
-              </div>
-              <div class="sensor-row">
-                <span class="label">Z-Axis</span>
-                <span class="value" id="imu-az">1.00 <small>g</small></span>
-              </div>
-            </div>
-            <div class="sensor-readout-group">
-              <h3>Gyroscope</h3>
-              <div class="sensor-row">
-                <span class="label">X-Axis</span>
-                <span class="value" id="imu-gx">0.00 <small>°/s</small></span>
-              </div>
-              <div class="sensor-row">
-                <span class="label">Y-Axis</span>
-                <span class="value" id="imu-gy">0.00 <small>°/s</small></span>
-              </div>
-              <div class="sensor-row">
-                <span class="label">Z-Axis</span>
-                <span class="value" id="imu-gz">0.00 <small>°/s</small></span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Right: Odometer and canvas path -->
-        <section class="panel map-panel glass">
-          <div class="panel-header">
-            <h2>🗺️ Rover Position Tracker</h2>
-            <button class="btn btn-small" id="btn-reset-odometry">Reset Odometer</button>
-          </div>
-          <div class="odometry-stats">
-            <div class="stat-item">
-              <span class="label">X Coordinate</span>
-              <span class="value" id="odom-x">0.00 <small>m</small></span>
-            </div>
-            <div class="stat-item">
-              <span class="label">Y Coordinate</span>
-              <span class="value" id="odom-y">0.00 <small>m</small></span>
-            </div>
-            <div class="stat-item">
-              <span class="label">Odom Speed</span>
-              <span class="value" id="odom-speed">0.0 <small>mm/s</small></span>
-            </div>
-          </div>
-          <div class="canvas-wrapper">
-            <canvas id="path-canvas"></canvas>
-          </div>
-        </section>
-      </main>
-    </div> <!-- End IMU Tab -->
-
-    <!-- Encoder and Rotate Testing Tab -->
-    <div id="tab-encoder" class="tab-content">
-      <main class="encoder-grid" style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; padding: 20px 0;">
-        <!-- Encoder monitoring panel -->
-        <section class="panel encoder-panel glass">
-          <div class="panel-header">
-            <h2>🔍 Encoder Diagnostics & Calibration</h2>
-            <button class="btn btn-small" id="btn-reset-encoders-ui">Zero Counts</button>
-          </div>
-          <p class="panel-desc" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
-            Drive each motor individually to verify that the encoder counts increase (+) when rotating forward and decrease (-) when rotating in reverse.
-          </p>
-          <div class="encoder-cards-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
-            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">LF (Motor 1)</span>
-              <div class="ticks-display" id="test-ticks-m1" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
-              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-                <div>PWM: <span id="test-pwm-m1" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
-                <div>RPM: <span id="test-rpm-m1" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
-              </div>
-              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
-                <button class="btn btn-test btn-fwd" data-motor="1" style="flex: 1; font-weight: bold;">FWD</button>
-                <button class="btn btn-test btn-rev" data-motor="1" style="flex: 1; font-weight: bold;">REV</button>
-              </div>
-            </div>
-            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">RF (Motor 2)</span>
-              <div class="ticks-display" id="test-ticks-m2" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
-              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-                <div>PWM: <span id="test-pwm-m2" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
-                <div>RPM: <span id="test-rpm-m2" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
-              </div>
-              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
-                <button class="btn btn-test btn-fwd" data-motor="2" style="flex: 1; font-weight: bold;">FWD</button>
-                <button class="btn btn-test btn-rev" data-motor="2" style="flex: 1; font-weight: bold;">REV</button>
-              </div>
-            </div>
-            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">LR (Motor 3)</span>
-              <div class="ticks-display" id="test-ticks-m3" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
-              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-                <div>PWM: <span id="test-pwm-m3" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
-                <div>RPM: <span id="test-rpm-m3" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
-              </div>
-              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
-                <button class="btn btn-test btn-fwd" data-motor="3" style="flex: 1; font-weight: bold;">FWD</button>
-                <button class="btn btn-test btn-rev" data-motor="3" style="flex: 1; font-weight: bold;">REV</button>
-              </div>
-            </div>
-            <div class="encoder-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-              <span class="motor-label" style="font-weight: bold; color: var(--accent); margin-bottom: 8px;">RR (Motor 4)</span>
-              <div class="ticks-display" id="test-ticks-m4" style="font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: bold; color: var(--text); margin-bottom: 4px;">0</div>
-              <div class="test-stats" style="display: flex; justify-content: space-around; width: 100%; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-                <div>PWM: <span id="test-pwm-m4" style="font-family: monospace; font-weight: bold; color: var(--cyan-glow);">0</span></div>
-                <div>RPM: <span id="test-rpm-m4" style="font-family: monospace; font-weight: bold; color: var(--amber-glow);">0.0</span></div>
-              </div>
-              <div class="test-controls" style="display: flex; gap: 8px; width: 100%;">
-                <button class="btn btn-test btn-fwd" data-motor="4" style="flex: 1; font-weight: bold;">FWD</button>
-                <button class="btn btn-test btn-rev" data-motor="4" style="flex: 1; font-weight: bold;">REV</button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Position rotate control panel -->
-        <section class="panel rotate-panel glass">
-          <div class="panel-header">
-            <h2>🔄 Rotation Control & Stops</h2>
-          </div>
-          <p class="panel-desc" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
-            Set target revolutions for individual wheels or all wheels. If the motor doesn't stop, press ESTOP immediately.
-          </p>
-          <div class="control-group" style="margin-bottom: 20px;">
-            <label style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 8px; display: block;">Target Revolutions:</label>
-            <input type="number" id="test-num-turns" step="0.1" value="1.0" style="background: #12121c; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; width: 100%; box-sizing: border-box; outline: none; font-size: 1.2rem; font-weight: bold; text-align: center;">
-          </div>
-          <div class="btn-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
-            <button class="btn btn-turn" data-wheel="m1">M1 (LF)</button>
-            <button class="btn btn-turn" data-wheel="m2">M2 (RF)</button>
-            <button class="btn btn-turn" data-wheel="m3">M3 (LR)</button>
-            <button class="btn btn-turn" data-wheel="m4">M4 (RR)</button>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 12px;">
-            <button class="btn" style="background: var(--accent-grad); box-shadow: 0 0 10px rgba(0, 242, 254, 0.2); font-weight: bold; font-size: 1.1rem; padding: 12px 0;" id="btn-turn-all">Rotate All Wheels</button>
-            <button class="btn" style="background: linear-gradient(135deg, #f43f5e, #e11d48); font-weight: bold; font-size: 1.1rem; padding: 12px 0; box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);" id="btn-estop-rotate">⚠️ ESTOP POSITION MODE</button>
-          </div>
-        </section>
-
-
-        <!-- Straight Drive Rotation Monitor & Steering Lock Panel -->
-        <section class="panel straight-drive-panel glass" style="grid-column: span 2; margin-top: 10px;">
-          <style>
-            /* Premium Cyberpunk Switch Toggle */
-            .straight-drive-panel .switch {
-              position: relative;
-              display: inline-block;
-              width: 52px;
-              height: 28px;
-            }
-            .straight-drive-panel .switch input {
-              opacity: 0;
-              width: 0;
-              height: 0;
-            }
-            .straight-drive-panel .slider {
-              position: absolute;
-              cursor: pointer;
-              top: 0; left: 0; right: 0; bottom: 0;
-              background-color: rgba(255, 255, 255, 0.05);
-              border: 1px solid var(--panel-border);
-              transition: .3s;
-              border-radius: 34px;
-            }
-            .straight-drive-panel .slider:before {
-              position: absolute;
-              content: "";
-              height: 20px;
-              width: 20px;
-              left: 3px;
-              bottom: 3px;
-              background-color: var(--text-muted);
-              transition: .3s;
-              border-radius: 50%;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.4);
-            }
-            .straight-drive-panel input:checked + .slider {
-              background-color: rgba(0, 242, 254, 0.2);
-              border-color: var(--cyan-glow);
-            }
-            .straight-drive-panel input:checked + .slider:before {
-              transform: translateX(24px);
-              background-color: var(--cyan-glow);
-              box-shadow: 0 0 8px var(--cyan-glow);
-            }
-          </style>
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 1.5rem;">⚖️</span>
-              <div>
-                <h2 style="margin: 0; font-size: 1.3rem;">Straight Drive Rotation Monitor & Steering Lock</h2>
-                <p class="panel-desc" style="color: var(--text-muted); font-size: 0.85rem; margin: 2px 0 0 0;">
-                  Lock the steering axis to disable left/right inputs. Use the controller's throttle to drive straight and monitor rotational symmetry.
-                </p>
-              </div>
-            </div>
-            <div style="display: flex; gap: 10px; align-items: center;">
-              <span id="straight-lock-badge" class="badge" style="background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Steering Unlocked</span>
-              <button class="btn btn-secondary btn-small" id="btn-reset-straight-test" style="font-weight: bold;">Zero Test Encoders</button>
-              <button class="btn btn-secondary btn-small" id="btn-copy-test-data" style="font-weight: bold; display: none; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">Copy Last Test Data</button>
-              <button class="btn btn-primary btn-small" id="btn-auto-test" style="font-weight: bold; background: linear-gradient(135deg, #00f0ff, #0072ff); border: none; color: #fff; box-shadow: 0 0 10px rgba(0, 240, 255, 0.3); transition: all 0.2s ease;">Auto Test (3ft)</button>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-            <!-- Steering Control Toggle Box -->
-            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 15px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px;">
-                <span style="font-weight: bold; font-size: 1rem; color: var(--text-main);">Lock Straight Drive Mode:</span>
-                <label class="switch">
-                  <input type="checkbox" id="straight-drive-lock-toggle">
-                  <span class="slider round"></span>
+          <!-- Section F: Live Driver Logs -->
+          <div class="v2-card" id="diagnostics-logs">
+            <div class="v2-card-header">
+              <h3>💻 Live Driver Logs</h3>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <label style="font-size: 12px; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                  <input type="checkbox" id="chk-show-verbose-logs"> Show Verbose / Raw Packets
                 </label>
-              </div>
-
-              <!-- Straight Drive Trim Calibration Controls -->
-              <div style="display: flex; flex-direction: column; gap: 8px;">
-                <div style="display: flex; align-items: center; justify-content: space-between;">
-                  <span style="font-weight: bold; font-size: 0.85rem; color: var(--cyan-glow);">Straight Drive Balance Trim:</span>
-                  <span id="label-active-trims" style="font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.5);">Syncing...</span>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                  <div style="flex: 1; display: flex; align-items: center; gap: 6px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); padding: 5px 10px; border-radius: 8px;">
-                    <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); font-weight: bold;">L Trim:</span>
-                    <input type="number" id="input-left-trim" value="1.000" min="0.800" max="1.200" step="0.001" style="width: 100%; background: transparent; border: none; color: #fff; font-family: monospace; font-size: 0.8rem; outline: none;">
-                  </div>
-                  <div style="flex: 1; display: flex; align-items: center; gap: 6px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); padding: 5px 10px; border-radius: 8px;">
-                    <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); font-weight: bold;">R Trim:</span>
-                    <input type="number" id="input-right-trim" value="1.000" min="0.800" max="1.200" step="0.001" style="width: 100%; background: transparent; border: none; color: #fff; font-family: monospace; font-size: 0.8rem; outline: none;">
-                  </div>
-                  <button class="btn btn-secondary btn-small" id="btn-save-trims" style="font-weight: bold; background: rgba(0, 240, 255, 0.15); border: 1px solid rgba(0, 240, 255, 0.4); color: #00f0ff; height: 32px; padding: 0 10px; font-size: 11px;">Save Trim</button>
-                </div>
+                <button class="btn btn-small btn-secondary" id="btn-clear-logs">Clear Logs</button>
+                <button class="btn btn-small btn-secondary" id="btn-copy-logs">Copy Logs</button>
               </div>
             </div>
-
-            <!-- Rotation Symmetry Summary & Balance Indicator -->
-            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: center; gap: 12px;">
-              <div style="font-weight: bold; font-size: 1rem; color: var(--accent); display: flex; justify-content: space-between;">
-                <span>Rotational Symmetry Status:</span>
-                <span id="straight-symmetry-status" style="color: var(--text-muted); font-weight: bold;">READY (0 ticks)</span>
+            <div class="terminal-logs" id="terminal-console" style="max-height: 280px; overflow-y: auto;">
+              <div class="log-line system-line">[System] Console initialized. Standing by for WebSocket connection...</div>
+            </div>
+            <details style="margin-top: 10px;" id="v2-diag-verbose-logs-details">
+              <summary style="cursor: pointer; color: var(--cyan-glow); font-size: 12px; font-weight: bold;">🔍 Raw Hex Packet & Protocol Stream (Disabled by Default)</summary>
+              <div class="terminal-logs" id="terminal-verbose-console" style="max-height: 180px; overflow-y: auto; margin-top: 8px; background: rgba(0,0,0,0.5);">
+                <div class="log-line system-line">[System] Verbose log stream. Check "Show Verbose" to stream raw hex packets.</div>
               </div>
+            </details>
+          </div>
 
-              <!-- Balance bar slider -->
-              <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 5px;">
-                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">
-                  <span>◀ LEFT LEAN</span>
-                  <span>BALANCED</span>
-                  <span>RIGHT LEAN ▶</span>
+          <!-- Section G: Raw Telemetry Inspector -->
+          <div class="v2-card" id="diagnostics-raw-telemetry">
+            <details id="v2-diag-raw-telemetry-details">
+              <summary style="cursor: pointer; font-size: 1.1rem; font-weight: bold; color: var(--accent);">🔍 Raw Shared Telemetry JSON Inspector (Click to Expand)</summary>
+              <div style="margin-top: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <span style="font-size: 12px; color: var(--text-muted);">Live JSON representation of window.roverState:</span>
+                  <button id="btn-copy-raw-telemetry" class="btn btn-secondary btn-small">Copy JSON Telemetry</button>
                 </div>
-                <div style="height: 16px; background: #111827; border: 1px solid var(--border); border-radius: 8px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                  <!-- Balance center line -->
-                  <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.2); z-index: 1;"></div>
-                  <!-- Balance fill indicator -->
-                  <div id="straight-balance-bar" style="position: absolute; left: 50%; width: 0%; height: 100%; background: linear-gradient(90deg, var(--cyan-glow), var(--green-glow)); transition: width 0.1s ease, left 0.1s ease; opacity: 0.7;"></div>
-                  <!-- Balance cursor -->
-                  <div id="straight-balance-cursor" style="position: absolute; left: 50%; width: 8px; height: 100%; background: #ffffff; box-shadow: 0 0 8px #fff; z-index: 2; transition: left 0.1s ease; transform: translateX(-4px);"></div>
-                </div>
+                <pre style="max-height: 250px; overflow: auto; background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border); font-family: monospace; font-size: 11px; color: #a7f3d0;"><code id="v2-diag-raw-json">{}</code></pre>
               </div>
+            </details>
+          </div>
 
-              <!-- General comparison metrics -->
-              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; margin-top: 5px; font-family: monospace; font-size: 0.85rem;">
-                <div style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px;">
-                  <div style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2px;">Avg Left Ticks</div>
-                  <div id="straight-avg-left" style="font-weight: bold; color: var(--text-main); font-size: 1rem;">0</div>
+          <!-- Section H: Developer Tools -->
+          <div class="v2-card" id="diagnostics-developer">
+            <details id="v2-diag-devtools-details">
+              <summary style="cursor: pointer; font-size: 1.1rem; font-weight: bold; color: #f59e0b;">🛠️ Developer Tools — Use With Caution (Click to Expand)</summary>
+              <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 12px;">
+                <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Safe developer tools for system diagnostic refresh, connection reset, and Foxglove monitoring.</p>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                  <button id="btn-dev-refresh-status" class="btn btn-secondary btn-small">🔄 Refresh Service Status</button>
+                  <button id="btn-dev-reconnect-ws" class="btn btn-secondary btn-small">🔌 Reconnect WebSocket</button>
+                  <button id="btn-dev-open-foxglove" class="btn btn-secondary btn-small">🌐 Open Foxglove Interface</button>
+                  <button id="btn-dev-open-raw-api" class="btn btn-secondary btn-small">📡 Open Raw API Status (/api/status)</button>
+                  <button id="btn-dev-sync-calib-db" class="btn btn-secondary btn-small">💾 Re-sync Calibration DB</button>
                 </div>
-                <div style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px;">
-                  <div style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2px;">Avg Right Ticks</div>
-                  <div id="straight-avg-right" style="font-weight: bold; color: var(--text-main); font-size: 1rem;">0</div>
-                </div>
-                <div style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px;">
-                  <div style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2px;">Mismatch Delta</div>
-                  <div id="straight-mismatch-delta" style="font-weight: bold; color: var(--cyan-glow); font-size: 1rem;">0</div>
-                </div>
+                <div id="v2-dev-status-output" style="display: none; padding: 8px 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 12px;"></div>
               </div>
+            </details>
+          </div>
+
+          <!-- Section I: Diagnostics Bundle Export -->
+          <div class="v2-card" id="diagnostics-export-bundle">
+            <div class="v2-card-header">
+              <h3>📦 Diagnostics Bundle Export</h3>
+              <span class="badge badge-info">EXPORT</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 12px 0;">Export a complete diagnostic bundle containing system status, service state, sensor telemetry, and recent driver logs (sanitized of sensitive credentials).</p>
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <button id="btn-export-diag-bundle" class="btn btn-primary btn-small">📥 Download Diagnostics Bundle (JSON)</button>
+              <button id="btn-copy-diag-bundle" class="btn btn-secondary btn-small">📋 Copy Diagnostics Bundle to Clipboard</button>
+              <span id="v2-export-bundle-status" style="font-size: 12px; font-family: monospace; color: #10b981;"></span>
             </div>
           </div>
 
-          <!-- LiDAR Straight-Line Correction & Calibration Panel -->
-          <section class="panel glass" style="grid-column: span 2; margin-top: 20px; border: 1px solid rgba(0, 240, 255, 0.2); box-shadow: 0 0 20px rgba(0, 240, 255, 0.05); padding: 25px; border-radius: 16px; background: rgba(17, 24, 39, 0.6); backdrop-filter: blur(10px);">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(0, 240, 255, 0.2); padding-bottom: 15px; margin-bottom: 20px;">
-              <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; color: #00f0ff; text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);"><span style="font-size: 1.5rem;">📡</span> LiDAR Straight-Line Correction & Calibration</h2>
-              <span id="lidar-test-state-badge" class="badge" style="background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 13px;">IDLE</span>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1.2fr 1.8fr; gap: 25px;">
-              <!-- Left Column: Gates, Settings & Controls -->
-              <div style="display: flex; flex-direction: column; gap: 20px;">
-                <!-- 1. Mounting and Verification Gates -->
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 12px;">
-                  <div style="font-weight: bold; font-size: 0.95rem; color: #00f0ff; margin-bottom: 5px; display: flex; align-items: center; gap: 6px;">
-                    <span>🛡️</span> Mounting & Safety Verification
-                  </div>
-
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.85rem; color: var(--text-main);">
-                    <input type="checkbox" id="chk-rigid-mount" style="accent-color: #00f0ff;">
-                    <span>LiDAR is rigidly attached to chassis</span>
-                  </label>
-
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.85rem; color: var(--text-main);">
-                    <input type="checkbox" id="chk-level-mount" style="accent-color: #00f0ff;">
-                    <span>LiDAR is leveled horizontally (pitch/roll ~0)</span>
-                  </label>
-
-                  <!-- Orientation Wizard Button and Step Panel -->
-                  <div style="margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                      <span style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted);">Orientation Wizard:</span>
-                      <span id="orientation-verified-badge" class="badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); font-size: 11px; padding: 2px 6px;">Unverified</span>
-                    </div>
-                    <button class="btn btn-secondary btn-small" id="btn-start-wizard" style="width: 100%; font-weight: bold; height: 32px; font-size: 11px;">Run Coordinate Orientation Wizard</button>
-
-                    <div id="orientation-wizard-box" style="display: none; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 8px; padding: 12px; margin-top: 10px; font-size: 0.8rem; flex-direction: column; gap: 8px;">
-                      <div id="wizard-step-text" style="color: #fff; font-weight: bold; margin-bottom: 5px;">Step 1: Place flat object in front of the rover (0°).</div>
-                      <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span id="wizard-live-range" style="font-family: monospace; color: #00f0ff;">Range at 0°: --m</span>
-                        <div style="display: flex; gap: 6px;">
-                          <button class="btn btn-small" id="btn-wizard-yes" style="padding: 2px 8px; font-size: 10px; background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">Verify</button>
-                          <button class="btn btn-small" id="btn-wizard-cancel" style="padding: 2px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4);">Cancel</button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Track Interference Monitor -->
-                  <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                      <span style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">⚠️ Track Interference Monitor:</span>
-                      <span id="interference-warning-badge" class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); font-size: 11px; padding: 2px 6px; font-weight: bold;">✓ Clear</span>
-                    </div>
-
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 0.8rem;">
-                      <span style="color: var(--text-muted);">Monitored Track Width:</span>
-                      <select id="monitored-track-width" style="background: #111827; border: 1px solid var(--border); color: #fff; padding: 3px 6px; border-radius: 4px; font-size: 11px; outline: none; cursor: pointer; font-family: monospace;">
-                        <option value="0.30">1.0 ft (30cm)</option>
-                        <option value="0.45">1.5 ft (45cm)</option>
-                        <option value="0.60" selected>2.0 ft (60cm)</option>
-                        <option value="0.75">2.5 ft (75cm)</option>
-                        <option value="0.90">3.0 ft (90cm)</option>
-                      </select>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; font-family: monospace; font-size: 0.75rem;">
-                      <div id="box-interfere-front" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
-                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Front Path</div>
-                        <div id="val-interfere-front" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
-                      </div>
-                      <div id="box-interfere-left" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
-                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Left Side</div>
-                        <div id="val-interfere-left" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
-                      </div>
-                      <div id="box-interfere-right" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05); transition: all 0.2s ease;">
-                        <div style="color: var(--text-muted); font-size: 0.65rem; margin-bottom: 4px; font-weight: bold;">Right Side</div>
-                        <div id="val-interfere-right" style="font-weight: bold; color: #10b981; font-size: 0.8rem;">--</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-
-                <!-- 2. Selectable Modes -->
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
-                  <div style="font-weight: bold; font-size: 0.95rem; color: #00f0ff; display: flex; align-items: center; gap: 6px;">
-                    <span>⚙️</span> Select Mode
-                  </div>
-                  <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem; color: var(--text-main);">
-                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-                      <input type="radio" name="lidar-test-mode" value="observe" checked style="margin-top: 3px; accent-color: #00f0ff;">
-                      <div>
-                        <span style="font-weight: bold; color: #fff;">Observe Only (Default)</span>
-                        <div style="font-size: 0.75rem; color: var(--text-muted);">Measure lateral drift & heading error; manual steering locked.</div>
-                      </div>
-                    </label>
-                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-                      <input type="radio" name="lidar-test-mode" value="correct" style="margin-top: 3px; accent-color: #00f0ff;">
-                      <div>
-                        <span style="font-weight: bold; color: #fff;">Live LiDAR Correction</span>
-                        <div style="font-size: 0.75rem; color: var(--text-muted);">Apply active steering corrections; do not save new trims.</div>
-                      </div>
-                    </label>
-                    <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-                      <input type="radio" name="lidar-test-mode" value="learn" style="margin-top: 3px; accent-color: #00f0ff;">
-                      <div>
-                        <span style="font-weight: bold; color: #fff;">Learn Calibration</span>
-                        <div style="font-size: 0.75rem; color: var(--text-muted);">Run a single forward pass to calculate and propose motor trims.</div>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
-                <!-- 3. Action Buttons -->
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                  <div style="display: flex; gap: 10px;">
-                    <button class="btn btn-primary" id="btn-start-lidar-test" style="flex: 1; font-weight: bold; font-size: 0.9rem; background: linear-gradient(135deg, #00f0ff, #0072ff); opacity: 0.6; cursor: not-allowed; border: none; color: #fff; box-shadow: 0 0 15px rgba(0, 240, 255, 0.2);" disabled>Start LiDAR Test</button>
-                    <button class="btn btn-danger" id="btn-stop-lidar-test" style="flex: 1; font-weight: bold; font-size: 0.9rem; background: linear-gradient(135deg, #ef4444, #b91c1c); display: none; border: none; color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);">Abort Test (Stop)</button>
-                  </div>
-                  <button class="btn" onclick="openLowEndCalibration()" style="width: 100%; font-weight: bold; font-size: 0.85rem; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: all 0.2s;">⚡ Run Low-End Motor Calibration</button>
-                </div>
-              </div>
-
-              <!-- Right Column: Visualizer, Stats & Calibration Proposal -->
-              <div style="display: flex; flex-direction: column; gap: 20px;">
-                <!-- Live Stats Bar -->
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; font-family: monospace; font-size: 0.8rem; text-align: center;">
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">LiDAR Pose X</div>
-                    <div id="stat-lidar-x" style="font-weight: bold; color: #00f0ff; font-size: 0.95rem;">0.000m</div>
-                  </div>
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">Lateral Drift (Y)</div>
-                    <div id="stat-lidar-y" style="font-weight: bold; color: #ef4444; font-size: 0.95rem;">0.000m</div>
-                  </div>
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">Heading Error</div>
-                    <div id="stat-lidar-yaw" style="font-weight: bold; color: #f59e0b; font-size: 0.95rem;">0.00°</div>
-                  </div>
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-                    <div style="color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px;">ICP Confidence</div>
-                    <div id="stat-lidar-conf" style="font-weight: bold; color: #10b981; font-size: 0.95rem;">0.0%</div>
-                  </div>
-                </div>
-
-                <!-- Live Path Plotting Canvas -->
-                <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border); border-radius: 12px; padding: 15px; position: relative;">
-                  <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                      <span style="font-weight: bold; color: var(--text-main);">Path Comparison: LiDAR vs. Encoder (3ft Track)</span>
-                      <span style="font-size: 0.7rem; color: var(--text-muted); display: flex; gap: 10px;">
-                        <span style="display: flex; align-items: center; gap: 4px;"><span style="display: inline-block; width: 8px; height: 2px; background: #fff; border-radius: 1px;"></span> Solid = LiDAR</span>
-                        <span style="display: flex; align-items: center; gap: 4px;"><span style="display: inline-block; width: 8px; height: 2px; border-bottom: 2px dashed #fff;"></span> Dashed = Encoder</span>
-                      </span>
-                    </div>
-
-                    <div style="display: flex; gap: 15px; font-size: 0.75rem; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #10b981; font-weight: bold; user-select: none;">
-                        <input type="checkbox" id="chk-toggle-slow" checked style="accent-color: #10b981; cursor: pointer;">
-                        <span>SLOW Tier (0.08 m/s)</span>
-                      </label>
-                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #00f0ff; font-weight: bold; user-select: none;">
-                        <input type="checkbox" id="chk-toggle-med" checked style="accent-color: #00f0ff; cursor: pointer;">
-                        <span>MED Tier (0.11 m/s)</span>
-                      </label>
-                      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: #f59e0b; font-weight: bold; user-select: none;">
-                        <input type="checkbox" id="chk-toggle-fast" checked style="accent-color: #f59e0b; cursor: pointer;">
-                        <span>FAST Tier (0.15 m/s)</span>
-                      </label>
-                    </div>
-                  </div>
-                  <canvas id="lidar-path-canvas" width="480" height="150" style="width: 100%; height: 150px; background: #0b0f19; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);"></canvas>
-                </div>
-
-                <!-- Calibration Proposal & Sync Box -->
-                <div style="background: rgba(0, 240, 255, 0.02); border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; font-size: 0.9rem; color: #00f0ff; display: flex; align-items: center; gap: 6px;">
-                      <span>📊</span> Proposed Motor Trims
-                    </span>
-                    <span id="pass-count-label" style="font-size: 0.75rem; color: rgba(255,255,255,0.6); font-family: monospace;">Completed Passes: 0/1</span>
-                  </div>
-
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                    <!-- FWD Trims -->
-                    <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px;">
-                      <div style="font-weight: bold; font-size: 0.75rem; color: var(--text-muted);">FORWARD TRIMS (FWD)</div>
-                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-                        <span>Active L/R:</span>
-                        <span id="active-fwd-trims" style="font-family: monospace; font-weight: bold;">1.0000 / 1.0000</span>
-                      </div>
-                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-                        <span style="color: #00f0ff;">Proposed L/R:</span>
-                        <span id="proposed-fwd-trims" style="font-family: monospace; font-weight: bold; color: #00f0ff;">-- / --</span>
-                      </div>
-                    </div>
-
-                    <!-- REV Trims -->
-                    <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px;">
-                      <div style="font-weight: bold; font-size: 0.75rem; color: var(--text-muted);">REVERSE TRIMS (REV)</div>
-                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-                        <span>Active L/R:</span>
-                        <span id="active-rev-trims" style="font-family: monospace; font-weight: bold;">1.0000 / 1.0000</span>
-                      </div>
-                      <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-                        <span style="color: #00f0ff;">Proposed L/R:</span>
-                        <span id="proposed-rev-trims" style="font-family: monospace; font-weight: bold; color: #00f0ff;">-- / --</span>
-                      </div>
-                    </div>
-                  </div>
-                  <!-- Calibration Persist Actions -->
-                  <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
-                    <button class="btn btn-small" id="btn-apply-proposed" style="flex: 1.5; font-weight: bold; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; opacity: 0.6; cursor: not-allowed; height: 32px;" disabled>Save/Apply Trims to ESP32 NVS</button>
-                    <button class="btn btn-small" id="btn-rollback-proposed" style="flex: 1; font-weight: bold; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #ef4444; height: 32px;">Rollback</button>
-                    <button class="btn btn-small" id="btn-reset-trims" style="flex: 1; font-weight: bold; background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.4); color: #9ca3af; height: 32px;">Reset (1.0)</button>
-                  </div>
-                </div>
-
-                <!-- Live Motor Power Output Box -->
-                <div style="background: rgba(168, 85, 247, 0.02); border: 1px solid rgba(168, 85, 247, 0.15); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; font-size: 0.9rem; color: #c084fc; display: flex; align-items: center; gap: 6px;">
-                      <span>⚡</span> Live Motor Power Output
-                    </span>
-                    <span id="power-active-tier" style="font-size: 0.75rem; color: rgba(255,255,255,0.6); font-family: monospace;">Tier: SLOW</span>
-                  </div>
-
-                  <div style="display: flex; flex-direction: column; gap: 12px; font-family: monospace; font-size: 0.75rem;">
-                    <!-- Left Power -->
-                    <div style="display: flex; flex-direction: column; gap: 4px;">
-                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
-                        <span>Left Motors (M1/M3) Power:</span>
-                        <span id="lbl-power-left" style="font-weight: bold; color: #10b981;">0% (IDLE)</span>
-                      </div>
-                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
-                        <div id="bar-power-left" style="height: 100%; width: 0%; background: linear-gradient(90deg, #10b981, #00f0ff); transition: width 0.1s ease;"></div>
-                      </div>
-                    </div>
-
-                     <!-- Right Power -->
-                    <div style="display: flex; flex-direction: column; gap: 4px;">
-                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
-                        <span>Right Motors (M2/M4) Power:</span>
-                        <span id="lbl-power-right" style="font-weight: bold; color: #10b981;">0% (IDLE)</span>
-                      </div>
-                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
-                        <div id="bar-power-right" style="height: 100%; width: 0%; background: linear-gradient(90deg, #10b981, #00f0ff); transition: width 0.1s ease;"></div>
-                      </div>
-                    </div>
-
-                    <!-- Live Control Effort -->
-                    <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
-                      <div style="display: flex; justify-content: space-between; color: var(--text-main);">
-                        <span>Live Steering Correction:</span>
-                        <span id="lbl-control-effort" style="font-weight: bold; color: #00f0ff;">0.000 rad/s (CENTER)</span>
-                      </div>
-                      <div style="height: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; position: relative;">
-                        <!-- Center indicator line -->
-                        <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.25); z-index: 1;"></div>
-                        <!-- Correction slider bar -->
-                        <div id="bar-control-effort" style="height: 100%; width: 0%; position: absolute; left: 50%; background: #a855f7; transition: all 0.1s ease;"></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Advanced Configuration Accordion Toggle -->
-                <details style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 0.8rem; color: var(--text-main);">
-                  <summary style="font-weight: bold; cursor: pointer; color: #00f0ff; outline: none; user-select: none;">⚙️ Advanced LiDAR & Controller Settings</summary>
-                  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; font-family: monospace;">
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Heading Gain (Kp Yaw)</label>
-                      <input type="number" id="cfg-heading-gain" value="0.80" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lateral Gain (Kp Y)</label>
-                      <input type="number" id="cfg-lateral-gain" value="2.50" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Max Steering Corr (rad/s)</label>
-                      <input type="number" id="cfg-max-steering-corr" value="0.35" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Front Angle Offset (deg)</label>
-                      <input type="number" id="cfg-front-angle-offset" value="0.0" step="0.5" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lidar X Offset (m)</label>
-                      <input type="number" id="cfg-lidar-x" value="0.0127" step="0.001" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Lidar Y Offset (m)</label>
-                      <input type="number" id="cfg-lidar-y" value="0.0349" step="0.001" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Max Lidar Range (m)</label>
-                      <input type="number" id="cfg-max-range" value="4.0" step="0.5" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Min ICP Confidence</label>
-                      <input type="number" id="cfg-min-confidence" value="0.65" step="0.05" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div>
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Slew Rate (rad/s²)</label>
-                      <input type="number" id="cfg-slew-rate" value="1.0" step="0.1" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px; border-radius: 4px; font-size: 0.75rem;">
-                    </div>
-                    <div style="grid-column: span 3;">
-                      <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px;">Angle Sector Masks (e.g. "45-60,180-200")</label>
-                      <input type="text" id="cfg-sector-masks" value="" placeholder="None" style="width: 100%; background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; box-sizing: border-box;">
-                    </div>
-                  </div>
-                </details>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 15px;">
-            <h2>📈 Cumulative Encoder Counts (Total Since ESP32 Boot)</h2>
-            <span style="font-size: 11px; color: var(--text-muted);">Note: These values are lifetime total ticks and do NOT represent single-test deltas.</span>
-          </div>
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
-            <!-- Left Front (M1) -->
-            <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; border-left: 3px solid var(--cyan-glow);">
-              <div style="font-weight: bold; font-size: 0.85rem; color: var(--cyan-glow); margin-bottom: 6px;">Left Front (M1)</div>
-              <div id="straight-ticks-m1" style="font-family: var(--font-mono); font-size: 1.8rem; font-weight: bold; color: var(--text-main); margin-bottom: 4px;">0</div>
-              <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-around;">
-                <span>RPM: <span id="straight-rpm-m1" style="font-family: monospace; color: var(--amber-glow); font-weight: bold;">0.0</span></span>
-              </div>
-            </div>
-
-            <!-- Left Rear (M3) -->
-            <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; border-left: 3px solid var(--cyan-glow);">
-              <div style="font-weight: bold; font-size: 0.85rem; color: var(--cyan-glow); margin-bottom: 6px;">Left Rear (M3)</div>
-              <div id="straight-ticks-m3" style="font-family: var(--font-mono); font-size: 1.8rem; font-weight: bold; color: var(--text-main); margin-bottom: 4px;">0</div>
-              <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-around;">
-                <span>RPM: <span id="straight-rpm-m3" style="font-family: monospace; color: var(--amber-glow); font-weight: bold;">0.0</span></span>
-              </div>
-            </div>
-
-            <!-- Right Front (M2) -->
-            <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; border-right: 3px solid var(--green-glow);">
-              <div style="font-weight: bold; font-size: 0.85rem; color: var(--green-glow); margin-bottom: 6px;">Right Front (M2)</div>
-              <div id="straight-ticks-m2" style="font-family: var(--font-mono); font-size: 1.8rem; font-weight: bold; color: var(--text-main); margin-bottom: 4px;">0</div>
-              <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-around;">
-                <span>RPM: <span id="straight-rpm-m2" style="font-family: monospace; color: var(--amber-glow); font-weight: bold;">0.0</span></span>
-              </div>
-            </div>
-
-            <!-- Right Rear (M4) -->
-            <div style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-align: center; border-right: 3px solid var(--green-glow);">
-              <div style="font-weight: bold; font-size: 0.85rem; color: var(--green-glow); margin-bottom: 6px;">Right Rear (M4)</div>
-              <div id="straight-ticks-m4" style="font-family: var(--font-mono); font-size: 1.8rem; font-weight: bold; color: var(--text-main); margin-bottom: 4px;">0</div>
-              <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-around;">
-                <span>RPM: <span id="straight-rpm-m4" style="font-family: monospace; color: var(--amber-glow); font-weight: bold;">0.0</span></span>
-              </div>
-            </div>
-          </div>
-        </section>
-        </section>
-      </main>
-    </div> <!-- End Encoder Tab -->
-
-    <!-- Tab 4: ROS 2 & Odometry Testing -->
-    <div id="tab-ros2" class="tab-content">
-      <main class="dashboard-grid">
-        <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
-            <h2>🤖 ROS 2 Stack & Physical Odometry Calibration Monitor</h2>
-            <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #a7f3d0; border: 1px solid rgba(16, 185, 129, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Read-Only Monitoring</span>
-          </div>
-
-          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
-            <!-- Column 1: Container & Node Status -->
-            <div style="flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 15px;">
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">🐳 Container & ROS 2 Nodes Status</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
-                  <div>Docker Container:</div><div id="ros2-status-container" style="font-weight: bold; color: #10b981;">rover-ros2:jazzy (Running)</div>
-                  <div>/rover_system_health:</div><div id="ros2-node-health" style="font-weight: bold; color: #10b981;">Running</div>
-                  <div>/rover_lidar_bridge:</div><div id="ros2-node-lidar" style="font-weight: bold; color: #10b981;">Running</div>
-                  <div>/rover_encoder_odometry:</div><div id="ros2-node-odom" style="font-weight: bold; color: #10b981;">Running</div>
-                  <div>/foxglove_bridge:</div><div id="ros2-node-foxglove" style="font-weight: bold; color: #10b981;">Running</div>
-                  <div>Foxglove Port 8765:</div><div id="ros2-port-foxglove" style="font-weight: bold; color: #10b981;">Listening</div>
-                </div>
-              </div>
-
-              <!-- Safety Isolation & Forbidden Interlocks Card -->
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">🛡️ Safety Isolation & Interlocks Status</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
-                  <div>/cmd_vel Topic:</div><div style="font-weight: bold; color: #10b981;">DISABLED (Absent)</div>
-                  <div>SLAM / Nav2:</div><div style="font-weight: bold; color: #10b981;">DISABLED (Not running)</div>
-                  <div>Hardware Isolation:</div><div style="font-weight: bold; color: #10b981;">0 /dev mounts (Isolated)</div>
-                  <div>Motor Driver Access:</div><div style="font-weight: bold; color: #10b981;">Host Cockpit API Only</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Column 2: Topic Rates & Active Parameters -->
-            <div style="flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 15px;">
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📡 ROS 2 Topics & Rate Monitor</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
-                  <div>/diagnostics:</div><div style="font-weight: bold; color: #10b981;">Active (1.0 Hz)</div>
-                  <div>/scan (LiDAR):</div><div style="font-weight: bold; color: #10b981;">Active (~6.5 Hz)</div>
-                  <div>/odom (Odometry):</div><div style="font-weight: bold; color: #10b981;">Active (20.0 Hz)</div>
-                  <div>/tf (odom -> base_link):</div><div style="font-weight: bold; color: #10b981;">Active (20.0 Hz)</div>
-                  <div>/tf_static (base_link -> laser):</div><div style="font-weight: bold; color: #10b981;">Active (Latched)</div>
-                </div>
-              </div>
-
-              <!-- Active Odometry Kinematic Parameters Card -->
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--accent);">📏 Active Kinematic Odometry Parameters</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
-                  <div>wheel_diameter_m:</div><div style="font-weight: bold; color: var(--cyan-glow);">0.065 m (65 mm)</div>
-                  <div>ticks_per_revolution:</div><div style="font-weight: bold; color: var(--cyan-glow);">1894.0 (Calibrated)</div>
-                  <div>track_width_m:</div><div style="font-weight: bold; color: var(--cyan-glow);">0.382 m (Effective Skid-Steer Calibration)</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Column 3: Physical Calibration Procedures & Instructions -->
-            <div style="flex: 1.5; min-width: 350px; display: flex; flex-direction: column; gap: 15px;">
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📖 Physical Odometry Calibration Procedures</h3>
-                <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12px; line-height: 1.4;">
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
-                    <strong style="color: var(--cyan-glow);">1. Straight 1-Meter Calibration Test:</strong>
-                    <br>• Align rover rear bumper with start line.
-                    <br>• Execute recording helper on RPi5:
-                    <br><code style="color: #38bdf8;">ros2 run rover_bringup record_odom_calibration</code>
-                    <br>• Move rover straight forward by exactly 1.000m to target line.
-                    <br>• Compare physical distance vs reported <code>/odom</code> displacement.
-                  </div>
-
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
-                    <strong style="color: var(--cyan-glow);">2. 90-Degree Turn Calibration Test:</strong>
-                    <br>• Align rover chassis with orientation mark.
-                    <br>• Record starting <code>/odom</code> yaw pose.
-                    <br>• Turn rover 90 degrees CCW (or CW) in place.
-                    <br>• Verify reported yaw change equals <code>1.5708 rad</code> (90.0°).
-                  </div>
-
-                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
-                    <strong style="color: var(--cyan-glow);">3. Viewing Recorded Calibration Results:</strong>
-                    <br>• Calibration logs stored at:
-                    <br><code>/home/ron/yahboom-encoder/ros2/ros2_ws/logs/odom_calibration.json</code>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-        <!-- Section: Experimental Closed-Loop Calibration Tests -->
-</main>
-    </div>
-
-
-
-    <!-- Calibration & Safety Tab -->
-    <div id="tab-calibrate" class="tab-content">
-      <main class="dashboard-grid">
-        <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
-            <h2>🛡️ Breakaway Calibration & Safety Control</h2>
-            <div style="display: flex; gap: 10px; align-items: center;">
-              <span id="pi-lock-badge" class="badge alert" style="font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">🔒 Safety Lock: Offline</span>
-              <span id="pi-mode-badge" class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Mode: Simulation Only</span>
-            </div>
-          </div>
-
-          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
-            <!-- Left Side: Safety Checklist & Actions -->
-            <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 15px;">
-
-              <!-- Safety Acknowledgements -->
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📋 Pre-Calibration Safety Checklist</h3>
-                <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-bottom:15px;">
-                  All check-boxes must be acknowledged to enable the simulation interface.
-                </p>
-                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="pi-safety-chk-elevated" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
-                    <span>Rover is elevated (tracks clear of floor)</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="pi-safety-chk-clear" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
-                    <span>Hands, wires, and tools are clear of wheels</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="pi-safety-chk-estop" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
-                    <span>Emergency stop power removal is ready</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="pi-safety-chk-auto" class="safety-ack-chk" style="accent-color: var(--primary); cursor: pointer;">
-                    <span>Autonomous motion commands are disabled</span>
-                  </label>
-                </div>
-              </div>
-
-              <!-- Controls Card -->
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">Actions</h3>
-                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 10px; margin-bottom: 15px; font-size: 12px; color: #fca5a5; font-weight: bold; text-align: center;">
-                  ⚠️ SIMULATION ONLY — MOTOR OUTPUT IS PHYSICALLY DISABLED
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                  <button id="btn-start-calibration" class="btn btn-primary" onclick="triggerCalibrateStart()" style="width: 100%; font-weight: bold; background: #4b5563; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; color: #9ca3af;" disabled>⚡ Start Calibration Simulation</button>
-                  <button id="btn-cancel-calibration" class="btn btn-secondary" onclick="triggerCalibrateCancel()" style="width: 100%; font-weight: bold; background: #374151; border: none; padding: 10px; border-radius: 6px; cursor: pointer; color: #fff;">🛑 Abort Simulation</button>
-                </div>
-              </div>
-
-              <!-- Real Calibration Readiness Gates Check-list -->
-              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px;">
-                <h3 style="margin-top:0; margin-bottom:10px; color: #a855f7;">📋 Real Calibration Readiness Gate</h3>
-                <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-bottom:15px;">
-                  All Phase 3 readiness verification tests must be completed and acknowledged.
-                </p>
-                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px; margin-bottom: 15px;">
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="gate-chk-motor-dir" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
-                    <span>Motor directions verified correct</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="gate-chk-enc-dir" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
-                    <span>Encoder directions verified correct</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="gate-chk-maint-stop" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
-                    <span>Maintenance stop function verified</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="gate-chk-estop" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
-                    <span>Emergency stop function verified</span>
-                  </label>
-                  <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                    <input type="checkbox" id="gate-chk-deadman" class="gate-ack-chk" style="accent-color: #a855f7; cursor: pointer;">
-                    <span>Deadman timeout function verified</span>
-                  </label>
-                </div>
-
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                  <button id="btn-start-real-calibration" class="btn btn-primary" onclick="triggerRealCalibrateStart()" style="width: 100%; font-weight: bold; background: #4b5563; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; color: #9ca3af;" disabled>⚡ Start Real Calibration</button>
-                </div>
-              </div>
-
-              <!-- Calibration Progress HUD -->
-              <div id="pi-cal-panel" style="display: none; background: rgba(255, 255, 255, 0.03); border: 1px solid #00f2fe; border-radius: 12px; padding: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                  <h3 style="margin: 0; color: #00f2fe;">⚡ Calibration Progress</h3>
-                  <span id="pi-session-display" style="font-family: monospace; font-size: 11px; color: var(--text-muted);">Session: --</span>
-                </div>
-                <div style="font-size: 15px; font-weight: bold; margin-bottom: 12px;" id="pi-cal-state">Idle</div>
-
-                <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px; margin-bottom: 15px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
-                  <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-muted);">Target Motor:</span>
-                    <span id="pi-cal-active-motor-lbl" style="font-weight: bold;">--</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-muted);">Direction:</span>
-                    <span id="pi-cal-direction-lbl" style="font-weight: bold;">--</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-muted);">Simulated Output:</span>
-                    <span id="pi-cal-pwm-lbl" style="color: #c084fc; font-weight: bold; font-family: monospace;">0 PWM</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-muted);">Simulated Encoder Speed Delta:</span>
-                    <span id="pi-cal-delta-lbl" style="color: #38bdf8; font-weight: bold; font-family: monospace;">0 ticks</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span style="color: var(--text-muted);">Movement Detected:</span>
-                    <span id="pi-cal-movement-lbl" style="font-weight: bold;">--</span>
-                  </div>
-                </div>
-
-                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; color: var(--text-muted);">
-                  <span>Ramping simulated PWM...</span>
-                  <span id="pi-cal-pwm-val" style="font-weight: bold; color: #00f2fe;">0 PWM</span>
-                </div>
-                <progress id="pi-cal-progress" value="0" max="210" style="width: 100%; height: 10px; border-radius: 5px; overflow: hidden; background: #1a2230; border: none;"></progress>
-              </div>
-            </div>
-
-            <!-- Right Side: Live Table -->
-            <div style="flex: 1.5; min-width: 350px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0; color: var(--text-muted);">⚙️ Calibration Thresholds (Simulated)</h3>
-                <span id="pi-protocol-display" style="font-family: monospace; font-size: 11px; color: var(--text-muted);">Protocol: v--</span>
-              </div>
-              <div style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 6px; padding: 10px; font-size: 12px; color: #c084fc; line-height: 1.4;">
-                📢 <strong>Note:</strong> These are simulated limits generated by the board state machine for Phase 2 validation and are not persisted to NVS for actual closed-loop compensation.
-              </div>
-              <table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; margin-top: 10px;">
-                <thead>
-                  <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px;">
-                    <th style="padding: 8px 0; font-weight: bold;">Motor</th>
-                    <th style="padding: 8px 0; font-weight: bold;">Simulated FWD (Forward)</th>
-                    <th style="padding: 8px 0; font-weight: bold;">Simulated REV (Reverse)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style="border-bottom: 1px solid var(--border);">
-                    <td style="padding: 8px 0; font-weight: 600;">Motor 1 (Left Front)</td>
-                    <td id="pi-val-m1-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                    <td id="pi-val-m1-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                  </tr>
-                  <tr style="border-bottom: 1px solid var(--border);">
-                    <td style="padding: 8px 0; font-weight: 600;">Motor 2 (Right Front)</td>
-                    <td id="pi-val-m2-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                    <td id="pi-val-m2-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                  </tr>
-                  <tr style="border-bottom: 1px solid var(--border);">
-                    <td style="padding: 8px 0; font-weight: 600;">Motor 3 (Left Rear)</td>
-                    <td id="pi-val-m3-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                    <td id="pi-val-m3-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                  </tr>
-                  <tr style="border-bottom: none;">
-                    <td style="padding: 8px 0; font-weight: 600;">Motor 4 (Right Rear)</td>
-                    <td id="pi-val-m4-fwd" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                    <td id="pi-val-m4-rev" style="color: #38bdf8; font-family: monospace; font-weight: bold;">--</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
-        <!-- LEGACY COMPATIBILITY NOTICE FOR CALIBRATION TOOLS -->
-        <section class="panel glass" style="grid-column: span 12; margin-top: 20px; text-align: center; padding: 30px; background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px;">
-          <h3 style="color: var(--cyan-glow); margin-bottom: 10px; font-size: 1.2rem;">🛡️ Wheel Verification & Auto Calibration Tools Have Moved</h3>
-          <p style="color: var(--text-muted); margin-bottom: 20px; font-size: 0.9rem;">Individual wheel testing and closed-loop automatic calibration floor tests have been migrated to the primary Calibration tab.</p>
-          <button class="btn btn-primary legacy-redirect-btn" data-legacy-target="tab-calibration-v2" style="font-weight: bold; padding: 10px 20px; border-radius: 8px;">Open Calibration Tab</button>
-        </section>
-
-      </main>
-    </div>
-
-    <!-- Motion Calibration & Backtrack Tab -->
-    <div id="tab-motion-cal" class="tab-content">
-      <main class="dashboard-grid">
-        <!-- LEGACY NOTICE: MOTION CALIBRATION & REPEATABILITY -->
-        <section class="panel glass" style="grid-column: span 12; text-align: center; padding: 25px; background: rgba(0, 242, 254, 0.03); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; margin-bottom: 20px;">
-          <h3 style="color: var(--cyan-glow); margin-bottom: 8px; font-size: 1.1rem;">🛡️ Advanced Motion Calibration & Repeatability Database Have Moved</h3>
-          <p style="color: var(--text-muted); margin-bottom: 15px; font-size: 0.85rem;">2m distance tuning, 360° rotation tuning, repeatability history, and export tools are now unified in the primary Calibration tab.</p>
-          <button class="btn btn-primary legacy-redirect-btn" data-legacy-target="tab-calibration-v2" style="font-weight: bold; padding: 8px 16px; border-radius: 6px;">Open Calibration Tab</button>
-        </section>
-
-        <!-- 3. Straight Out-and-Back Validation Card -->
-        <section class="panel glass" style="grid-column: span 6;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>↩️ Straight Out-and-Back Test (Validation Only)</h2>
-            <span id="cal-oab-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Idle</span>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 12px;">
-            <div style="background: rgba(245, 158, 11, 0.03); border: 1px solid rgba(245, 158, 11, 0.15); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.4;">
-              <strong>Validation Step:</strong> Hold the deadman and click <em>Run 2-Meter Out-and-Back Test</em>. The rover will drive forward 2.00 meters, pause for 1.0 second, and drive in reverse 2.00 meters back to the starting point. Record the errors.
-            </div>
-
-            <button id="btn-cal-run-oab" class="btn" style="background: linear-gradient(135deg, #f59e0b, #d97706); font-weight: bold; padding: 10px; width: 100%; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startOutAndBackTest()">↩️ Run 2-Meter Out-and-Back Test</button>
-
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 5px;">
-              <div>Final X Position:</div><div id="cal-oab-x" style="font-weight: bold; color: var(--cyan-glow);">-- m</div>
-              <div>Final Y Position:</div><div id="cal-oab-y" style="font-weight: bold; color: var(--cyan-glow);">-- m</div>
-              <div>Final Heading:</div><div id="cal-oab-yaw" style="font-weight: bold; color: var(--cyan-glow);">-- deg</div>
-              <div>Fwd Odom Distance:</div><div id="cal-oab-fwd-dist" style="font-weight: bold;">-- m</div>
-              <div>Rev Odom Distance:</div><div id="cal-oab-rev-dist" style="font-weight: bold;">-- m</div>
-              <div>Calculated Dist from Start:</div><div id="cal-oab-start-dist" style="font-weight: bold; color: var(--accent);">-- m</div>
-              <div>Left Accum Distance:</div><div id="cal-oab-enc-left" style="font-weight: bold;">-- m</div>
-              <div>Right Accum Distance:</div><div id="cal-oab-enc-right" style="font-weight: bold;">-- m</div>
-              <div>Four Encoder Totals:</div><div id="cal-oab-enc-four" style="font-weight: bold; font-size: 10px;">--</div>
-            </div>
-
-            <div style="border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px;">
-              <div style="font-weight: bold; font-size: 12px; color: var(--text-muted);">Enter Physical Measurements:</div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                  <label style="font-size: 10px; color: var(--text-muted);">Distance from Start Mark (mm):</label>
-                  <input type="number" id="cal-oab-phys-dist" placeholder="e.g. 15" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;">
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                  <label style="font-size: 10px; color: var(--text-muted);">Sideways Offset (mm):</label>
-                  <input type="number" id="cal-oab-phys-offset" placeholder="e.g. 5" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;">
-                </div>
-              </div>
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                <label style="font-size: 10px; color: var(--text-muted);">Physical Heading Error (deg):</label>
-                <input type="number" id="cal-oab-phys-yaw" placeholder="e.g. 1.5" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;">
-              </div>
-              <button class="btn" style="background: #4b5563; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff; margin-top: 5px;" onclick="logOutAndBackTrial()">Log Out-and-Back Validation</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- 4. Backtrack Validation Card -->
-        <section class="panel glass" style="grid-column: span 6;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>🎛️ Encoder Dead-Reckoning Backtrack</h2>
-            <span id="cal-backtrack-status-badge" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 11px;">Stopped</span>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 12px;">
-            <!-- Warning Banner -->
-            <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 10px; font-size: 11px; text-align: center; line-height: 1.4; color: #fca5a5; font-weight: bold;">
-              ⚠️ ENCODER DEAD-RECKONING BACKTRACK<br>POSITION WILL DRIFT UNTIL IMU/SLAM IS ADDED
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <button id="btn-backtrack-record-start" class="btn" style="background: #10b981; font-weight: bold; padding: 8px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startPathRecording()">🟢 Start Recording</button>
-              <button id="btn-backtrack-record-stop" class="btn" style="background: #ef4444; font-weight: bold; padding: 8px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="stopPathRecording()">🛑 Stop Recording</button>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 10px;">
-              <button id="btn-backtrack-home" class="btn" style="background: var(--accent-grad); font-weight: bold; padding: 10px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="startBacktrackHome()">🏡 Backtrack Home</button>
-              <button id="btn-backtrack-abort" class="btn" style="background: #374151; font-weight: bold; padding: 10px; border: none; border-radius: 6px; cursor: pointer; color: #fff;" onclick="abortBacktrackHome()">Abort</button>
-            </div>
-
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; display: flex; justify-content: space-between;">
-              <span>Recorded Breadcrumbs:</span>
-              <span id="backtrack-breadcrumbs-count" style="font-weight: bold; color: var(--cyan-glow);">0 waypoints</span>
-            </div>
-
-            <div style="border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px;">
-              <div style="font-weight: bold; font-size: 12px; color: var(--text-muted);">Post-Backtrack Evaluation:</div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                  <label style="font-size: 10px; color: var(--text-muted);">Physical Distance Error (mm):</label>
-                  <input type="number" id="cal-backtrack-phys-dist" placeholder="e.g. 25" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;">
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                  <label style="font-size: 10px; color: var(--text-muted);">Physical Heading Error (deg):</label>
-                  <input type="number" id="cal-backtrack-phys-yaw" placeholder="e.g. 2.0" style="background: var(--bg-dark); border: 1px solid var(--border); color: #fff; padding: 5px; border-radius: 4px; font-size: 12px;">
-                </div>
-              </div>
-              <button class="btn" style="background: #4b5563; font-weight: bold; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: #fff;" onclick="logBacktrackTrial()">Log Backtrack Validation</button>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-
-    <!-- LiDAR Monitor Tab -->
-    <div id="tab-lidar" class="tab-content">
-      <main class="dashboard-grid">
-        <!-- Left: Status and Information Panel -->
-        <section class="panel glass" style="grid-column: span 4;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>📡 LiDAR System Status</h2>
-          </div>
-          <div style="padding: 0 15px 15px 15px; display: flex; flex-direction: column; gap: 15px;">
-            <div style="background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; font-family: monospace; display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px 15px;">
-              <div>Connection Status:</div><div id="lidar-val-state" style="font-weight: bold; color: #fca5a5;">Disconnected</div>
-              <div>Device Link:</div><div id="lidar-val-device" style="font-weight: bold;">--</div>
-              <div>Model:</div><div id="lidar-val-model" style="font-weight: bold;">--</div>
-              <div>Health:</div><div id="lidar-val-health" style="font-weight: bold;">--</div>
-              <div>Firmware:</div><div id="lidar-val-firmware" style="font-weight: bold;">--</div>
-              <div>Hardware:</div><div id="lidar-val-hardware" style="font-weight: bold;">--</div>
-              <div>Scan Rate:</div><div id="lidar-val-scanHz" style="font-weight: bold; color: var(--cyan-glow);">-- Hz</div>
-              <div>Data Rate:</div><div id="lidar-val-pps" style="font-weight: bold; color: var(--cyan-glow);">-- pts/s</div>
-              <div>Points / Rev:</div><div id="lidar-val-pointCount" style="font-weight: bold;">--</div>
-              <div>Uptime:</div><div id="lidar-val-uptime" style="font-weight: bold;">--</div>
-              <div>Reconnects:</div><div id="lidar-val-reconnects" style="font-weight: bold;">--</div>
-            </div>
-            <div id="lidar-error-card" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 11px; padding: 10px; border-radius: 8px; font-family: monospace; line-height: 1.4;">
-              <span style="font-weight: bold; color: #f87171;">⚠️ Last Error:</span> <span id="lidar-val-error">None</span>
-            </div>
-            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4; background: rgba(255,255,255,0.02); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
-              <strong>ℹ️ Diagnostics:</strong><br>
-              The RPLIDAR C1 runs at 460800 baud. It streams distance values in millimeters over a full 360-degree rotation. Front direction is oriented at 0°.
-            </div>
-          </div>
-        </section>
-
-        <!-- Center/Right: Polar Display Visualization -->
-        <section class="panel glass" style="grid-column: span 8; display: flex; flex-direction: column;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
-            <h2>🌐 360° Polar Scan Display</h2>
-            <div style="display: flex; gap: 10px; align-items: center;">
-              <label for="lidar-range-select" style="font-size: 12px; color: var(--text-muted); font-weight: bold;">Range:</label>
-              <select id="lidar-range-select" style="background: #111827; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; outline: none; cursor: pointer;">
-                <option value="1000">1 Meter</option>
-                <option value="3000" selected>3 Meters</option>
-                <option value="6000">6 Meters</option>
-                <option value="12000">Full Range (12m)</option>
-              </select>
-            </div>
-          </div>
-
-          <div style="flex: 1; display: flex; align-items: center; justify-content: center; min-height: 400px; position: relative;">
-            <canvas id="lidar-polar-canvas" width="500" height="500" style="max-width: 100%; height: auto; background: #0b0f19; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 0 20px rgba(0,0,0,0.5);"></canvas>
-            <div id="lidar-stale-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(2px); border-radius: 12px; align-items: center; justify-content: center; flex-direction: column; gap: 10px; z-index: 100;">
-              <span style="font-size: 32px;">⚠️</span>
-              <span style="font-size: 14px; font-weight: bold; color: #fca5a5; font-family: monospace;">STALE DATA WARNING</span>
-              <span style="font-size: 11px; color: rgba(255,255,255,0.6); font-family: monospace;">No recent scan received (last age > 1s)</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- Bottom: Live Sample Table -->
-        <section class="panel glass" style="grid-column: span 12;">
-          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-            <h2>📋 Live Scan Samples</h2>
-          </div>
-          <div style="padding: 0 15px 15px 15px;">
-            <div style="overflow-x: auto; max-height: 250px; border: 1px solid var(--border); border-radius: 8px;">
-              <table style="width: 100%; border-collapse: collapse; text-align: left; font-family: monospace; font-size: 12px; color: #e5e7eb;">
-                <thead>
-                  <tr style="background: rgba(255,255,255,0.05); border-bottom: 1px solid var(--border); font-weight: bold;">
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Sample #</th>
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Angle (Degrees)</th>
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Distance (Millimeters)</th>
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Distance (Ft/In)</th>
-                    <th style="padding: 10px 15px; color: var(--cyan-glow);">Quality / Signal</th>
-                  </tr>
-                </thead>
-                <tbody id="lidar-sample-table-body">
-                  <tr>
-                    <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">Waiting for first complete scan...</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-    </div> <!-- End legacy-tab-container-holder -->
-    </div> <!-- End tab-legacy -->
-
-
-    <!-- Bottom: Live Logs and Custom Command Line Terminal -->
-    <footer class="panel logs-panel glass">
-      <div class="panel-header">
-        <h2>💻 Live Driver Logs & Command Terminal</h2>
-        <button class="btn btn-small" id="btn-clear-logs">Clear Logs</button>
+        </div>
       </div>
-      <div class="terminal-logs" id="terminal-console">
-        <div class="log-line system-line">[System] Console initialized. Standing by for WebSocket connection...</div>
-      </div>
-      <div class="terminal-input-wrapper">
-        <span class="prompt">></span>
-        <input type="text" id="terminal-command-input" placeholder="Type raw serial command (e.g., $read_vol# or $spd:0,0,0,0#) and press Enter...">
-        <button id="btn-send-raw-command">Send</button>
-      </div>
-    </footer>
+    </div>
+
+
+
+
+    <!-- Footer Cockpit Version & Identity Info -->
     <div style="text-align: center; font-size: 0.75rem; color: rgba(255, 255, 255, 0.4); margin-top: 15px; font-family: monospace; padding-bottom: 20px;">
       COCKPIT VERSION: v1.0.3 (f50adec) | COCKPIT LAST DEPLOYED TO PI: <span id="ui-cockpit-deployed" style="color: #fff;">--</span> | FIRMWARE: <span id="ui-firmware-version" style="color: var(--cyan-glow); font-weight: bold;">--</span> (Built: <span id="ui-firmware-build" style="color: var(--text-muted);">--</span>)
     </div>

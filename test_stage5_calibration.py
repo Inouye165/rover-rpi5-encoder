@@ -64,7 +64,7 @@ class TestStage5CalibrationTab(unittest.TestCase):
     def test_3_safety_exclusions_in_calibration_tab(self):
         """3. Verify drive joysticks, WASD keys, and arm drive buttons are excluded from calibration tab."""
         # Find inner HTML of tab-calibration-v2
-        calib_match = re.search(r'<div id=["\']tab-calibration-v2["\'][\s\S]*?</main>\s*</div>', self.html)
+        calib_match = re.search(r'<div id=["\']tab-calibration-v2["\'][\s\S]*?(?=<div id=["\']tab-|\Z)', self.html)
         self.assertIsNotNone(calib_match, "tab-calibration-v2 must be present in HTML.")
         calib_html = calib_match.group(0)
 

@@ -94,10 +94,9 @@ class TestStage4Drive(unittest.TestCase):
         self.assertIn('function drawCompactLidarScan(scan)', self.js)
 
     def test_7_legacy_tools_compatibility_banner(self):
-        """7. Verify tab-dashboard contains legacy compatibility banner with redirect button."""
-        dash_html = self._extract_container('tab-dashboard')
-        self.assertIn('Manual Driving Controls Moved to Drive Tab', dash_html)
-        self.assertIn('data-target-tab="tab-drive-v2"', dash_html)
+        """7. Verify tab-dashboard and legacy redirect buttons are removed in Stage 7."""
+        self.assertNotIn('id="tab-dashboard"', self.html)
+        self.assertNotIn('class="legacy-redirect-btn"', self.html)
 
     def test_8_canonical_drive_state_functions_exist(self):
         """8. Verify updateCanonicalDriveState and fetchDriveStatus exist in app.js."""

@@ -136,11 +136,11 @@ class TestStage3ReadonlyStructure(unittest.TestCase):
             self.assertEqual(len(matches), 1, f"Operational control '{ctrl_id}' must exist exactly once in document.")
 
     def test_9_all_seven_legacy_tabs_reachable(self):
-        """9. Verify all seven legacy tabs are present in legacy sub-navigation."""
+        """9. Verify all seven legacy tabs are removed in Stage 7."""
         legacy_tabs = ['tab-dashboard', 'tab-imu', 'tab-encoder', 'tab-ros2', 'tab-calibrate', 'tab-motion-cal', 'tab-lidar']
         for tab in legacy_tabs:
-            self.assertIn(f'data-legacy-tab="{tab}"', self.html)
-            self.assertIn(f'id="{tab}"', self.html)
+            self.assertNotIn(f'data-legacy-tab="{tab}"', self.html)
+            self.assertNotIn(f'id="{tab}"', self.html)
 
 
 if __name__ == '__main__':
