@@ -1,3 +1,10 @@
+const UI_BUILD_ID = '2026.07.29-ros2-cmdvel';
+
+function getOperatorAuthHeaders() {
+  const token = sessionStorage.getItem('rover_operator_token');
+  return token ? { 'X-Rover-Operator-Token': token } : {};
+}
+
 let ws = null;
 let reconnectTimer = null;
 let reconnectInterval = 1000;
@@ -215,6 +222,12 @@ function connectWebSocket() {
     if (window.roverState && window.roverState.connection) {
       window.roverState.connection.ws = true;
     }
+
+    const token = sessionStorage.getItem('rover_operator_token');
+    if (token && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'auth', token }));
+    }
+    updateEsp32Badge();
     
     // Automatically query firmware identity from ESP32
     fetch('/api/firmware').catch(err => console.error('Firmware query failed:', err));
@@ -250,6 +263,7 @@ function connectWebSocket() {
     if (typeof driveRover === 'function') {
       driveRover('stop');
     }
+    updateEsp32Badge();
     scheduleReconnect();
   };
 
@@ -259,6 +273,7 @@ function connectWebSocket() {
     if (window.roverState && window.roverState.connection) {
       window.roverState.connection.ws = false;
     }
+    updateEsp32Badge();
   };
 }
 
@@ -287,6 +302,28 @@ function updateBadge(badgeElement, state, text) {
   
   // Append the updated status text
   badgeElement.appendChild(document.createTextNode(' ' + text));
+}
+
+function updateEsp32Badge() {
+  const espBadge = document.getElementById('esp32-version-badge');
+  if (!espBadge) return;
+  const isWsConnected = ws && ws.readyState === WebSocket.OPEN;
+  const serialText = (serialStatus ? serialStatus.textContent : '').toLowerCase();
+  const isSerialConnected = serialText.includes('connected');
+
+  if (!isWsConnected || !isSerialConnected) {
+    updateBadge(espBadge, 'alert', 'ESP32: Offline');
+    return;
+  }
+
+  const fw = (window.roverState && window.roverState.firmware) ? window.roverState.firmware : null;
+  if (fw && (fw.version || fw.name)) {
+    const ver = fw.version || '1.3.0';
+    const fwLabel = fw.commit ? `ESP32: v${ver} (${fw.commit})` : `ESP32: v${ver}`;
+    updateBadge(espBadge, 'ok', fwLabel);
+  } else {
+    updateBadge(espBadge, 'off', 'ESP32: Unknown');
+  }
 }
 
 const maxLogEntries = 500;
@@ -431,6 +468,7 @@ function handleServerMessage(msg) {
           updateBadge(serialStatus, 'alert', 'Serial: Disconnected');
           logSystem(`Serial port disconnected.${msg.error ? ' Error: ' + msg.error : ''}`);
         }
+        updateEsp32Badge();
       }
       break;
 
@@ -782,6 +820,7 @@ function handleServerMessage(msg) {
         };
         renderDiagnosticsV2();
       }
+      updateEsp32Badge();
       logSystem(`[Firmware Info] Live board identity received: ${msg.name} v${msg.version}`);
       break;
 
@@ -914,6 +953,7 @@ function handleServerMessage(msg) {
       const elFirmwareBuild = document.getElementById('ui-firmware-build');
       if (elFirmwareVer) elFirmwareVer.innerText = `${msg.version} (${msg.commit})`;
       if (elFirmwareBuild) elFirmwareBuild.innerText = msg.build;
+      updateEsp32Badge();
       break;
     }
 
@@ -1124,6 +1164,11 @@ function handleServerMessage(msg) {
 
     case 'normal_drive_status': {
       updateCanonicalDriveState(msg);
+      break;
+    }
+
+    case 'autonomy_status': {
+      if (msg.status) updateAutonomyState(msg.status);
       break;
     }
 
@@ -1701,7 +1746,7 @@ function fetchDriveStatus() {
 async function armNormalDrive() {
   logSystem('Sending arm normal drive request...');
   try {
-    const res = await fetch('/api/drive/arm', { method: 'POST' });
+    const res = await fetch('/api/drive/arm', { method: 'POST', headers: getOperatorAuthHeaders() });
     const data = await res.json();
     if (data && data.ok) {
       logSystem(data.message || 'Arm request processed.');
@@ -1721,7 +1766,7 @@ async function armNormalDrive() {
 async function disarmNormalDrive() {
   logSystem('Sending disarm normal drive request...');
   try {
-    const res = await fetch('/api/drive/disarm', { method: 'POST' });
+    const res = await fetch('/api/drive/disarm', { method: 'POST', headers: getOperatorAuthHeaders() });
     const data = await res.json();
     if (data && data.ok) {
       logSystem(data.message || 'Disarm request processed.');
@@ -5690,6 +5735,51 @@ function updateAutoCalibUI(status) {
 
 // Query initial automatic calibration status on page load
 document.addEventListener('DOMContentLoaded', () => {
+  const uiBadge = document.getElementById('ui-version-badge');
+  if (uiBadge) {
+    uiBadge.textContent = `UI: ${UI_BUILD_ID}`;
+  }
+
+  updateEsp32Badge();
+
+  const btnSaveToken = document.getElementById('btn-save-token');
+  const btnClearToken = document.getElementById('btn-clear-token');
+  const inputToken = document.getElementById('operator-token-input');
+
+  if (inputToken) {
+    const existingToken = sessionStorage.getItem('rover_operator_token');
+    if (existingToken) {
+      inputToken.value = '';
+      inputToken.placeholder = 'Token Set (Active)';
+    }
+  }
+
+  if (btnSaveToken) {
+    btnSaveToken.addEventListener('click', () => {
+      if (inputToken) {
+        const val = inputToken.value.trim();
+        if (val) {
+          sessionStorage.setItem('rover_operator_token', val);
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'auth', token: val }));
+          }
+          logSystem('Operator token stored in sessionStorage.');
+        }
+      }
+    });
+  }
+
+  if (btnClearToken) {
+    btnClearToken.addEventListener('click', () => {
+      sessionStorage.removeItem('rover_operator_token');
+      if (inputToken) inputToken.value = '';
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'deauth' }));
+      }
+      logSystem('Operator authorization cleared.');
+    });
+  }
+
   updateCalibrationReadiness();
   fetch('/api/calibration/auto/status')
     .then(res => res.json())
@@ -5710,7 +5800,93 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
   }
+
+  const btnAutonomy = document.getElementById('btn-enable-autonomy');
+  function getOperatorAuthHeaders() {
+    const token = sessionStorage.getItem('rover_operator_token');
+    return token ? { 'X-Rover-Operator-Token': token } : {};
+  }
+
+  if (btnAutonomy) {
+    btnAutonomy.addEventListener('click', () => {
+      const isCurrentlyEnabled = btnAutonomy.textContent.includes('Disable');
+      const endpoint = isCurrentlyEnabled ? '/api/autonomy/disable' : '/api/autonomy/enable';
+      fetch(endpoint, { method: 'POST', headers: getOperatorAuthHeaders() })
+        .then(res => res.json())
+        .then(data => {
+          if (data.ok && data.status) {
+            updateAutonomyState(data.status);
+          }
+        })
+        .catch(err => console.error('Autonomy toggle failed:', err));
+    });
+  }
+
+  fetch('/api/autonomy/status')
+    .then(res => res.json())
+    .then(data => {
+      if (data.ok) updateAutonomyState(data);
+    })
+    .catch(() => {});
 });
+
+function updateAutonomyState(status) {
+  if (!status) return;
+  const elDriveAutonomy = document.getElementById('v2-drive-val-autonomy');
+  const btnAutonomy = document.getElementById('btn-enable-autonomy');
+  const isArmed = (typeof latestNormalDriveStatus !== 'undefined' && latestNormalDriveStatus && latestNormalDriveStatus.armed) || false;
+
+  if (elDriveAutonomy) {
+    const st = (status.state || (status.enabled ? (status.active ? 'ACTIVE' : 'READY') : 'DISABLED')).toUpperCase();
+    if (st === 'ACTIVE') {
+      elDriveAutonomy.textContent = 'ACTIVE (ROS 2)';
+      elDriveAutonomy.className = 'status-val badge-armed';
+    } else if (st === 'READY_ARMED' || st === 'READY') {
+      elDriveAutonomy.textContent = 'READY (ARMED)';
+      elDriveAutonomy.className = 'status-val badge-armed';
+    } else if (st === 'READY_DISARMED') {
+      elDriveAutonomy.textContent = 'READY (DISARMED)';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'WAITING_FOR_ZERO') {
+      elDriveAutonomy.textContent = `WAITING FOR ZERO (${status.zeroHandshakeCount || 0}/3)`;
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'STALE') {
+      elDriveAutonomy.textContent = 'STALE (TIMEOUT)';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'FAULT') {
+      elDriveAutonomy.textContent = 'FAULT';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else {
+      elDriveAutonomy.textContent = 'DISABLED';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    }
+  }
+
+  if (btnAutonomy) {
+    if (status.enabled) {
+      btnAutonomy.textContent = 'Disable Autonomy';
+      btnAutonomy.style.background = 'rgba(239, 68, 68, 0.2)';
+      btnAutonomy.style.borderColor = '#ef4444';
+      btnAutonomy.style.color = '#fca5a5';
+      btnAutonomy.disabled = false;
+      btnAutonomy.title = 'Click to disable ROS 2 autonomy intake';
+    } else {
+      btnAutonomy.textContent = 'Enable Autonomy';
+      btnAutonomy.style.background = 'rgba(0, 242, 254, 0.15)';
+      btnAutonomy.style.borderColor = 'rgba(0, 242, 254, 0.4)';
+      btnAutonomy.style.color = '#00f2fe';
+      if (isArmed) {
+        btnAutonomy.disabled = true;
+        btnAutonomy.style.opacity = '0.5';
+        btnAutonomy.title = 'Cannot enable autonomy while rover is armed. Disarm first.';
+      } else {
+        btnAutonomy.disabled = false;
+        btnAutonomy.style.opacity = '1.0';
+        btnAutonomy.title = 'Enables ROS 2 autonomy intake (requires zero-velocity handshake before arming)';
+      }
+    }
+  }
+}
 
 // --- Stage 4 Compact LiDAR Local View Renderer & Safety Lifecycle Listeners ---
 function drawCompactLidarScan(scan) {

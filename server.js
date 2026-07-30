@@ -33,6 +33,25 @@ try {
 }
 
 const PORT = process.env.PORT || 3000;
+const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
+const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
+
+function isValidCmdToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const trimmed = token.trim();
+  if (trimmed.length < 64) return false;
+  return /^[0-9a-fA-F]+$/.test(trimmed);
+}
+
+const ROVER_CMD_VEL_TOKEN = process.env.ROVER_CMD_VEL_TOKEN || '';
+const isCmdTokenValid = isValidCmdToken(ROVER_CMD_VEL_TOKEN);
+
+if (!process.env.ROVER_OPERATOR_TOKEN) {
+  const crypto = require('crypto');
+  process.env.ROVER_OPERATOR_TOKEN = crypto.randomBytes(32).toString('hex');
+}
+const ROVER_OPERATOR_TOKEN = process.env.ROVER_OPERATOR_TOKEN;
+
 let COM_PORT = process.env.ROVER_ESP32_DEVICE || process.env.SERIAL_PORT;
 if (process.platform === 'win32' && COM_PORT && COM_PORT.startsWith('/dev/')) {
   COM_PORT = null;
@@ -94,9 +113,13 @@ const TYPE_NORMAL_DRIVE_STATUS = 0x36;
 // ────────────────────────────────────────────────────────────
 // Express / WebSocket Setup
 // ────────────────────────────────────────────────────────────
+const crypto = require('crypto');
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
+
+const internalCmdApp    = express();
+const internalCmdServer = http.createServer(internalCmdApp);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -163,6 +186,96 @@ let TRACK_WIDTH = 0.382;  // mutable track width (synchronized with ESP32 NVS)
 let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
+
+// ROS 2 Autonomy Command State & Safety Machine
+let autonomyGeneration = 1;
+let zeroHandshakeCount = 0;
+let lastLimiterTime = process.hrtime.bigint();
+let limitedLinear = 0.0;
+let limitedAngular = 0.0;
+let watchdogFired = false;
+let reqRateWindowStart = Date.now();
+let reqRateCount = 0;
+
+let autonomyState = {
+  state: isCmdTokenValid ? 'DISABLED' : 'FAULT',
+  enabled: false,
+  active: false,
+  generation: 1,
+  zeroHandshakeCount: 0,
+  lastCmdTime: 0,
+  watchdogTimeoutMs: 500,
+  rawLinear: 0.0,
+  rawAngular: 0.0,
+  clampedLinear: 0.0,
+  clampedAngular: 0.0,
+  limitedLinear: 0.0,
+  limitedAngular: 0.0,
+  rejectedCount: 0,
+  watchdogTimeouts: 0,
+  lastRejectionReason: isCmdTokenValid ? '' : 'Internal command configuration fault',
+  lastBridgeHeartbeat: 0
+};
+
+function getAutonomyStatusObject() {
+  const now = Date.now();
+  const cmdAgeMs = autonomyState.lastCmdTime ? (now - autonomyState.lastCmdTime) : null;
+  const bridgeConnected = autonomyState.lastBridgeHeartbeat ? ((now - autonomyState.lastBridgeHeartbeat) < 2000) : false;
+  return {
+    ok: true,
+    state: autonomyState.state,
+    enabled: autonomyState.enabled,
+    active: autonomyState.active,
+    generation: autonomyGeneration,
+    zeroHandshakeCount: zeroHandshakeCount,
+    cmdSource: cmdSource,
+    bridgeConnected: bridgeConnected,
+    lastCmdAgeMs: cmdAgeMs,
+    rawLinear: autonomyState.rawLinear,
+    rawAngular: autonomyState.rawAngular,
+    clampedLinear: autonomyState.clampedLinear,
+    clampedAngular: autonomyState.clampedAngular,
+    limitedLinear: limitedLinear,
+    limitedAngular: limitedAngular,
+    rejectedCount: autonomyState.rejectedCount,
+    watchdogTimeouts: autonomyState.watchdogTimeouts,
+    lastRejectionReason: autonomyState.lastRejectionReason,
+    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs
+  };
+}
+
+function sendZeroMotionPacket() {
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
+  if (serialPort && serialPort.isOpen) {
+    sendBinaryCommand(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+  }
+}
+
+function resetAutonomyToSafe(reason = 'Reset') {
+  autonomyGeneration++;
+  autonomyState.enabled = false;
+  autonomyState.active = false;
+  autonomyState.state = isCmdTokenValid ? 'DISABLED' : 'FAULT';
+  autonomyState.generation = autonomyGeneration;
+  zeroHandshakeCount = 0;
+  autonomyState.zeroHandshakeCount = 0;
+  autonomyState.lastCmdTime = 0;
+  autonomyState.rawLinear = 0.0;
+  autonomyState.rawAngular = 0.0;
+  autonomyState.clampedLinear = 0.0;
+  autonomyState.clampedAngular = 0.0;
+  autonomyState.limitedLinear = 0.0;
+  autonomyState.limitedAngular = 0.0;
+  autonomyState.lastRejectionReason = isCmdTokenValid ? reason : 'Internal command configuration fault';
+  if (cmdSource === 'ROS_AUTONOMY') {
+    cmdSource = 'NONE';
+  }
+  sendZeroMotionPacket();
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+}
 
 // Path Recording State
 let recording = false;
@@ -497,20 +610,93 @@ function startMotorKeepaliveLoop() {
 function startDriveKeepaliveLoop() {
   if (driveLoopStarted) return;
   driveLoopStarted = true;
+  lastLimiterTime = process.hrtime.bigint();
 
   setInterval(() => {
+    const now = Date.now();
+    const hrNow = process.hrtime.bigint();
+    let dt = Number(hrNow - lastLimiterTime) / 1e9;
+    lastLimiterTime = hrNow;
+    if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
+
+    // Check ROS 2 autonomy watchdog timeout
+    if (cmdSource === 'ROS_AUTONOMY' || autonomyState.state === 'ACTIVE') {
+      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE' || (now - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
+        if (!watchdogFired) {
+          watchdogFired = true;
+          autonomyState.watchdogTimeouts++;
+          console.warn('[Autonomy Watchdog] ROS 2 /cmd_vel timed out (500ms). Target forced to zero.');
+        }
+        resetAutonomyToSafe('Watchdog timeout exceeded (500ms)');
+        autonomyState.state = 'STALE';
+        broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+      }
+    }
+
+    const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+    const isMaintenance = (typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE';
+
+    // Safety events bypass slew limiter and force immediate zero
+    if (!isArmed || !autonomyState.enabled || isMaintenance) {
+      limitedLinear = 0.0;
+      limitedAngular = 0.0;
+    } else if (cmdSource === 'ROS_AUTONOMY') {
+      // Server-Side Slew Limiter for ROS Autonomy
+      const maxLinAccel = parseFloat(process.env.AUTONOMY_LINEAR_ACCEL_MPS2) || 0.30;
+      const maxLinDecel = parseFloat(process.env.AUTONOMY_LINEAR_DECEL_MPS2) || 0.60;
+      const maxAngAccel = parseFloat(process.env.AUTONOMY_ANGULAR_ACCEL_RADPS2) || 1.00;
+      const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
+
+      // Linear Slew
+      if (limitedLinear !== targetLinear) {
+        let rate = maxLinAccel;
+        if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
+          rate = maxLinDecel;
+        } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
+          rate = maxLinDecel;
+        }
+        const delta = rate * dt;
+        if (targetLinear > limitedLinear) {
+          limitedLinear = Math.min(targetLinear, limitedLinear + delta);
+        } else {
+          limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+        }
+      }
+
+      // Angular Slew
+      if (limitedAngular !== targetAngular) {
+        let rate = maxAngAccel;
+        if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
+          rate = maxAngDecel;
+        } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
+          rate = maxAngDecel;
+        }
+        const delta = rate * dt;
+        if (targetAngular > limitedAngular) {
+          limitedAngular = Math.min(targetAngular, limitedAngular + delta);
+        } else {
+          limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+        }
+      }
+    } else {
+      limitedLinear = targetLinear;
+      limitedAngular = targetAngular;
+    }
+
+    autonomyState.limitedLinear = limitedLinear;
+    autonomyState.limitedAngular = limitedAngular;
+
     if (!serialPort || !serialPort.isOpen) return;
 
     // Guard: Do not send conflicting background velocity commands during position/autotests
     const isPositionActive = positionMode.some(m => m === true) || (autoTestStep > 0);
     if (isPositionActive) return;
 
-    const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
     if (!isArmed) return;
 
-    const vx = Math.round(targetLinear * 1000);
+    const vx = Math.round(limitedLinear * 1000);
     const vy = 0;
-    const vz = Math.round(targetAngular * 1000);
+    const vz = Math.round(limitedAngular * 1000);
     
     sendBinaryCommand(FUNC_MOTION, [
       ...int16ToLE(vx),
@@ -1404,8 +1590,10 @@ function scheduleReconnect() {
 // ────────────────────────────────────────────────────────────
 // WebSocket Message Handlers
 // ────────────────────────────────────────────────────────────
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   console.log('Web client connected.');
+  const clientIp = (req && req.socket) ? (req.socket.remoteAddress || '') : '';
+  ws.isOperatorAuthenticated = false;
 
   // Send current serial connection state
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
@@ -1426,6 +1614,29 @@ wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
       const msg = JSON.parse(message);
+
+      if (msg.type === 'auth') {
+        if (msg.token && typeof msg.token === 'string') {
+          const reqBuf = Buffer.from(String(msg.token));
+          const expBuf = Buffer.from(String(ROVER_OPERATOR_TOKEN));
+          if (reqBuf.length === expBuf.length && crypto.timingSafeEqual(reqBuf, expBuf)) {
+            ws.isOperatorAuthenticated = true;
+            return ws.send(JSON.stringify({ type: 'auth_result', ok: true }));
+          }
+        }
+        return ws.send(JSON.stringify({ type: 'auth_result', ok: false, error: 'Invalid operator token' }));
+      }
+
+      if (msg.type === 'deauth') {
+        ws.isOperatorAuthenticated = false;
+        return ws.send(JSON.stringify({ type: 'deauth_result', ok: true }));
+      }
+
+      if (['joystick', 'set_speed', 'set_pwm', 'drive', 'run_motor_proof', 'set_position', 'start_auto_test', 'abort_auto_test', 'start_calibration', 'cancel_calibration', 'clear_faults', 'enter_maintenance', 'maintenance_set_output', 'exit_maintenance', 'emergency_stop', 'arm_normal_drive', 'disarm_normal_drive'].includes(msg.type)) {
+        if (!ws.isOperatorAuthenticated) {
+          return ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized operator connection' }));
+        }
+      }
 
       switch (msg.type) {
         case 'set_speed':
@@ -1462,6 +1673,18 @@ wss.on('connection', (ws) => {
                 stopAutoCalibration('user_abort', 'Joystick override during automatic calibration test');
               }
               return;
+            }
+
+            if ((autonomyState.enabled || cmdSource === 'ROS_AUTONOMY') && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
+              autonomyState.enabled = false;
+              autonomyState.active = false;
+              autonomyState.lastRejectionReason = 'Manual joystick override';
+              if (cmdSource === 'ROS_AUTONOMY') {
+                targetLinear = 0.0;
+                targetAngular = 0.0;
+                cmdSource = 'NONE';
+              }
+              broadcast({ type: 'autonomy_status', status: autonomyState });
             }
 
             if (autoTestStep > 0 && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
@@ -1881,6 +2104,14 @@ app.get('/api/motor', (req, res) => {
 
 app.get('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
+  autonomyState.enabled = false;
+  autonomyState.active = false;
+  autonomyState.lastRejectionReason = 'E-Stop triggered';
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  broadcast({ type: 'autonomy_status', status: autonomyState });
+
   if (typeof autoCalibState !== 'undefined' && autoCalibState.active) {
     stopAutoCalibration('estop', 'Emergency stop triggered');
   }
@@ -2958,33 +3189,58 @@ app.get('/api/firmware', (req, res) => {
   }
 });
 
-app.post('/api/drive/arm', (req, res) => {
+function requireOperatorAuth(req, res, next) {
+  const tokenHeader = req.headers['x-rover-operator-token'] || req.query.operator_token;
+  const clientIp = req.socket ? (req.socket.remoteAddress || '') : '';
+  const isLoopback = (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1');
+
+  if (isLoopback && !tokenHeader) {
+    return next();
+  }
+
+  if (!tokenHeader) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized: Missing X-Rover-Operator-Token header' });
+  }
+
+  const reqBuf = Buffer.from(String(tokenHeader));
+  const expBuf = Buffer.from(String(ROVER_OPERATOR_TOKEN));
+  if (reqBuf.length !== expBuf.length || !crypto.timingSafeEqual(reqBuf, expBuf)) {
+    return res.status(403).json({ ok: false, error: 'Forbidden: Invalid operator token' });
+  }
+
+  next();
+}
+
+app.post('/api/drive/arm', requireOperatorAuth, (req, res) => {
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
   targetAngular = 0.0;
+  latestNormalDriveStatus = { armed: true };
+  if (autonomyState.state === 'READY_DISARMED') {
+    autonomyState.state = 'READY_ARMED';
+    console.log('[Autonomy] Rover armed by operator. State set to READY_ARMED.');
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  }
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
     serialPort.write(pkt);
     console.log(`[DEBUG] Sent FUNC_ARM_NORMAL_DRIVE (0x2C) to ESP32.`);
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm] arm command sent` });
-    res.json({ ok: true, message: 'Normal drive arm command sent.' });
-  } else {
-    console.log(`[DEBUG] /api/drive/arm failed: serial port not open.`);
-    res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
+  res.json({ ok: true, message: 'Normal drive arm command sent.' });
 });
 
-app.post('/api/drive/disarm', (req, res) => {
+app.post('/api/drive/disarm', requireOperatorAuth, (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
+  latestNormalDriveStatus = { armed: false };
+  resetAutonomyToSafe('Operator disarmed normal drive');
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
     serialPort.write(pkt);
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/disarm] disarm command sent` });
-    res.json({ ok: true, message: 'Normal drive disarm command sent.' });
-  } else {
-    res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
+  res.json({ ok: true, message: 'Normal drive disarm command sent.' });
 });
 
 app.get('/api/status', (req, res) => {
@@ -2993,8 +3249,238 @@ app.get('/api/status', (req, res) => {
     serialConnected: (serialPort && serialPort.isOpen) === true,
     port: COM_PORT,
     lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
-    armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false
+    armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false,
+    autonomyEnabled: autonomyState.enabled,
+    autonomyState: autonomyState.state,
+    cmdSource: cmdSource
   });
+});
+
+// ────────────────────────────────────────────────────────────
+// ROS 2 Autonomy Endpoints (Public Listener 0.0.0.0 Controls)
+// ────────────────────────────────────────────────────────────
+app.post('/api/autonomy/enable', requireOperatorAuth, (req, res) => {
+  if (!isCmdTokenValid) {
+    return res.status(409).json({ ok: false, error: 'Internal command configuration fault: Invalid or missing ROVER_CMD_VEL_TOKEN (must be at least 64 hex characters)' });
+  }
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  if (isArmed) {
+    return res.status(409).json({ ok: false, error: 'Cannot enable autonomy while rover is armed. Disarm first.' });
+  }
+  if (typeof autoCalibState !== 'undefined' && autoCalibState.active) {
+    return res.status(429).json({ ok: false, error: 'Automatic calibration is currently running.' });
+  }
+  if (activeTestInProgress) {
+    return res.status(429).json({ ok: false, error: 'Maintenance test is currently in progress.' });
+  }
+
+  autonomyGeneration++;
+  zeroHandshakeCount = 0;
+  autonomyState.enabled = true;
+  autonomyState.active = false;
+  autonomyState.state = 'WAITING_FOR_ZERO';
+  autonomyState.generation = autonomyGeneration;
+  autonomyState.zeroHandshakeCount = 0;
+  autonomyState.lastCmdTime = 0;
+  autonomyState.rawLinear = 0.0;
+  autonomyState.rawAngular = 0.0;
+  autonomyState.clampedLinear = 0.0;
+  autonomyState.clampedAngular = 0.0;
+  autonomyState.limitedLinear = 0.0;
+  autonomyState.limitedAngular = 0.0;
+  autonomyState.lastRejectionReason = '';
+  cmdSource = 'NONE';
+  sendZeroMotionPacket();
+
+  console.log('[Autonomy] Operator ENABLED ROS 2 command acceptance (WAITING_FOR_ZERO).');
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  res.json({ ok: true, message: 'ROS 2 Autonomy enabled. Waiting for zero handshake.', status: getAutonomyStatusObject() });
+});
+
+app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
+  resetAutonomyToSafe('Disabled by operator');
+  console.log('[Autonomy] Operator DISABLED ROS 2 command acceptance.');
+  res.json({ ok: true, message: 'ROS 2 Autonomy command intake disabled.', status: getAutonomyStatusObject() });
+});
+
+app.get('/api/autonomy/status', (req, res) => {
+  res.json(getAutonomyStatusObject());
+});
+
+// ────────────────────────────────────────────────────────────
+// ROS 2 Internal Command Listener (127.0.0.1:3003 Isolation)
+// ────────────────────────────────────────────────────────────
+internalCmdApp.use(express.json({ limit: '1kb' }));
+
+internalCmdApp.use((req, res, next) => {
+  const now = Date.now();
+  if (now - reqRateWindowStart > 1000) {
+    reqRateWindowStart = now;
+    reqRateCount = 0;
+  }
+  reqRateCount++;
+  if (reqRateCount > 50) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Request rate limit exceeded (max 50/s)';
+    return res.status(429).json({ ok: false, error: 'Rate limit exceeded' });
+  }
+
+  const tokenHeader = req.headers['x-rover-bridge-token'];
+  if (!tokenHeader) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Missing bridge token';
+    return res.status(401).json({ ok: false, error: 'Missing token' });
+  }
+
+  const reqBuf = Buffer.from(String(tokenHeader));
+  const expBuf = Buffer.from(String(ROVER_CMD_VEL_TOKEN));
+  if (reqBuf.length !== expBuf.length || !crypto.timingSafeEqual(reqBuf, expBuf)) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Invalid bridge token';
+    return res.status(403).json({ ok: false, error: 'Invalid token' });
+  }
+
+  next();
+});
+
+internalCmdApp.post('/api/cmd_vel', (req, res) => {
+  const now = Date.now();
+  autonomyState.lastBridgeHeartbeat = now;
+
+  if (!autonomyState.enabled || autonomyState.state === 'DISABLED' || autonomyState.state === 'STALE' || autonomyState.state === 'FAULT') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Autonomy is disabled';
+    return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
+  }
+
+  // Check maintenance / calibration active
+  if ((typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Maintenance or calibration mode active';
+    return res.status(429).json({ ok: false, error: 'Maintenance or calibration active' });
+  }
+
+  const body = req.body || {};
+  if (body.generation !== undefined && Number(body.generation) !== autonomyGeneration) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Stale autonomy generation command';
+    return res.status(400).json({ ok: false, error: 'Generation mismatch' });
+  }
+
+  let rawLin = undefined;
+  let rawAng = undefined;
+
+  if (body.linear && typeof body.linear === 'object') {
+    rawLin = body.linear.x;
+    if ((body.linear.y !== undefined && body.linear.y !== null && Math.abs(Number(body.linear.y)) > 1e-4) ||
+        (body.linear.z !== undefined && body.linear.z !== null && Math.abs(Number(body.linear.z)) > 1e-4)) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Unsupported linear axis requested (y or z)';
+      return res.status(400).json({ ok: false, error: 'Unsupported linear axis requested' });
+    }
+  } else if (body.v !== undefined) {
+    rawLin = body.v;
+  }
+
+  if (body.angular && typeof body.angular === 'object') {
+    rawAng = body.angular.z;
+    if ((body.angular.x !== undefined && body.angular.x !== null && Math.abs(Number(body.angular.x)) > 1e-4) ||
+        (body.angular.y !== undefined && body.angular.y !== null && Math.abs(Number(body.angular.y)) > 1e-4)) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Unsupported angular axis requested (x or y)';
+      return res.status(400).json({ ok: false, error: 'Unsupported angular axis requested' });
+    }
+  } else if (body.w !== undefined) {
+    rawAng = body.w;
+  }
+
+  if (rawLin === undefined || rawLin === null || rawAng === undefined || rawAng === null || typeof rawLin === 'boolean' || typeof rawAng === 'boolean') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Missing or invalid velocity payload type';
+    return res.status(400).json({ ok: false, error: 'Missing or invalid velocity payload' });
+  }
+
+  rawLin = Number(rawLin);
+  rawAng = Number(rawAng);
+
+  if (!Number.isFinite(rawLin) || Number.isNaN(rawLin) || !Number.isFinite(rawAng) || Number.isNaN(rawAng)) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Invalid NaN or Infinite velocity value';
+    return res.status(400).json({ ok: false, error: 'Invalid numeric velocity payload' });
+  }
+
+  const isZeroCmd = Math.abs(rawLin) <= 1e-4 && Math.abs(rawAng) <= 1e-4;
+
+  // Handle State Machine
+  if (autonomyState.state === 'WAITING_FOR_ZERO') {
+    if (!isZeroCmd) {
+      zeroHandshakeCount = 0;
+      autonomyState.zeroHandshakeCount = 0;
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Nonzero command received during WAITING_FOR_ZERO handshake';
+      return res.status(400).json({ ok: false, error: 'Waiting for zero handshake' });
+    }
+    zeroHandshakeCount++;
+    autonomyState.zeroHandshakeCount = zeroHandshakeCount;
+    if (zeroHandshakeCount >= 3) {
+      autonomyState.state = 'READY_DISARMED';
+      console.log('[Autonomy] Zero handshake complete (3/3). State set to READY_DISARMED.');
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+    return res.json({ ok: true, state: autonomyState.state, zeroCount: zeroHandshakeCount });
+  }
+
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  if (!isArmed) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Rover is disarmed';
+    return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
+  }
+
+  if (autonomyState.state === 'READY_DISARMED') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Rover is disarmed';
+    return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
+  }
+
+  // Clamping
+  const maxLin = parseFloat(process.env.AUTONOMY_MAX_LINEAR_MPS) || (floorTesting ? 0.17 : 0.80);
+  const maxAng = parseFloat(process.env.AUTONOMY_MAX_ANGULAR_RADPS) || (floorTesting ? 0.90 : 3.00);
+  const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
+  const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
+
+  if (autonomyState.state === 'READY_ARMED') {
+    if (isZeroCmd) {
+      return res.json({ ok: true, state: 'READY_ARMED', linear: 0.0, angular: 0.0 });
+    }
+    autonomyState.state = 'ACTIVE';
+    autonomyState.active = true;
+    watchdogFired = false;
+    if (cmdSource !== 'ROS_AUTONOMY') {
+      sendZeroMotionPacket();
+      cmdSource = 'ROS_AUTONOMY';
+    }
+    console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  }
+
+  if (cmdSource !== 'ROS_AUTONOMY') {
+    sendZeroMotionPacket();
+    cmdSource = 'ROS_AUTONOMY';
+  }
+
+  autonomyState.rawLinear = rawLin;
+  autonomyState.rawAngular = rawAng;
+  autonomyState.clampedLinear = clampedLin;
+  autonomyState.clampedAngular = clampedAng;
+  autonomyState.lastCmdTime = now;
+  watchdogFired = false;
+
+  targetLinear = clampedLin;
+  targetAngular = clampedAng;
+  startDriveKeepaliveLoop();
+
+  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
 });
 
 app.get('/api/encoders', (req, res) => {
@@ -4127,11 +4613,26 @@ loadCalibrationDb();
 startMotorKeepaliveLoop();
 initSerial(COM_PORT);
 
-server.listen(PORT, () => {
-  console.log(`Maker ESP32 Pro Cockpit running at http://localhost:${PORT}`);
-  console.log(`Binary protocol on ${COM_PORT} @ ${BAUD_RATE} baud`);
-  console.log(`Motor test: http://localhost:${PORT}/api/motor?m1=50&m2=0&m3=0&m4=0`);
-  console.log(`Stop:       http://localhost:${PORT}/api/stop`);
-  console.log(`Beep:       http://localhost:${PORT}/api/beep`);
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Maker ESP32 Pro Cockpit running at http://localhost:${PORT}`);
+    console.log(`Binary protocol on ${COM_PORT} @ ${BAUD_RATE} baud`);
+    console.log(`Motor test: http://localhost:${PORT}/api/motor?m1=50&m2=0&m3=0&m4=0`);
+    console.log(`Stop:       http://localhost:${PORT}/api/stop`);
+    console.log(`Beep:       http://localhost:${PORT}/api/beep`);
+  });
 
-});
+  internalCmdServer.listen(ROVER_INTERNAL_CMD_PORT, ROVER_INTERNAL_CMD_HOST, () => {
+    console.log(`Internal ROS /cmd_vel listener bound to http://${ROVER_INTERNAL_CMD_HOST}:${ROVER_INTERNAL_CMD_PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  internalCmdApp,
+  internalCmdServer,
+  autonomyState,
+  getAutonomyStatusObject,
+  resetAutonomyToSafe
+};
