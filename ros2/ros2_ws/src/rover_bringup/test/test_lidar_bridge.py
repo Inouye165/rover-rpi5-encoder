@@ -756,12 +756,13 @@ class TestLaunchFile:
         assert isinstance(ld, LaunchDescription)
 
         nodes = [e for e in ld.entities if isinstance(e, Node)]
-        assert len(nodes) == 5, f"Expected 5 nodes in launch, found {len(nodes)}"
+        assert len(nodes) == 6, f"Expected 6 nodes in launch, found {len(nodes)}"
 
         executables = {n.node_executable for n in nodes}
         assert "rover_system_health" in executables
         assert "rover_lidar_bridge" in executables
         assert "rover_encoder_odometry" in executables
+        assert "rover_cmd_vel_bridge" in executables
         assert "static_transform_publisher" in executables
         assert "foxglove_bridge" in executables
 
@@ -792,12 +793,12 @@ class TestLaunchFile:
                 assert entity.node_package not in forbidden, \
                     f"Forbidden package '{entity.node_package}' in launch file"
 
-    def test_foundation_launch_no_cmd_vel(self):
-        """Launch file must not reference cmd_vel."""
+    def test_foundation_launch_has_cmd_vel_bridge(self):
+        """Launch file must include rover_cmd_vel_bridge."""
         launch_path = os.path.join(
             os.path.dirname(__file__), "..", "launch", "foundation.launch.py"
         )
         with open(launch_path, "r") as f:
             content = f.read()
-        assert "cmd_vel" not in content
+        assert "rover_cmd_vel_bridge" in content
         assert "rover_encoder_odometry" in content
