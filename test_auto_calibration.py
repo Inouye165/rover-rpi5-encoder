@@ -297,5 +297,139 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("repeatability-history-v1.json", self.server_code)
 
 
+    # -----------------------------------------------------------------------
+    # Tests 43–50: Regression tests for armed-field synchronization fix
+    # Fix: autoCalibState.armed must always reflect Boolean(latestNormalDriveStatus?.armed)
+    # -----------------------------------------------------------------------
+
+    def test_43_broadcast_syncs_armed_from_latestNormalDriveStatus(self):
+        """43. broadcastAutoCalibStatus() must synchronize armed from latestNormalDriveStatus before broadcasting."""
+        code = self.server_code.replace('\r\n', '\n')
+        fn_start = code.index('function broadcastAutoCalibStatus() {')
+        fn_end   = code.index('\n}', fn_start) + 2
+        fn_body  = code[fn_start:fn_end]
+
+        self.assertIn(
+            'autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)',
+            fn_body,
+            "broadcastAutoCalibStatus() must set autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)"
+        )
+
+    def test_44_status_endpoint_syncs_armed_from_latestNormalDriveStatus(self):
+        """44. /api/calibration/auto/status must synchronize armed from latestNormalDriveStatus before responding."""
+        code = self.server_code.replace('\r\n', '\n')
+        # Find the GET status route block
+        route_start = code.index("app.get('/api/calibration/auto/status'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)',
+            route_body,
+            "/api/calibration/auto/status must set autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed) before res.json()"
+        )
+        # Ensure sync occurs BEFORE res.json()
+        idx_sync = route_body.index('autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)')
+        idx_json = route_body.index('res.json(')
+        self.assertLess(idx_sync, idx_json,
+            "armed sync must occur before res.json() in /api/calibration/auto/status")
+
+    def test_45_no_drive_telemetry_armed_is_false(self):
+        """45. When latestNormalDriveStatus is null/undefined, Boolean(latestNormalDriveStatus?.armed) === false."""
+        # This is a logic test of the expression itself, not server startup state.
+        # Verify the optional-chaining pattern is used (safe for null/undefined).
+        code = self.server_code.replace('\r\n', '\n')
+        # Count occurrences of the safe pattern — must appear at least 3 times
+        # (broadcastAutoCalibStatus, status endpoint, start endpoint)
+        import re
+        matches = re.findall(
+            r'Boolean\(latestNormalDriveStatus\?\.armed\)',
+            code
+        )
+        self.assertGreaterEqual(len(matches), 3,
+            "Boolean(latestNormalDriveStatus?.armed) must appear in broadcastAutoCalibStatus, "
+            "the status endpoint, and the start endpoint (at minimum)")
+
+    def test_46_arm_endpoint_broadcasts_calib_status_promptly(self):
+        """46. /api/drive/arm must call broadcastAutoCalibStatus() after updating latestNormalDriveStatus."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.post('/api/drive/arm'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            route_body,
+            "/api/drive/arm must call broadcastAutoCalibStatus() to propagate armed=true to calib-status consumers"
+        )
+        # Ensure broadcast happens after the latestNormalDriveStatus update
+        idx_status  = route_body.index("latestNormalDriveStatus = { armed: true }")
+        idx_bcast   = route_body.index('broadcastAutoCalibStatus()')
+        self.assertLess(idx_status, idx_bcast,
+            "broadcastAutoCalibStatus() must come after latestNormalDriveStatus = { armed: true } in /api/drive/arm")
+
+    def test_47_disarm_endpoint_broadcasts_calib_status_promptly(self):
+        """47. /api/drive/disarm must call broadcastAutoCalibStatus() after updating latestNormalDriveStatus."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.post('/api/drive/disarm'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            route_body,
+            "/api/drive/disarm must call broadcastAutoCalibStatus() to propagate armed=false to calib-status consumers"
+        )
+        idx_status = route_body.index("latestNormalDriveStatus = { armed: false }")
+        idx_bcast  = route_body.index('broadcastAutoCalibStatus()')
+        self.assertLess(idx_status, idx_bcast,
+            "broadcastAutoCalibStatus() must come after latestNormalDriveStatus = { armed: false } in /api/drive/disarm")
+
+    def test_48_stop_auto_calibration_no_longer_sets_armed_false(self):
+        """48. stopAutoCalibration() must NOT independently set autoCalibState.armed = false (redundant + misleading)."""
+        code = self.server_code.replace('\r\n', '\n')
+        fn_start = code.index("function stopAutoCalibration(reason, detail) {")
+        fn_end   = code.index("\nasync function runAutoCalibTick(", fn_start)
+        fn_body  = code[fn_start:fn_end]
+
+        self.assertNotIn(
+            'autoCalibState.armed = false',
+            fn_body,
+            "stopAutoCalibration() must not independently set autoCalibState.armed = false; "
+            "armed is derived from latestNormalDriveStatus by broadcastAutoCalibStatus()"
+        )
+
+    def test_49_status_endpoint_does_not_change_active_phase_test_motor(self):
+        """49. /api/calibration/auto/status GET must not mutate active, phase, test, or motorCommand."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.get('/api/calibration/auto/status'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertNotIn('autoCalibState.active =', route_body,
+            "Status endpoint must not mutate autoCalibState.active")
+        self.assertNotIn('autoCalibState.phase =', route_body,
+            "Status endpoint must not mutate autoCalibState.phase")
+        self.assertNotIn('autoCalibState.test =', route_body,
+            "Status endpoint must not mutate autoCalibState.test")
+        self.assertNotIn('autoCalibState.motorCommand =', route_body,
+            "Status endpoint must not mutate autoCalibState.motorCommand")
+
+    def test_50_telemetry_path_broadcasts_calib_status_on_armed_change(self):
+        """50. The ESP32 normal_drive_status telemetry path must call broadcastAutoCalibStatus()
+           so WebSocket consumers receive updated armed state when ESP32 confirms arm/disarm."""
+        code = self.server_code.replace('\r\n', '\n')
+        # Find the block that broadcasts normal_drive_status
+        idx_nd_bcast = code.index("type: 'normal_drive_status'")
+        # Look for broadcastAutoCalibStatus within a reasonable window after it
+        window = code[idx_nd_bcast:idx_nd_bcast + 400]
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            window,
+            "broadcastAutoCalibStatus() must be called near the normal_drive_status broadcast "
+            "so ESP32-confirmed arm state changes propagate to calib-status WS consumers"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

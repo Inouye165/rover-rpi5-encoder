@@ -1405,6 +1405,8 @@ function parseTelemetryPacket(extType, data) {
         type: 'normal_drive_status',
         ...latestNormalDriveStatus
       });
+      // Propagate ESP32-confirmed armed state changes to calibration-status WS consumers.
+      broadcastAutoCalibStatus();
     }
 
   } else if (extType === 0x37) { // TYPE_ROVER_PARAMS
@@ -2553,6 +2555,9 @@ function fetchRosOdometry() {
 }
 
 function broadcastAutoCalibStatus() {
+  // Synchronize armed field from the authoritative normal-drive status before broadcasting.
+  // autoCalibState.armed must never drift from latestNormalDriveStatus.armed.
+  autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed);
   broadcast({
     type: 'auto_calib_status',
     status: autoCalibState
@@ -2690,8 +2695,12 @@ function stopAutoCalibration(reason, detail) {
   cmdSource = 'NONE';
 
   // 3. Mark inactive & calculate phase/errors
+  // Note: autoCalibState.armed is NOT set here. It is synchronized from
+  // latestNormalDriveStatus by broadcastAutoCalibStatus() and the status endpoint.
+  // After the disarm packet above, the ESP32 confirms disarm via telemetry which
+  // updates latestNormalDriveStatus; the broadcast at the end of this function
+  // will reflect the correct armed state.
   autoCalibState.active = false;
-  autoCalibState.armed = false;
   autoCalibState.phase = (reason === 'target_reached') ? 'COMPLETE' : 'FAULT';
   autoCalibState.stopReason = reason;
   autoCalibState.fault = (reason !== 'target_reached') ? (detail || reason) : null;
@@ -3013,7 +3022,9 @@ app.post('/api/calibration/auto/start', async (req, res) => {
     fault: null,
     telemetryAgeMs: encSnap.ageMs || 0,
     odomAgeMs: latestRosOdom.odometry_age_ms || 0,
-    armed: true,
+    // armed is not stored here; it is always derived from latestNormalDriveStatus
+    // by broadcastAutoCalibStatus() and the /api/calibration/auto/status endpoint.
+    armed: Boolean(latestNormalDriveStatus?.armed),
     motorCommand: [0, 0, 0, 0],
     safetyChecks: {
       serialConnected: true,
@@ -3053,6 +3064,8 @@ app.get('/api/calibration/auto/status', async (req, res) => {
   autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
   autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
   autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
+  // Synchronize armed from the authoritative normal-drive status before responding.
+  autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed);
   res.json({ ok: true, status: autoCalibState });
 });
 
@@ -3216,6 +3229,8 @@ app.post('/api/drive/arm', requireOperatorAuth, (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
   latestNormalDriveStatus = { armed: true };
+  // Propagate the updated armed state to calibration-status consumers immediately.
+  broadcastAutoCalibStatus();
   if (autonomyState.state === 'READY_DISARMED') {
     autonomyState.state = 'READY_ARMED';
     console.log('[Autonomy] Rover armed by operator. State set to READY_ARMED.');
@@ -3234,6 +3249,8 @@ app.post('/api/drive/disarm', requireOperatorAuth, (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
   latestNormalDriveStatus = { armed: false };
+  // Propagate the updated armed state to calibration-status consumers immediately.
+  broadcastAutoCalibStatus();
   resetAutonomyToSafe('Operator disarmed normal drive');
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
