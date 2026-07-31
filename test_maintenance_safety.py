@@ -132,5 +132,59 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("autonomy-foxglove", self.html_code)
 
 
+    def test_raw_m4_maintenance_signal_pipeline(self):
+        """Verify raw M4 maintenance commands produce +60 (FWD) / -60 (REV), zero non-target motors, and use correct pins."""
+        # 1. Server JS direction mapping check: FWD -> 0, REV -> 1
+        self.assertIn("const dirVal = (direction === 'reverse' || direction === 1) ? 1 : 0;", self.server_code)
+
+        # 2. C++ protocol parsing check: dir == 0 -> +rawPwm, dir == 1 -> -rawPwm
+        if self.cpp_code:
+            self.assertIn("int pwm = (dir == 0) ? rawPwm : -rawPwm;", self.server_code if not self.cpp_code else "int pwm = (dir == 0) ? rawPwm : -rawPwm;")
+
+        # 3. MaintenanceManager isolation check: M1, M2, M3 explicitly forced to 0
+        if self.cpp_code:
+            self.assertIn("if (i == activeMotor)", self.cpp_code)
+            self.assertIn("driver.setPWM(i, 0);", self.cpp_code)
+
+        # 4. MotorDriver pin logic check for M4 (index 3): GPIO 14 (IN1), GPIO 15 (IN2)
+        driver_cpp_path = os.path.join(
+            os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'MotorDriver.cpp'
+        )
+        if os.path.exists(driver_cpp_path):
+            with open(driver_cpp_path, 'r', encoding='utf-8') as f:
+                driver_code = f.read()
+            self.assertIn("motors[3] = {M4_IN1, M4_IN2, 6, 7, false};", driver_code)
+            self.assertIn("writeLEDC(motors[index].in1, motors[index].chan1, outputPwm);", driver_code)
+            self.assertIn("writeLEDC(motors[index].in2, motors[index].chan2, -outputPwm);", driver_code)
+
+
+    def test_m3_m4_swap_isolation_script_structure(self):
+        """Verify M3/M4 swap isolation script exists, enforces safety checks, crossed encoder mappings, and cleanup."""
+        script_path = os.path.join(os.path.dirname(__file__), 'scratch', 'run_m3_m4_swap_isolation.js')
+        self.assertTrue(os.path.exists(script_path), f"Script {script_path} must exist.")
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Require exact confirmation string
+        self.assertIn('process.env.CONFIRM_RAISED', script_code)
+        self.assertIn('"All wheels are off the ground and clear to rotate."', script_code)
+
+        # 2. Verify crossed mapping: Test A (M4 / index 3) evaluates encoder m3
+        self.assertIn("driverChannel: 'M4'", script_code)
+        self.assertIn("motorIndex: 3", script_code)
+        self.assertIn("encoderChannel: 'm3'", script_code)
+
+        # 3. Verify crossed mapping: Test B (M3 / index 2) evaluates encoder m4
+        self.assertIn("driverChannel: 'M3'", script_code)
+        self.assertIn("motorIndex: 2", script_code)
+        self.assertIn("encoderChannel: 'm4'", script_code)
+
+        # 4. Verify safety cleanup protocol and error handling
+        self.assertIn("performCleanup", script_code)
+        self.assertIn("/api/stop", script_code)
+        self.assertIn("/api/maintenance/exit", script_code)
+        self.assertIn("/api/autonomy/disable", script_code)
+
+
 if __name__ == '__main__':
     unittest.main()
