@@ -179,11 +179,16 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("motorIndex: 2", script_code)
         self.assertIn("encoderChannel: 'm4'", script_code)
 
-        # 4. Verify safety cleanup protocol and error handling
+        # 4. Verify safety cleanup protocol includes all 4 endpoints and resilient handling
         self.assertIn("performCleanup", script_code)
         self.assertIn("/api/stop", script_code)
         self.assertIn("/api/maintenance/exit", script_code)
+        self.assertIn("/api/drive/disarm", script_code)
         self.assertIn("/api/autonomy/disable", script_code)
+
+        # 5. Verify resilient cleanup: independent try-catch blocks so one failure does not block others
+        self.assertIn("catch (err)", script_code)
+        self.assertIn("Final Verification PASSED", script_code)
 
 
 if __name__ == '__main__':

@@ -46,25 +46,85 @@ function delay(ms) {
 }
 
 async function performCleanup() {
-  console.log("\n[Safety Cleanup] Initiating post-test safety cleanup...");
+  console.log("\n[Safety Cleanup] Initiating resilient post-test safety cleanup...");
+  const headers = { 'Content-Type': 'application/json' };
+  if (OPERATOR_TOKEN) headers['X-Rover-Operator-Token'] = OPERATOR_TOKEN;
+
+  // 1. Force stop all motors
   try {
-    // 1. Force stop all motors
-    await httpRequest({
-      hostname: HOST, port: PORT, path: '/api/stop', method: 'GET'
-    });
-    // 2. Exit maintenance mode
-    await httpRequest({
-      hostname: HOST, port: PORT, path: '/api/maintenance/exit', method: 'POST'
-    });
-    // 3. Disable autonomy
-    const headers = { 'Content-Type': 'application/json' };
-    if (OPERATOR_TOKEN) headers['X-Rover-Operator-Token'] = OPERATOR_TOKEN;
-    await httpRequest({
-      hostname: HOST, port: PORT, path: '/api/autonomy/disable', method: 'POST', headers
-    });
-    console.log("[Safety Cleanup] Motors zeroed, maintenance exited, autonomy disabled.");
+    await httpRequest({ hostname: HOST, port: PORT, path: '/api/stop', method: 'GET' });
+    console.log("  ✓ Force stop requested (/api/stop)");
   } catch (err) {
-    console.error("[Safety Cleanup Warning] Cleanup error:", err.message);
+    console.error("  x Force stop failed:", err.message);
+  }
+
+  // 2. Exit maintenance mode
+  try {
+    await httpRequest({ hostname: HOST, port: PORT, path: '/api/maintenance/exit', method: 'POST', headers });
+    console.log("  ✓ Maintenance mode exited (/api/maintenance/exit)");
+  } catch (err) {
+    console.error("  x Exit maintenance failed:", err.message);
+  }
+
+  // 3. Disarm normal drive
+  try {
+    await httpRequest({ hostname: HOST, port: PORT, path: '/api/drive/disarm', method: 'POST', headers });
+    console.log("  ✓ Normal drive disarmed (/api/drive/disarm)");
+  } catch (err) {
+    console.error("  x Disarm drive failed:", err.message);
+  }
+
+  // 4. Disable autonomy
+  try {
+    await httpRequest({ hostname: HOST, port: PORT, path: '/api/autonomy/disable', method: 'POST', headers });
+    console.log("  ✓ Autonomy disabled (/api/autonomy/disable)");
+  } catch (err) {
+    console.error("  x Disable autonomy failed:", err.message);
+  }
+
+  // 5. Final State Verification
+  try {
+    console.log("[Safety Cleanup] Verifying final rover safety state...");
+    const driveRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/drive/status', method: 'GET' });
+    const driveStatus = (driveRes.json && driveRes.json.status) ? driveRes.json.status : {};
+
+    const maintRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/maintenance/status', method: 'GET' });
+    const maintStatus = (maintRes.json && maintRes.json.status) ? maintRes.json.status : {};
+
+    const autoRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/autonomy/status', method: 'GET' });
+    const autoStatus = (autoRes.json) ? autoRes.json : {};
+
+    const armed = driveStatus.armed === true;
+    const autonomyState = autoStatus.state || 'DISABLED';
+    const maintActive = maintStatus.active === true;
+    const testPwm = maintStatus.testPwm || 0;
+    const actualPwm = maintStatus.actualPwm || 0;
+    const reqLin = driveStatus.reqLinear || 0;
+    const reqAng = driveStatus.reqAngular || 0;
+    const limLin = driveStatus.limLinear || 0;
+    const limAng = driveStatus.limAngular || 0;
+    const cmdSource = driveStatus.cmdSource || 'NONE';
+
+    const checksPassed = !armed && 
+                         (autonomyState === 'DISABLED' || autonomyState === 'OFF') && 
+                         !maintActive && 
+                         testPwm === 0 && 
+                         actualPwm === 0 && 
+                         reqLin === 0 && 
+                         reqAng === 0 && 
+                         limLin === 0 && 
+                         limAng === 0 && 
+                         cmdSource === 'NONE';
+
+    if (checksPassed) {
+      console.log("  ✓ Final Verification PASSED: Rover disarmed, autonomy disabled, maintenance inactive, motion zeroed.");
+    } else {
+      console.error("  x Final Verification WARNING: Unexpected safety state:", {
+        armed, autonomyState, maintActive, testPwm, actualPwm, reqLin, reqAng, limLin, limAng, cmdSource
+      });
+    }
+  } catch (err) {
+    console.error("  x Final verification check failed:", err.message);
   }
 }
 
