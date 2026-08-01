@@ -20,6 +20,7 @@ services:
       - ./volumes/maps:/ros2_ws/maps
       - ./volumes/logs:/ros2_ws/logs
       - ./volumes/rosbag:/ros2_ws/rosbag
+      - ./scripts:/ros2_ws/scripts:ro
       - ./compose.yaml:/ros2_ws/compose.yaml:ro
       - ./Dockerfile:/ros2_ws/Dockerfile:ro
     command: |
