@@ -41,11 +41,11 @@
         <div class="status-badge" id="gamepad-status">
           <span class="status-indicator off"></span> Gamepad: Disconnected
         </div>
-        <div class="operator-token-selector" style="display: flex; gap: 4px; align-items: center;">
-          <input type="password" id="operator-token-input" placeholder="Operator Token" autocomplete="off" style="width: 110px; padding: 2px 6px; font-size: 11px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: #fff;">
-          <button id="btn-save-token" style="padding: 2px 8px; font-size: 11px; background: #00f2fe; color: #090e16; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Auth</button>
-          <button id="btn-clear-token" style="padding: 2px 6px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; cursor: pointer;">Clear</button>
-        </div>
+        <form class="operator-token-selector" onsubmit="return false;" style="display: flex; gap: 4px; align-items: center;">
+          <input type="password" id="operator-token-input" name="rover-operator-token" placeholder="Operator Token" autocomplete="new-password" style="width: 110px; padding: 2px 6px; font-size: 11px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: #fff;">
+          <button type="button" id="btn-save-token" style="padding: 2px 8px; font-size: 11px; background: #00f2fe; color: #090e16; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Auth</button>
+          <button type="button" id="btn-clear-token" style="padding: 2px 6px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; cursor: pointer;">Clear</button>
+        </form>
         <div class="serial-port-selector">
           <input type="text" id="com-port-input" value="COM18" placeholder="Port">
           <button id="btn-change-port">Connect</button>

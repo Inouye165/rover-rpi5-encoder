@@ -1,8 +1,87 @@
-const UI_BUILD_ID = '2026.07.29-ros2-cmdvel';
+const UI_BUILD_ID = '2026.07.31-operator-auth';
+
+function getOrSyncOperatorToken() {
+  const inputToken = document.getElementById('operator-token-input');
+  if (inputToken && inputToken.value && inputToken.value.trim()) {
+    const val = inputToken.value.trim();
+    sessionStorage.setItem('rover_operator_token', val);
+    return val;
+  }
+  return sessionStorage.getItem('rover_operator_token') || '';
+}
 
 function getOperatorAuthHeaders() {
-  const token = sessionStorage.getItem('rover_operator_token');
+  const token = getOrSyncOperatorToken();
   return token ? { 'X-Rover-Operator-Token': token } : {};
+}
+
+function showAuthErrorMessage(msg) {
+  const displayMsg = msg || 'Operator token missing or invalid. Enter the token and try again.';
+  if (typeof logSystem === 'function') {
+    logSystem(`[AUTH ERROR] ${displayMsg}`);
+  }
+  const errBanner = document.getElementById('v2-autonomy-error-banner') || 
+                    document.getElementById('v2-calib-error-banner') || 
+                    document.getElementById('maint-test-error-banner');
+  if (errBanner) {
+    errBanner.textContent = displayMsg;
+    errBanner.style.display = 'block';
+    setTimeout(() => {
+      if (errBanner.textContent === displayMsg) {
+        errBanner.style.display = 'none';
+      }
+    }, 5000);
+  } else {
+    alert(displayMsg);
+  }
+}
+
+const activeProtectedRequests = new Map();
+
+async function authenticatedFetch(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const requestKey = `${method}:${url}`;
+
+  if (activeProtectedRequests.get(requestKey)) {
+    console.warn(`[Debounce] Protected request ${requestKey} is already in progress.`);
+    return { ok: false, status: 429, json: { ok: false, error: 'Request in flight' } };
+  }
+
+  activeProtectedRequests.set(requestKey, true);
+
+  try {
+    const authHeaders = getOperatorAuthHeaders();
+    const headers = {
+      ...(options.headers || {}),
+      ...authHeaders
+    };
+
+    const res = await fetch(url, { ...options, headers });
+
+    if (res.status === 401 || res.status === 403) {
+      let errText = 'Operator token missing or invalid. Enter the token and try again.';
+      try {
+        const json = await res.clone().json();
+        if (json && json.error) {
+          errText = json.error;
+        }
+      } catch (e) {}
+      showAuthErrorMessage(errText);
+      return { ok: false, status: res.status, res, json: { ok: false, error: errText } };
+    }
+
+    let json = null;
+    try {
+      json = await res.json();
+    } catch (e) {}
+
+    return { ok: res.ok, status: res.status, res, json };
+  } catch (err) {
+    console.error(`Fetch error for ${url}:`, err);
+    return { ok: false, status: 0, error: err.message, json: { ok: false, error: err.message } };
+  } finally {
+    activeProtectedRequests.delete(requestKey);
+  }
 }
 
 let ws = null;
@@ -1746,12 +1825,12 @@ function fetchDriveStatus() {
 async function armNormalDrive() {
   logSystem('Sending arm normal drive request...');
   try {
-    const res = await fetch('/api/drive/arm', { method: 'POST', headers: getOperatorAuthHeaders() });
-    const data = await res.json();
-    if (data && data.ok) {
+    const result = await authenticatedFetch('/api/drive/arm', { method: 'POST' });
+    const data = result.json || {};
+    if (result.ok && data.ok) {
       logSystem(data.message || 'Arm request processed.');
-    } else {
-      logSystem(`⚠️ Arm request rejected: ${(data && data.error) || 'Unknown error'}`);
+    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
+      logSystem(`⚠️ Arm request rejected: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
     logSystem(`⚠️ Error arming normal drive: ${err.message}`);
@@ -1766,12 +1845,12 @@ async function armNormalDrive() {
 async function disarmNormalDrive() {
   logSystem('Sending disarm normal drive request...');
   try {
-    const res = await fetch('/api/drive/disarm', { method: 'POST', headers: getOperatorAuthHeaders() });
-    const data = await res.json();
-    if (data && data.ok) {
+    const result = await authenticatedFetch('/api/drive/disarm', { method: 'POST' });
+    const data = result.json || {};
+    if (result.ok && data.ok) {
       logSystem(data.message || 'Disarm request processed.');
-    } else {
-      logSystem(`⚠️ Disarm request rejected: ${(data && data.error) || 'Unknown error'}`);
+    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
+      logSystem(`⚠️ Disarm request rejected: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
     logSystem(`⚠️ Error disarming normal drive: ${err.message}`);
@@ -4374,11 +4453,11 @@ function logOutAndBackTrial() {
 }
 
 // ── Backtracking Recording & Return ──
+// ── Backtracking Recording & Return ──
 async function startPathRecording() {
   try {
-    const res = await fetch('/api/path/record/start', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Recording started: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/record/start', { method: 'POST' });
+    logSystem(`[Path] Recording started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start path recording:', err);
   }
@@ -4386,9 +4465,8 @@ async function startPathRecording() {
 
 async function stopPathRecording() {
   try {
-    const res = await fetch('/api/path/record/stop', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Recording stopped: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/record/stop', { method: 'POST' });
+    logSystem(`[Path] Recording stopped: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to stop path recording:', err);
   }
@@ -4396,9 +4474,8 @@ async function stopPathRecording() {
 
 async function startBacktrackHome() {
   try {
-    const res = await fetch('/api/path/backtrack/start', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Backtracking started: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/backtrack/start', { method: 'POST' });
+    logSystem(`[Path] Backtracking started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start backtrack:', err);
   }
@@ -4406,9 +4483,8 @@ async function startBacktrackHome() {
 
 async function abortBacktrackHome() {
   try {
-    const res = await fetch('/api/path/backtrack/stop', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Backtracking aborted: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/backtrack/stop', { method: 'POST' });
+    logSystem(`[Path] Backtracking aborted: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to abort backtrack:', err);
   }
@@ -4428,13 +4504,12 @@ function logBacktrackTrial() {
 // ── Breakaway Calibration & Safety Control ──
 async function triggerCalibrateStart() {
   try {
-    const res = await fetch('/api/calibration/simulate/start', {
+    const result = await authenticatedFetch('/api/calibration/simulate/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ safetyAck: true })
     });
-    const data = await res.json();
-    logSystem(`[Calibration Simulation] Started: ${JSON.stringify(data)}`);
+    logSystem(`[Calibration Simulation] Started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start calibration simulation:', err);
   }
@@ -4442,9 +4517,8 @@ async function triggerCalibrateStart() {
 
 async function triggerCalibrateCancel() {
   try {
-    const res = await fetch('/api/calibration/abort', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Calibration] Aborted: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/calibration/abort', { method: 'POST' });
+    logSystem(`[Calibration] Aborted: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to abort calibration:', err);
   }
@@ -4452,13 +4526,12 @@ async function triggerCalibrateCancel() {
 
 async function triggerRealCalibrateStart() {
   try {
-    const res = await fetch('/api/calibration/real/start', {
+    const result = await authenticatedFetch('/api/calibration/real/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ safetyAck: true })
     });
-    const data = await res.json();
-    logSystem(`[Real Calibration] Started: ${JSON.stringify(data)}`);
+    logSystem(`[Real Calibration] Started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start real calibration:', err);
   }
@@ -4478,7 +4551,7 @@ async function runSingleMotorTest(motorIndex, direction) {
 
   try {
     logSystem(`[Maintenance Test] Starting single motor test: m${motorIndex + 1} ${direction}...`);
-    const res = await fetch('/api/maintenance/run_test', {
+    const result = await authenticatedFetch('/api/maintenance/run_test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4489,11 +4562,11 @@ async function runSingleMotorTest(motorIndex, direction) {
         durationSec: 2.0
       })
     });
-    const data = await res.json();
-    if (data.ok && data.test_result) {
+    const data = result.json || {};
+    if (result.ok && data.ok && data.test_result) {
       updateMaintenanceHUD(data.test_result);
       logSystem(`[Maintenance Test] Test complete for ${data.test_result.motor_label}: Delta=${data.test_result.encoder_delta} ticks, Steady=${data.test_result.encoder_steady}, Isolation=${data.test_result.isolation_verified}`);
-    } else {
+    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
       showTestErrorBanner(`Maintenance test failed: ${data.error || 'Unknown error'}`);
       logSystem(`[Maintenance Test ERROR] ${data.error || 'Unknown error'}`);
     }
@@ -4507,9 +4580,8 @@ async function runSingleMotorTest(motorIndex, direction) {
 
 async function stopAllMaintenance() {
   try {
-    const res = await fetch('/api/maintenance/exit', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Maintenance Test] STOP ALL triggered: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/maintenance/exit', { method: 'POST' });
+    logSystem(`[Maintenance Test] STOP ALL triggered: ${JSON.stringify(result.json || {})}`);
     showTestErrorBanner('🛑 EMERGENCY STOP ACTIVATED — All outputs locked.');
   } catch (err) {
     console.error('Failed to stop all maintenance:', err);
@@ -5749,22 +5821,35 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inputToken) {
     const existingToken = sessionStorage.getItem('rover_operator_token');
     if (existingToken) {
-      inputToken.value = '';
-      inputToken.placeholder = 'Token Set (Active)';
+      inputToken.value = existingToken;
+      inputToken.placeholder = 'Operator Token (Active)';
     }
+    inputToken.addEventListener('input', () => {
+      const val = inputToken.value.trim();
+      if (val) {
+        sessionStorage.setItem('rover_operator_token', val);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'auth', token: val }));
+        }
+      } else {
+        sessionStorage.removeItem('rover_operator_token');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'deauth' }));
+        }
+      }
+    });
   }
 
   if (btnSaveToken) {
     btnSaveToken.addEventListener('click', () => {
-      if (inputToken) {
-        const val = inputToken.value.trim();
-        if (val) {
-          sessionStorage.setItem('rover_operator_token', val);
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'auth', token: val }));
-          }
-          logSystem('Operator token stored in sessionStorage.');
+      const val = getOrSyncOperatorToken();
+      if (val) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'auth', token: val }));
         }
+        logSystem('Operator token stored in sessionStorage.');
+      } else {
+        showAuthErrorMessage('Enter an operator token first.');
       }
     });
   }
@@ -5772,7 +5857,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClearToken) {
     btnClearToken.addEventListener('click', () => {
       sessionStorage.removeItem('rover_operator_token');
-      if (inputToken) inputToken.value = '';
+      if (inputToken) {
+        inputToken.value = '';
+        inputToken.placeholder = 'Operator Token';
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'deauth' }));
       }
@@ -5793,29 +5881,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearResult = document.getElementById('btn-clear-calib-result');
   if (btnClearResult) {
     btnClearResult.addEventListener('click', () => {
-      fetch('/api/calibration/auto/clear_result', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.ok && data.status) updateAutoCalibUI(data.status);
+      authenticatedFetch('/api/calibration/auto/clear_result', { method: 'POST' })
+        .then(result => {
+          if (result.ok && result.json && result.json.ok && result.json.status) {
+            updateAutoCalibUI(result.json.status);
+          }
         });
     });
   }
 
   const btnAutonomy = document.getElementById('btn-enable-autonomy');
-  function getOperatorAuthHeaders() {
-    const token = sessionStorage.getItem('rover_operator_token');
-    return token ? { 'X-Rover-Operator-Token': token } : {};
-  }
-
   if (btnAutonomy) {
     btnAutonomy.addEventListener('click', () => {
       const isCurrentlyEnabled = btnAutonomy.textContent.includes('Disable');
       const endpoint = isCurrentlyEnabled ? '/api/autonomy/disable' : '/api/autonomy/enable';
-      fetch(endpoint, { method: 'POST', headers: getOperatorAuthHeaders() })
-        .then(res => res.json())
-        .then(data => {
-          if (data.ok && data.status) {
-            updateAutonomyState(data.status);
+      authenticatedFetch(endpoint, { method: 'POST' })
+        .then(result => {
+          if (result.ok && result.json && result.json.ok && result.json.status) {
+            updateAutonomyState(result.json.status);
           }
         })
         .catch(err => console.error('Autonomy toggle failed:', err));

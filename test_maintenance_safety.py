@@ -213,6 +213,34 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("COMMAND COMPLETED", script_code)
         self.assertIn("MOVEMENT DETECTED", script_code)
 
+    def test_cockpit_frontend_operator_auth_handling(self):
+        """Verify frontend app.js implements authenticatedFetch, getOrSyncOperatorToken, 401 alert handling, and preserves token on refresh."""
+        app_js_path = os.path.join(os.path.dirname(__file__), 'public', 'app.js')
+        with open(app_js_path, 'r', encoding='utf-8') as f:
+            app_code = f.read()
+
+        # 1. Centralized helper and token sync
+        self.assertIn("function getOrSyncOperatorToken()", app_code)
+        self.assertIn("function getOperatorAuthHeaders()", app_code)
+        self.assertIn("async function authenticatedFetch(url, options", app_code)
+        self.assertIn("'X-Rover-Operator-Token': token", app_code)
+
+        # 2. Visible 401/403 authorization error handling
+        self.assertIn("function showAuthErrorMessage(msg)", app_code)
+        self.assertIn("Operator token missing or invalid. Enter the token and try again.", app_code)
+
+        # 3. Request debouncing lock
+        self.assertIn("const activeProtectedRequests = new Map();", app_code)
+
+        # 4. Token preservation on page refresh
+        self.assertIn("inputToken.value = existingToken;", app_code)
+
+        # 5. Protected endpoints use authenticatedFetch
+        self.assertIn("authenticatedFetch('/api/drive/arm'", app_code)
+        self.assertIn("authenticatedFetch('/api/drive/disarm'", app_code)
+        self.assertIn("authenticatedFetch(endpoint, { method: 'POST' })", app_code)
+        self.assertIn("authenticatedFetch('/api/maintenance/run_test'", app_code)
+
 
 if __name__ == '__main__':
     unittest.main()
