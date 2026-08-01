@@ -8,10 +8,11 @@ slam_toolbox:
   ros__parameters:
 
     # Plugin params
-    solver_plugin: solver_plugins::CspaSolver
+    solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI
     ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
 
     # Frame definitions

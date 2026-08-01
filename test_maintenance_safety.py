@@ -288,6 +288,8 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn('odom_frame: odom', slam_code)
         self.assertIn('base_frame: base_link', slam_code)
         self.assertIn('scan_topic: /scan', slam_code)
+        self.assertIn('solver_plugin: solver_plugins::CeresSolver', slam_code)
+        self.assertNotIn('solver_plugins::CspaSolver', slam_code)
 
         # 2. Nav2 config
         nav2_cfg_path = os.path.join(bringup_dir, 'config', 'nav2_params.yaml')
