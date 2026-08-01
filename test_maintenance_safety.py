@@ -347,9 +347,10 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("executable='lifecycle_manager'", launch_code)
         self.assertIn("'node_names': ['slam_toolbox']", launch_code)
 
-        # 2. Autostart default true
+        # 2. Autostart default true and bond_timeout 0.0
         self.assertIn("default_value='true'", launch_code)
         self.assertIn("'autostart'", launch_code)
+        self.assertIn("'bond_timeout': 0.0", launch_code)
 
         # 3. No movement-producing Nav2 nodes or cmd_vel publishers
         self.assertNotIn("controller_server", launch_code)
