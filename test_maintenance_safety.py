@@ -190,6 +190,29 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("catch (err)", script_code)
         self.assertIn("Final Verification PASSED", script_code)
 
+    def test_estop_latch_preflight_and_cleanup_separation(self):
+        """Verify script detects mode===3 latched E-stop, resets via /api/faults/clear, samples before/after /api/encoders, and separates routine from emergency cleanup."""
+        script_path = os.path.join(os.path.dirname(__file__), 'scratch', 'run_m3_m4_swap_isolation.js')
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Verify latched E-stop detection (mode === 3) and safe clearing via /api/faults/clear
+        self.assertIn("driveStatus.mode === 3", script_code)
+        self.assertIn("/api/faults/clear", script_code)
+        self.assertIn("ESP32 Emergency Stop latch successfully cleared", script_code)
+
+        # 2. Verify separation of routine vs emergency cleanup (routine cleanup DOES NOT call /api/stop)
+        self.assertIn("performCleanup(isEmergency = false)", script_code)
+        self.assertIn("if (isEmergency)", script_code)
+        self.assertIn("performCleanup(testErrorEncountered)", script_code)
+
+        # 3. Verify before-and-after /api/encoders sampling and direct delta calculation
+        self.assertIn("preEncRes = await httpRequest", script_code)
+        self.assertIn("postEncRes = await httpRequest", script_code)
+        self.assertIn("const signedDelta = endCount - startCount;", script_code)
+        self.assertIn("COMMAND COMPLETED", script_code)
+        self.assertIn("MOVEMENT DETECTED", script_code)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,17 +45,22 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function performCleanup() {
-  console.log("\n[Safety Cleanup] Initiating resilient post-test safety cleanup...");
+// Resilient cleanup function
+// isEmergency: if true (triggered by error, SIGINT, SIGTERM, or timeout), calls /api/stop.
+// If false (routine successful completion), DOES NOT call /api/stop to avoid latching E-Stop.
+async function performCleanup(isEmergency = false) {
+  console.log(`\n[Safety Cleanup] Initiating resilient safety cleanup (isEmergency=${isEmergency})...`);
   const headers = { 'Content-Type': 'application/json' };
   if (OPERATOR_TOKEN) headers['X-Rover-Operator-Token'] = OPERATOR_TOKEN;
 
-  // 1. Force stop all motors
-  try {
-    await httpRequest({ hostname: HOST, port: PORT, path: '/api/stop', method: 'GET' });
-    console.log("  ✓ Force stop requested (/api/stop)");
-  } catch (err) {
-    console.error("  x Force stop failed:", err.message);
+  // 1. Force emergency stop ONLY on emergency/error triggers
+  if (isEmergency) {
+    try {
+      await httpRequest({ hostname: HOST, port: PORT, path: '/api/stop', method: 'GET' });
+      console.log("  ✓ Emergency stop requested (/api/stop)");
+    } catch (err) {
+      console.error("  x Emergency stop call failed:", err.message);
+    }
   }
 
   // 2. Exit maintenance mode
@@ -95,6 +100,7 @@ async function performCleanup() {
     const autoStatus = (autoRes.json) ? autoRes.json : {};
 
     const armed = driveStatus.armed === true;
+    const mode = driveStatus.mode !== undefined ? driveStatus.mode : 0;
     const autonomyState = autoStatus.state || 'DISABLED';
     const maintActive = maintStatus.active === true;
     const testPwm = maintStatus.testPwm || 0;
@@ -105,7 +111,9 @@ async function performCleanup() {
     const limAng = driveStatus.limAngular || 0;
     const cmdSource = driveStatus.cmdSource || 'NONE';
 
+    const modeOk = isEmergency ? true : (mode !== 3);
     const checksPassed = !armed && 
+                         modeOk &&
                          (autonomyState === 'DISABLED' || autonomyState === 'OFF') && 
                          !maintActive && 
                          testPwm === 0 && 
@@ -120,7 +128,7 @@ async function performCleanup() {
       console.log("  ✓ Final Verification PASSED: Rover disarmed, autonomy disabled, maintenance inactive, motion zeroed.");
     } else {
       console.error("  x Final Verification WARNING: Unexpected safety state:", {
-        armed, autonomyState, maintActive, testPwm, actualPwm, reqLin, reqAng, limLin, limAng, cmdSource
+        armed, mode, autonomyState, maintActive, testPwm, actualPwm, reqLin, reqAng, limLin, limAng, cmdSource
       });
     }
   } catch (err) {
@@ -128,16 +136,16 @@ async function performCleanup() {
   }
 }
 
-// Intercept Ctrl+C (SIGINT) and SIGTERM for graceful emergency stop
+// Intercept Ctrl+C (SIGINT) and SIGTERM for emergency cleanup
 process.on('SIGINT', async () => {
   console.error("\n[ABORT TRIGGERED] Interrupt signal received (SIGINT). Emergency stopping!");
-  await performCleanup();
+  await performCleanup(true);
   process.exit(1);
 });
 
 process.on('SIGTERM', async () => {
   console.error("\n[ABORT TRIGGERED] Termination signal received (SIGTERM). Emergency stopping!");
-  await performCleanup();
+  await performCleanup(true);
   process.exit(1);
 });
 
@@ -153,7 +161,7 @@ async function runM3M4SwapIsolationTest() {
   console.log("----------------------------------------------------------\n");
 
   // --------------------------------------------------------------------------
-  // Pre-test Verification Interlocks
+  // Pre-test Verification Interlocks & Emergency Stop Latch Handling
   // --------------------------------------------------------------------------
   console.log("[Pre-test Guard] Verifying initial rover state...");
   const driveStatusRes = await httpRequest({
@@ -163,6 +171,7 @@ async function runM3M4SwapIsolationTest() {
     throw new Error(`Failed to fetch drive status (HTTP ${driveStatusRes.statusCode})`);
   }
   const driveStatus = driveStatusRes.json.status || {};
+
   if (driveStatus.armed) {
     throw new Error("Pre-test check failed: Rover is currently ARMED. Disarm rover before running test.");
   }
@@ -170,20 +179,51 @@ async function runM3M4SwapIsolationTest() {
     throw new Error("Pre-test check failed: Non-zero requested motion target active.");
   }
 
-  const encodersRes = await httpRequest({
+  const encodersResPre = await httpRequest({
     hostname: HOST, port: PORT, path: '/api/encoders', method: 'GET'
   });
-  if (encodersRes.statusCode !== 200 || !encodersRes.json || !encodersRes.json.ok) {
-    throw new Error(`Failed to fetch encoder telemetry (HTTP ${encodersRes.statusCode})`);
+  if (encodersResPre.statusCode !== 200 || !encodersResPre.json || !encodersResPre.json.ok) {
+    throw new Error(`Failed to fetch encoder telemetry (HTTP ${encodersResPre.statusCode})`);
   }
-  if (!encodersRes.json.serialConnected) {
+  if (!encodersResPre.json.serialConnected) {
     throw new Error("Pre-test check failed: ESP32 serial port is not connected.");
   }
-  if (encodersRes.json.lastPacketAgeMs === null || encodersRes.json.lastPacketAgeMs > 1000) {
-    throw new Error(`Pre-test check failed: Telemetry stale (${encodersRes.json.lastPacketAgeMs}ms age).`);
+  if (encodersResPre.json.lastPacketAgeMs === null || encodersResPre.json.lastPacketAgeMs > 1000) {
+    throw new Error(`Pre-test check failed: Telemetry stale (${encodersResPre.json.lastPacketAgeMs}ms age).`);
   }
 
-  console.log("✓ Pre-test Guard Passed: Disarmed, autonomy idle, serial connected, telemetry fresh.\n");
+  // Detect Latched Emergency Stop (mode === 3)
+  if (driveStatus.mode === 3) {
+    console.log("⚠️ Latched Emergency Stop detected on ESP32 (mode=3). Attempting safe reset...");
+    const autoRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/autonomy/status', method: 'GET' });
+    const maintRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/maintenance/status', method: 'GET' });
+    const autoStatus = autoRes.json || {};
+    const maintStatus = (maintRes.json && maintRes.json.status) ? maintRes.json.status : {};
+
+    if (autoStatus.state !== 'DISABLED' && autoStatus.state !== 'OFF') {
+      throw new Error("Cannot clear E-Stop: Autonomy is not disabled.");
+    }
+    if (maintStatus.active) {
+      throw new Error("Cannot clear E-Stop: Maintenance is currently active.");
+    }
+
+    console.log("Sending GET /api/faults/clear to reset ESP32 emergency stop latch...");
+    const clearRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/faults/clear', method: 'GET' });
+    if (clearRes.statusCode !== 200 || !clearRes.json || !clearRes.json.ok) {
+      throw new Error(`Failed to clear E-Stop via /api/faults/clear: ${clearRes.data}`);
+    }
+
+    await delay(300);
+
+    const recheckRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/drive/status', method: 'GET' });
+    const recheckStatus = (recheckRes.json && recheckRes.json.status) ? recheckRes.json.status : {};
+    if (recheckStatus.mode === 3) {
+      throw new Error("Pre-test check failed: Could not clear latched Emergency Stop (mode remains 3).");
+    }
+    console.log("✓ ESP32 Emergency Stop latch successfully cleared (mode is now 0/LOCKED).");
+  }
+
+  console.log("✓ Pre-test Guard Passed: Disarmed, autonomy idle, serial connected, telemetry fresh, E-Stop clear.\n");
 
   const testConfig = [
     {
@@ -209,6 +249,7 @@ async function runM3M4SwapIsolationTest() {
   ];
 
   const testResults = [];
+  let testErrorEncountered = false;
 
   try {
     for (let idx = 0; idx < testConfig.length; idx++) {
@@ -220,6 +261,18 @@ async function runM3M4SwapIsolationTest() {
 
       console.log(`Executing ${tc.testLabel}: Driver ${tc.driverChannel} (Index ${tc.motorIndex}) -> Physical ${tc.physicalMotor} | FWD 60 PWM ...`);
 
+      // 1. Fetch fresh pre-pulse encoder snapshot directly from /api/encoders
+      const preEncRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/encoders', method: 'GET' });
+      if (preEncRes.statusCode !== 200 || !preEncRes.json || !preEncRes.json.ok) {
+        throw new Error(`${tc.testLabel} pre-pulse encoder snapshot failed (HTTP ${preEncRes.statusCode})`);
+      }
+      if (preEncRes.json.lastPacketAgeMs === null || preEncRes.json.lastPacketAgeMs > 1000) {
+        throw new Error(`${tc.testLabel} pre-pulse telemetry stale (${preEncRes.json.lastPacketAgeMs}ms age)`);
+      }
+      const preEncoders = preEncRes.json.encoders || {};
+      const preAge = preEncRes.json.lastPacketAgeMs;
+
+      // 2. Execute maintenance test pulse (500 ms max)
       const payload = {
         safetyAck: true,
         motorIndex: tc.motorIndex,
@@ -238,55 +291,53 @@ async function runM3M4SwapIsolationTest() {
 
       if (res.statusCode !== 200 || !res.json || !res.json.ok) {
         const errorMsg = res.json ? (res.json.error || 'Failed') : `HTTP ${res.statusCode}`;
-        console.error(`  -> ${tc.testLabel} REJECTED/FAILED:`, errorMsg);
+        console.error(`  -> ${tc.testLabel} COMMAND FAILED:`, errorMsg);
         testResults.push({
           ...tc,
+          commandResult: 'COMMAND FAILED',
           reportedPwm: 0,
-          startCount: 0,
-          endCount: 0,
-          encoderDelta: 0,
-          movementDetected: false,
-          telemetryAge: 'N/A',
+          startCount: preEncoders[tc.encoderChannel] || 0,
+          endCount: preEncoders[tc.encoderChannel] || 0,
+          signedDelta: 0,
+          absDelta: 0,
+          movementStatus: 'NO MOVEMENT DETECTED',
+          telemetryAge: `${preAge}ms`,
           stopReason: `FAILED: ${errorMsg}`
         });
-        throw new Error(`${tc.testLabel} failed: ${errorMsg}`);
+        throw new Error(`${tc.testLabel} command execution failed: ${errorMsg}`);
       }
 
-      const tr = res.json.test_result || {};
-      let evalStart = 0;
-      let evalEnd = 0;
-      let evalDelta = 0;
-
-      if (tc.encoderChannel === 'm3') {
-        if (tr.selected_motor === 'm3') {
-          evalStart = tr.starting_encoder_count || 0;
-          evalEnd = tr.ending_encoder_count || 0;
-          evalDelta = tr.encoder_delta || 0;
-        } else {
-          evalDelta = tr.unselected_motor_deltas ? (tr.unselected_motor_deltas.m3 || 0) : 0;
-        }
-      } else if (tc.encoderChannel === 'm4') {
-        if (tr.selected_motor === 'm4') {
-          evalStart = tr.starting_encoder_count || 0;
-          evalEnd = tr.ending_encoder_count || 0;
-          evalDelta = tr.encoder_delta || 0;
-        } else {
-          evalDelta = tr.unselected_motor_deltas ? (tr.unselected_motor_deltas.m4 || 0) : 0;
-        }
+      // 3. Fetch fresh post-pulse encoder snapshot directly from /api/encoders
+      await delay(100);
+      const postEncRes = await httpRequest({ hostname: HOST, port: PORT, path: '/api/encoders', method: 'GET' });
+      if (postEncRes.statusCode !== 200 || !postEncRes.json || !postEncRes.json.ok) {
+        throw new Error(`${tc.testLabel} post-pulse encoder snapshot failed (HTTP ${postEncRes.statusCode})`);
       }
+      if (postEncRes.json.lastPacketAgeMs === null || postEncRes.json.lastPacketAgeMs > 1000) {
+        throw new Error(`${tc.testLabel} post-pulse telemetry stale (${postEncRes.json.lastPacketAgeMs}ms age)`);
+      }
+      const postEncoders = postEncRes.json.encoders || {};
+      const postAge = postEncRes.json.lastPacketAgeMs;
 
-      const movementDetected = Math.abs(evalDelta) >= 5;
+      // 4. Calculate crossed encoder delta directly from before and after samples
+      const startCount = preEncoders[tc.encoderChannel] !== undefined ? preEncoders[tc.encoderChannel] : 0;
+      const endCount = postEncoders[tc.encoderChannel] !== undefined ? postEncoders[tc.encoderChannel] : 0;
+      const signedDelta = endCount - startCount;
+      const absDelta = Math.abs(signedDelta);
+      const movementStatus = absDelta >= 5 ? 'MOVEMENT DETECTED' : 'NO MOVEMENT DETECTED';
 
-      console.log(`  -> ${tc.testLabel} SUCCESS: evaluated encoder ${tc.encoderChannel.toUpperCase()} delta = ${evalDelta} (movementDetected = ${movementDetected})`);
+      console.log(`  -> ${tc.testLabel} COMMAND COMPLETED: evaluated encoder ${tc.encoderChannel.toUpperCase()} (${startCount} -> ${endCount}, delta=${signedDelta}) | ${movementStatus}`);
 
       testResults.push({
         ...tc,
-        reportedPwm: tr.commanded_pwm || tc.requestedPwm,
-        startCount: evalStart,
-        endCount: evalEnd,
-        encoderDelta: evalDelta,
-        movementDetected,
-        telemetryAge: `${tr.elapsed_test_time_sec || 0.5}s`,
+        commandResult: 'COMMAND COMPLETED',
+        reportedPwm: tc.requestedPwm,
+        startCount,
+        endCount,
+        signedDelta,
+        absDelta,
+        movementStatus,
+        telemetryAge: `pre:${preAge}ms/post:${postAge}ms`,
         stopReason: 'Completed (500ms pulse)'
       });
     }
@@ -295,10 +346,10 @@ async function runM3M4SwapIsolationTest() {
     console.log("CABLE-SWAP ISOLATION TEST RESULTS SUMMARY");
     console.log("==========================================================\n");
 
-    console.log("| Test | Driver Channel | Motor Index | Physical Motor | Evaluated Encoder | Req PWM | Actual PWM | Enc Delta | Movement Detected | Stop Reason |");
-    console.log("|---|---|---|---|---|---|---|---|---|---|");
+    console.log("| Test | Driver Channel | Motor Index | Physical Motor | Evaluated Encoder | Req PWM | Start Ticks | End Ticks | Signed Delta | Physical Result | Stop Reason |");
+    console.log("|---|---|---|---|---|---|---|---|---|---|---|");
     for (const r of testResults) {
-      console.log(`| ${r.testLabel} | ${r.driverChannel} | ${r.motorIndex} | ${r.physicalMotor} | ${r.encoderChannel.toUpperCase()} | ${r.requestedPwm} | ${r.reportedPwm} | ${r.encoderDelta} | ${r.movementDetected ? 'TRUE' : 'FALSE'} | ${r.stopReason} |`);
+      console.log(`| ${r.testLabel} | ${r.driverChannel} | ${r.motorIndex} | ${r.physicalMotor} | ${r.encoderChannel.toUpperCase()} | ${r.requestedPwm} | ${r.startCount} | ${r.endCount} | ${r.signedDelta} | ${r.movementStatus} | ${r.stopReason} |`);
     }
 
     console.log("\nDiagnostic Interpretation:");
@@ -306,26 +357,29 @@ async function runM3M4SwapIsolationTest() {
     const testB = testResults.find(r => r.testLabel === 'Test B');
 
     if (testA && testB) {
-      if (!testA.movementDetected && testB.movementDetected) {
+      if (testA.movementStatus === 'NO MOVEMENT DETECTED' && testB.movementStatus === 'MOVEMENT DETECTED') {
         console.log("  -> RESULT: Physical Left Rear motor (driven by M4) STILL FAILED in Forward.");
         console.log("             The forward failure FOLLOWED DRIVER CHANNEL M4.");
         console.log("             SUSPECT: Driver Channel M4 hardware (failed high-side MOSFET on GPIO 14 / IN1 leg) or board trace defect.");
-      } else if (testA.movementDetected && !testB.movementDetected) {
+      } else if (testA.movementStatus === 'MOVEMENT DETECTED' && testB.movementStatus === 'NO MOVEMENT DETECTED') {
         console.log("  -> RESULT: Physical Right Rear motor (driven by M3) NOW FAILED in Forward.");
         console.log("             The forward failure FOLLOWED THE PHYSICAL MOTOR (Right Rear).");
         console.log("             SUSPECT: Physical motor, internal motor brushes, gearbox drag, or motor wiring harness.");
       } else {
-        console.log(`  -> RESULT: Test A movement=${testA.movementDetected}, Test B movement=${testB.movementDetected}. See table details.`);
+        console.log(`  -> RESULT: Test A=${testA.movementStatus}, Test B=${testB.movementStatus}. See summary table.`);
       }
     }
 
+  } catch (err) {
+    testErrorEncountered = true;
+    throw err;
   } finally {
-    await performCleanup();
+    await performCleanup(testErrorEncountered);
   }
 }
 
 runM3M4SwapIsolationTest().catch(async (err) => {
   console.error("\n[ISOLATION TEST ERROR]", err.message);
-  await performCleanup();
+  await performCleanup(true);
   process.exit(1);
 });
