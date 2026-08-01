@@ -276,6 +276,34 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
             self.assertIn('preferences.getFloat("wheel_sep", 0.197f);', esp_code)
             self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 0.500f', esp_code)
 
+    def test_nav2_and_slam_readiness_configurations(self):
+        """Verify presence and valid parameters for SLAM Toolbox, Nav2, and launch files."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+
+        # 1. SLAM Toolbox config
+        slam_cfg_path = os.path.join(bringup_dir, 'config', 'mapper_params_online_async.yaml')
+        self.assertTrue(os.path.exists(slam_cfg_path), f"SLAM config {slam_cfg_path} must exist.")
+        with open(slam_cfg_path, 'r', encoding='utf-8') as f:
+            slam_code = f.read()
+        self.assertIn('odom_frame: odom', slam_code)
+        self.assertIn('base_frame: base_link', slam_code)
+        self.assertIn('scan_topic: /scan', slam_code)
+
+        # 2. Nav2 config
+        nav2_cfg_path = os.path.join(bringup_dir, 'config', 'nav2_params.yaml')
+        self.assertTrue(os.path.exists(nav2_cfg_path), f"Nav2 config {nav2_cfg_path} must exist.")
+        with open(nav2_cfg_path, 'r', encoding='utf-8') as f:
+            nav2_code = f.read()
+        self.assertIn('base_frame_id: "base_link"', nav2_code)
+        self.assertIn('odom_frame_id: "odom"', nav2_code)
+        self.assertIn('dwb_core::DWBLocalPlanner', nav2_code)
+
+        # 3. Launch files
+        slam_launch_path = os.path.join(bringup_dir, 'launch', 'slam.launch.py')
+        nav_launch_path = os.path.join(bringup_dir, 'launch', 'navigation.launch.py')
+        self.assertTrue(os.path.exists(slam_launch_path), "slam.launch.py must exist.")
+        self.assertTrue(os.path.exists(nav_launch_path), "navigation.launch.py must exist.")
+
 
 if __name__ == '__main__':
     unittest.main()
