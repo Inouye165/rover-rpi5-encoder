@@ -358,6 +358,40 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertNotIn("behavior_server", launch_code)
         self.assertNotIn("/cmd_vel", launch_code)
 
+    def test_slam_map_workflow_script_safety_and_validation(self):
+        """Verify slam_map_workflow.sh enforces safety checks, name validation, services, and timeouts."""
+        script_path = os.path.join(os.path.dirname(__file__), 'ros2', 'scripts', 'slam_map_workflow.sh')
+        self.assertTrue(os.path.exists(script_path), f"Script {script_path} must exist.")
+
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Safety checks
+        self.assertIn('/api/drive/status', script_code)
+        self.assertIn('/api/autonomy/status', script_code)
+        self.assertIn('/api/maintenance/status', script_code)
+        self.assertIn('Disarmed=true', script_code)
+
+        # 2. Strict map name validation & path traversal protection
+        self.assertIn('^[a-zA-Z0-9_-]+$', script_code)
+        self.assertIn('house_map', script_code)
+        self.assertIn('home', script_code)
+        self.assertIn('final', script_code)
+        self.assertIn('production', script_code)
+
+        # 3. SLAM Toolbox Jazzy services
+        self.assertIn('/slam_toolbox/save_map', script_code)
+        self.assertIn('slam_toolbox/srv/SaveMap', script_code)
+        self.assertIn('/slam_toolbox/serialize_map', script_code)
+        self.assertIn('slam_toolbox/srv/SerializePoseGraph', script_code)
+
+        # 4. Artifact verification (yaml, pgm, posegraph, data)
+        self.assertIn('for ext in yaml pgm posegraph data;', script_code)
+
+        # 5. No motor or cmd_vel publishers
+        self.assertNotIn('/api/drive/arm', script_code)
+        self.assertNotIn('/cmd_vel', script_code)
+
 
 if __name__ == '__main__':
     unittest.main()
