@@ -180,7 +180,8 @@ let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
 let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
-let TRACK_WIDTH = 0.382;  // mutable track width (synchronized with ESP32 NVS)
+let TRACK_WIDTH = 0.197;   // Geometric baseline: 7.75 inches = 0.19685 m
+let trackWidthSource = 'GEOMETRIC_BASELINE';
 
 // Limits configuration and active command source
 let floorTesting = false; // default to safe floor testing limits on startup
@@ -379,10 +380,18 @@ function loadCalibrationDb() {
         if (calibrationDb.currentConfig.wheelDiameter) {
           WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
         }
-        if (calibrationDb.currentConfig.effectiveTrackWidth) {
-          TRACK_WIDTH = calibrationDb.currentConfig.effectiveTrackWidth;
+        const rawTrack = calibrationDb.currentConfig.effectiveTrackWidth;
+        if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 0.500 && Math.abs(rawTrack - 0.170) >= 0.005 && Math.abs(rawTrack - 0.382) >= 0.005) {
+          TRACK_WIDTH = rawTrack;
+          trackWidthSource = 'CALIBRATION_DB';
+        } else {
+          console.log(`[Config DB Migration] Migrated uncalibrated/out-of-range track width (${rawTrack}m) to physical geometric baseline 0.197m`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.197;
+          TRACK_WIDTH = 0.197;
+          trackWidthSource = 'GEOMETRIC_BASELINE';
+          saveCalibrationDb();
         }
-        console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m`);
+        console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m (source=${trackWidthSource})`);
       }
       if (calibrationDb.floorTesting !== undefined) {
         floorTesting = calibrationDb.floorTesting;
@@ -406,7 +415,7 @@ function loadCalibrationDb() {
     console.error('[Config DB] Failed to load calibration database, using defaults:', err.message);
     if (!calibrationDb || typeof calibrationDb !== 'object') {
       calibrationDb = {
-        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.170 },
+        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.197 },
         proposedConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         previousConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         fwdTrim: { left: 1.0, right: 1.0 },
@@ -3360,6 +3369,39 @@ internalCmdApp.use((req, res, next) => {
   next();
 });
 
+function computeCmdVelDiagnostics(rawLin, rawAng, limLin, limAng) {
+  const sep = 0.197; // Physical wheel separation in meters (7.75 inches)
+  const rad = 0.0325; // Physical wheel radius in meters
+  const leftVelMps = limLin - (limAng * sep / 2.0);
+  const rightVelMps = limLin + (limAng * sep / 2.0);
+  const leftTargetRadps = leftVelMps / rad;
+  const rightTargetRadps = rightVelMps / rad;
+
+  const vx = Math.round(limLin * 1000);
+  const vy = 0;
+  const vz = Math.round(limAng * 1000);
+
+  const payload = [
+    vx & 0xFF, (vx >> 8) & 0xFF,
+    vy & 0xFF, (vy >> 8) & 0xFF,
+    vz & 0xFF, (vz >> 8) & 0xFF
+  ];
+  const hexPayload = payload.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join(' ');
+
+  return {
+    raw: { linear: rawLin, angular: rawAng },
+    limited: { linear: limLin, angular: limAng },
+    wheelTargetsRadps: { left: leftTargetRadps, right: rightTargetRadps },
+    channels: {
+      m1_left_front: leftTargetRadps,
+      m2_right_front: rightTargetRadps,
+      m3_left_rear: leftTargetRadps,
+      m4_right_rear: rightTargetRadps
+    },
+    packet: { vx, vy, vz, hexPayload }
+  };
+}
+
 internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const now = Date.now();
   autonomyState.lastBridgeHeartbeat = now;
@@ -3497,6 +3539,9 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   targetAngular = clampedAng;
   startDriveKeepaliveLoop();
 
+  const diag = computeCmdVelDiagnostics(rawLin, rawAng, clampedLin, clampedAng);
+  console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
+
   res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
 });
 
@@ -3527,6 +3572,8 @@ app.get('/api/drive/status', (req, res) => {
     ok: true,
     status: statusObj,
     cmdSource: cmdSource,
+    trackWidthM: TRACK_WIDTH,
+    trackWidthSource: trackWidthSource,
     floorTesting,
     backtracking,
     recording,
@@ -4087,7 +4134,7 @@ function updatePathController() {
   }
   
   // Estimate motor power output (PWM magnitude percentage)
-  const L_width = 0.382; // track width (m)
+  const L_width = TRACK_WIDTH; // track width (m)
   const r_wheel = 0.0325; // wheel radius (m)
   const kV_approx = 45.0; // kV parameter approx
   const fwd_breakaway_approx = 45.0; // breakaway PWM approx
@@ -4651,5 +4698,6 @@ module.exports = {
   internalCmdServer,
   autonomyState,
   getAutonomyStatusObject,
-  resetAutonomyToSafe
+  resetAutonomyToSafe,
+  computeCmdVelDiagnostics
 };

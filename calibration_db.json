@@ -1,0 +1,23 @@
+{
+  "currentConfig": {
+    "wheelDiameter": 0.065,
+    "effectiveTrackWidth": 0.197
+  },
+  "proposedConfig": {
+    "wheelDiameter": null,
+    "effectiveTrackWidth": null
+  },
+  "previousConfig": {
+    "wheelDiameter": null,
+    "effectiveTrackWidth": null
+  },
+  "fwdTrim": {
+    "left": 1.0,
+    "right": 1.0
+  },
+  "revTrim": {
+    "left": 1.0,
+    "right": 1.0
+  },
+  "testLogs": []
+}

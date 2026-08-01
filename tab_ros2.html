@@ -1,0 +1,95 @@
+    <div id="tab-ros2" class="tab-content">
+      <main class="dashboard-grid">
+        <section class="panel glass" style="grid-column: span 12;">
+          <div class="panel-header" style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+            <h2>🤖 ROS 2 Stack & Physical Odometry Calibration Monitor</h2>
+            <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #a7f3d0; border: 1px solid rgba(16, 185, 129, 0.4); font-weight: bold; padding: 6px 12px; border-radius: 20px; font-size: 12px;">Read-Only Monitoring</span>
+          </div>
+
+          <div style="display: flex; gap: 20px; flex-wrap: wrap; padding: 0 20px 20px 20px;">
+            <!-- Column 1: Container & Node Status -->
+            <div style="flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">🐳 Container & ROS 2 Nodes Status</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
+                  <div>Docker Container:</div><div id="ros2-status-container" style="font-weight: bold; color: #10b981;">rover-ros2:jazzy (Running)</div>
+                  <div>/rover_system_health:</div><div id="ros2-node-health" style="font-weight: bold; color: #10b981;">Running</div>
+                  <div>/rover_lidar_bridge:</div><div id="ros2-node-lidar" style="font-weight: bold; color: #10b981;">Running</div>
+                  <div>/rover_encoder_odometry:</div><div id="ros2-node-odom" style="font-weight: bold; color: #10b981;">Running</div>
+                  <div>/foxglove_bridge:</div><div id="ros2-node-foxglove" style="font-weight: bold; color: #10b981;">Running</div>
+                  <div>Foxglove Port 8765:</div><div id="ros2-port-foxglove" style="font-weight: bold; color: #10b981;">Listening</div>
+                </div>
+              </div>
+
+              <!-- Safety Isolation & Forbidden Interlocks Card -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">🛡️ Safety Isolation & Interlocks Status</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
+                  <div>/cmd_vel Topic:</div><div style="font-weight: bold; color: #10b981;">DISABLED (Absent)</div>
+                  <div>SLAM / Nav2:</div><div style="font-weight: bold; color: #10b981;">DISABLED (Not running)</div>
+                  <div>Hardware Isolation:</div><div style="font-weight: bold; color: #10b981;">0 /dev mounts (Isolated)</div>
+                  <div>Motor Driver Access:</div><div style="font-weight: bold; color: #10b981;">Host Cockpit API Only</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Column 2: Topic Rates & Active Parameters -->
+            <div style="flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📡 ROS 2 Topics & Rate Monitor</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
+                  <div>/diagnostics:</div><div style="font-weight: bold; color: #10b981;">Active (1.0 Hz)</div>
+                  <div>/scan (LiDAR):</div><div style="font-weight: bold; color: #10b981;">Active (~6.5 Hz)</div>
+                  <div>/odom (Odometry):</div><div style="font-weight: bold; color: #10b981;">Active (20.0 Hz)</div>
+                  <div>/tf (odom -> base_link):</div><div style="font-weight: bold; color: #10b981;">Active (20.0 Hz)</div>
+                  <div>/tf_static (base_link -> laser):</div><div style="font-weight: bold; color: #10b981;">Active (Latched)</div>
+                </div>
+              </div>
+
+              <!-- Active Odometry Kinematic Parameters Card -->
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--accent);">📏 Active Kinematic Odometry Parameters</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; font-family: monospace;">
+                  <div>wheel_diameter_m:</div><div style="font-weight: bold; color: var(--cyan-glow);">0.065 m (65 mm)</div>
+                  <div>ticks_per_revolution:</div><div style="font-weight: bold; color: var(--cyan-glow);">1894.0 (Calibrated)</div>
+                  <div>track_width_m:</div><div style="font-weight: bold; color: var(--cyan-glow);">0.197 m (Geometric Baseline)</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Column 3: Physical Calibration Procedures & Instructions -->
+            <div style="flex: 1.5; min-width: 350px; display: flex; flex-direction: column; gap: 15px;">
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 15px; font-size: 13px;">
+                <h3 style="margin-top:0; margin-bottom:10px; color: var(--primary);">📖 Physical Odometry Calibration Procedures</h3>
+                <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12px; line-height: 1.4;">
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
+                    <strong style="color: var(--cyan-glow);">1. Straight 1-Meter Calibration Test:</strong>
+                    <br>• Align rover rear bumper with start line.
+                    <br>• Execute recording helper on RPi5:
+                    <br><code style="color: #38bdf8;">ros2 run rover_bringup record_odom_calibration</code>
+                    <br>• Move rover straight forward by exactly 1.000m to target line.
+                    <br>• Compare physical distance vs reported <code>/odom</code> displacement.
+                  </div>
+
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
+                    <strong style="color: var(--cyan-glow);">2. 90-Degree Turn Calibration Test:</strong>
+                    <br>• Align rover chassis with orientation mark.
+                    <br>• Record starting <code>/odom</code> yaw pose.
+                    <br>• Turn rover 90 degrees CCW (or CW) in place.
+                    <br>• Verify reported yaw change equals <code>1.5708 rad</code> (90.0°).
+                  </div>
+
+                  <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); padding: 10px; border-radius: 8px;">
+                    <strong style="color: var(--cyan-glow);">3. Viewing Recorded Calibration Results:</strong>
+                    <br>• Calibration logs stored at:
+                    <br><code>/home/ron/yahboom-encoder/ros2/ros2_ws/logs/odom_calibration.json</code>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <!-- Section: Experimental Closed-Loop Calibration Tests -->
+</main>
+    </div>
+

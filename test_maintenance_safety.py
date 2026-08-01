@@ -5,6 +5,7 @@
 import unittest
 import os
 import sys
+import json
 
 # Append yahboom-encoder root directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -240,6 +241,40 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("authenticatedFetch('/api/drive/disarm'", app_code)
         self.assertIn("authenticatedFetch(endpoint, { method: 'POST' })", app_code)
         self.assertIn("authenticatedFetch('/api/maintenance/run_test'", app_code)
+
+    def test_track_width_source_of_truth_and_validation(self):
+        """Verify geometric baseline 0.197m default, elimination of 0.382 hidden default, migration, range validation, and status reporting."""
+        server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
+        with open(server_js_path, 'r', encoding='utf-8') as f:
+            server_code = f.read()
+
+        # 1. Server TRACK_WIDTH default is 0.197
+        self.assertIn('let TRACK_WIDTH = 0.197;', server_code)
+        self.assertIn("let trackWidthSource = 'GEOMETRIC_BASELINE';", server_code)
+
+        # 2. Hardcoded 0.382 has been removed from TRACK_WIDTH initialization and backtracking
+        self.assertNotIn('let TRACK_WIDTH = 0.382;', server_code)
+        self.assertNotIn('const L_width = 0.382;', server_code)
+
+        # 3. Status response reports trackWidthM and trackWidthSource
+        self.assertIn('trackWidthM: TRACK_WIDTH', server_code)
+        self.assertIn('trackWidthSource: trackWidthSource', server_code)
+
+        # 4. Check calibration_db.json
+        calib_json_path = os.path.join(os.path.dirname(__file__), 'calibration_db.json')
+        if os.path.exists(calib_json_path):
+            with open(calib_json_path, 'r', encoding='utf-8') as f:
+                calib_db = json.load(f)
+            self.assertEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.197)
+
+        # 5. Check ESP32 RoverConfig.cpp default and range validation
+        esp_config_path = os.path.join(os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'RoverConfig.cpp')
+        if os.path.exists(esp_config_path):
+            with open(esp_config_path, 'r', encoding='utf-8') as f:
+                esp_code = f.read()
+            self.assertIn('float WHEEL_SEPARATION_M = 0.197f;', esp_code)
+            self.assertIn('preferences.getFloat("wheel_sep", 0.197f);', esp_code)
+            self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 0.500f', esp_code)
 
 
 if __name__ == '__main__':

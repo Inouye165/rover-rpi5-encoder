@@ -47,7 +47,7 @@ def test_compute_ticks_delta_reset():
 
 
 def test_straight_movement():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.382, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
     # Baseline
     kin.update([0, 0, 0, 0], 100.0)
 
@@ -65,7 +65,7 @@ def test_straight_movement():
 
 
 def test_reverse_movement():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.382, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
     kin.update([1000, 1000, 1000, 1000], 100.0)
 
     # Move backwards by 1 rev
@@ -80,7 +80,7 @@ def test_reverse_movement():
 
 
 def test_in_place_ccw_turn():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.382, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # CCW turn: Left backward (-500 ticks), Right forward (+500 ticks)
@@ -92,7 +92,7 @@ def test_in_place_ccw_turn():
 
 
 def test_in_place_cw_turn():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.382, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # CW turn: Left forward (+500 ticks), Right backward (-500 ticks)
@@ -103,7 +103,7 @@ def test_in_place_cw_turn():
 
 
 def test_curved_motion():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.382, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # Left side moves slower than right side

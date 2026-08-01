@@ -61,7 +61,7 @@ class EncoderKinematics:
     def __init__(
         self,
         wheel_radius_m: float = 0.0325,
-        track_width_m: float = 0.382,
+        track_width_m: float = 0.197,
         ticks_per_revolution: float = 1894.0,
         m1_sign: float = 1.0,
         m2_sign: float = 1.0,
