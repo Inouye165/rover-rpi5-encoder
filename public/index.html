@@ -228,13 +228,15 @@
           <div class="control-group" style="margin-top: 15px;">
             <h3>Gamepad Telemetry HUD</h3>
             <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;">
+              <div>Controller:</div><div id="gp-live-controller" style="font-weight: bold; color: var(--cyan-glow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Disconnected</div>
               <div>Arm State:</div><div id="gp-live-arm" style="font-weight: bold; color: #6b7280;">DISARMED</div>
-              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED</div>
-              <div>Linear Axis Y:</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
-              <div>Angular Axis X:</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED (RT Raw: 0.00)</div>
+              <div>Linear Throttle (-Y):</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00 (Raw: 0.00)</div>
+              <div>Angular Steering (X):</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00 (Raw: 0.00)</div>
               <div>Stop State:</div><div id="gp-live-stop" style="font-weight: bold; color: #10b981;">STATIONARY</div>
               <div>Safety ESTOP:</div><div id="gp-live-estop" style="font-weight: bold; color: #10b981;">NOMINAL</div>
-              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent);">None</div>
+              <div>TX / Filter Status:</div><div id="gp-live-tx-status" style="font-weight: bold; color: #9ca3af;">IDLE</div>
+              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent); grid-column: span 2;">None</div>
             </div>
           </div>
 

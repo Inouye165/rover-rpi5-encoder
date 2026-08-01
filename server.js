@@ -646,45 +646,54 @@ function startDriveKeepaliveLoop() {
     const isMaintenance = (typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE';
 
     // Safety events bypass slew limiter and force immediate zero
-    if (!isArmed || !autonomyState.enabled || isMaintenance) {
+    if (!isArmed || isMaintenance) {
       limitedLinear = 0.0;
       limitedAngular = 0.0;
+      targetLinear = 0.0;
+      targetAngular = 0.0;
     } else if (cmdSource === 'ROS_AUTONOMY') {
-      // Server-Side Slew Limiter for ROS Autonomy
-      const maxLinAccel = parseFloat(process.env.AUTONOMY_LINEAR_ACCEL_MPS2) || 0.30;
-      const maxLinDecel = parseFloat(process.env.AUTONOMY_LINEAR_DECEL_MPS2) || 0.60;
-      const maxAngAccel = parseFloat(process.env.AUTONOMY_ANGULAR_ACCEL_RADPS2) || 1.00;
-      const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
+      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE') {
+        limitedLinear = 0.0;
+        limitedAngular = 0.0;
+        targetLinear = 0.0;
+        targetAngular = 0.0;
+      } else {
+        // Server-Side Slew Limiter for ROS Autonomy
+        const maxLinAccel = parseFloat(process.env.AUTONOMY_LINEAR_ACCEL_MPS2) || 0.30;
+        const maxLinDecel = parseFloat(process.env.AUTONOMY_LINEAR_DECEL_MPS2) || 0.60;
+        const maxAngAccel = parseFloat(process.env.AUTONOMY_ANGULAR_ACCEL_RADPS2) || 1.00;
+        const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
 
-      // Linear Slew
-      if (limitedLinear !== targetLinear) {
-        let rate = maxLinAccel;
-        if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
-          rate = maxLinDecel;
-        } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
-          rate = maxLinDecel;
+        // Linear Slew
+        if (limitedLinear !== targetLinear) {
+          let rate = maxLinAccel;
+          if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
+            rate = maxLinDecel;
+          } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
+            rate = maxLinDecel;
+          }
+          const delta = rate * dt;
+          if (targetLinear > limitedLinear) {
+            limitedLinear = Math.min(targetLinear, limitedLinear + delta);
+          } else {
+            limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+          }
         }
-        const delta = rate * dt;
-        if (targetLinear > limitedLinear) {
-          limitedLinear = Math.min(targetLinear, limitedLinear + delta);
-        } else {
-          limitedLinear = Math.max(targetLinear, limitedLinear - delta);
-        }
-      }
 
-      // Angular Slew
-      if (limitedAngular !== targetAngular) {
-        let rate = maxAngAccel;
-        if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
-          rate = maxAngDecel;
-        } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
-          rate = maxAngDecel;
-        }
-        const delta = rate * dt;
-        if (targetAngular > limitedAngular) {
-          limitedAngular = Math.min(targetAngular, limitedAngular + delta);
-        } else {
-          limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+        // Angular Slew
+        if (limitedAngular !== targetAngular) {
+          let rate = maxAngAccel;
+          if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
+            rate = maxAngDecel;
+          } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
+            rate = maxAngDecel;
+          }
+          const delta = rate * dt;
+          if (targetAngular > limitedAngular) {
+            limitedAngular = Math.min(targetAngular, limitedAngular + delta);
+          } else {
+            limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+          }
         }
       }
     } else {

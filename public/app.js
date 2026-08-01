@@ -4856,7 +4856,12 @@ function updateGamepadBadge(connected, name = '') {
   }
 }
 
-function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
+function updateGamepadHUD(x, y, deadman, pressedButtonsStr, rawX = 0, rawY = 0, rtRaw = 0, txStatus = 'IDLE', modelName = '') {
+  const elCtrl = document.getElementById('gp-live-controller');
+  if (elCtrl) {
+    elCtrl.innerText = gamepadActive ? (modelName || 'Connected') : 'Disconnected';
+    elCtrl.style.color = gamepadActive ? '#00f2fe' : '#9ca3af';
+  }
   const elArm = document.getElementById('gp-live-arm');
   if (elArm) {
     const isArmed = window.roverState && window.roverState.drive && window.roverState.drive.armed;
@@ -4866,23 +4871,23 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
   const elDeadman = document.getElementById('gp-live-deadman');
   if (elDeadman) {
     if (gamepadActive && !deadman) {
-      elDeadman.innerText = 'Controller connected — deadman not active';
+      elDeadman.innerText = `RELEASED (RT Raw: ${rtRaw.toFixed(2)})`;
       elDeadman.style.color = '#f59e0b'; // Amber
     } else if (deadman) {
-      elDeadman.innerText = 'ACTIVE';
+      elDeadman.innerText = `ACTIVE (RT Raw: ${rtRaw.toFixed(2)})`;
       elDeadman.style.color = '#10b981'; // Green
     } else {
-      elDeadman.innerText = 'RELEASED';
+      elDeadman.innerText = 'RELEASED (RT Raw: 0.00)';
       elDeadman.style.color = '#ef4444'; // Red
     }
   }
   const elLinear = document.getElementById('gp-live-linear');
   if (elLinear) {
-    elLinear.innerText = y.toFixed(2);
+    elLinear.innerText = `${y.toFixed(2)} (Raw: ${rawY.toFixed(2)})`;
   }
   const elAngular = document.getElementById('gp-live-angular');
   if (elAngular) {
-    elAngular.innerText = x.toFixed(2);
+    elAngular.innerText = `${x.toFixed(2)} (Raw: ${rawX.toFixed(2)})`;
   }
   const elButtons = document.getElementById('gp-live-buttons');
   if (elButtons) {
@@ -4899,6 +4904,11 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
     const isEstop = window.roverState && window.roverState.drive && window.roverState.drive.estop;
     elEstop.innerText = isEstop ? 'TRIGGERED' : 'NOMINAL';
     elEstop.style.color = isEstop ? '#ef4444' : '#10b981';
+  }
+  const elTx = document.getElementById('gp-live-tx-status');
+  if (elTx) {
+    elTx.innerText = txStatus;
+    elTx.style.color = txStatus === 'TRANSMITTED' ? '#10b981' : (txStatus.startsWith('SUPPRESSED') ? '#f59e0b' : '#9ca3af');
   }
 }
 
@@ -4924,13 +4934,24 @@ function startGamepadLoop() {
       return;
     }
 
-    // Primary Control: Left stick vertical (axes 1) and horizontal (axes 0)
-    let throttle = -gp.axes[1];
-    let turn = gp.axes[0];
+    // Standard Xbox Controller mapping:
+    // Steering: axes[0]
+    // Throttle: -axes[1] (Forward stick is negative axes[1])
+    const rawX = (gp.axes && gp.axes[0] !== undefined) ? gp.axes[0] : 0;
+    const rawY = (gp.axes && gp.axes[1] !== undefined) ? gp.axes[1] : 0;
+
+    let throttle = -rawY;
+    let turn = rawX;
 
     // Apply deadzone (0.10) to block resting drift
     if (Math.abs(throttle) < 0.10) throttle = 0;
     if (Math.abs(turn) < 0.10) turn = 0;
+
+    // Right Trigger (buttons[7]) Deadman evaluation (analog value > 0.5 or pressed)
+    const rtVal = (gp.buttons && gp.buttons[7] && typeof gp.buttons[7].value === 'number') ? gp.buttons[7].value : 0;
+    const rtPressed = Boolean(gp.buttons && gp.buttons[7] && (gp.buttons[7].pressed || rtVal > 0.5));
+    const rbPressed = Boolean(gp.buttons && gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5));
+    const deadmanPressed = Boolean(rtPressed || rbPressed);
 
     // Detect pressed buttons
     const pressedButtons = [];
@@ -4948,18 +4969,12 @@ function startGamepadLoop() {
       if (btnIdx === 0) buttonNames.push("A (ESTOP)");
       else if (btnIdx === 1) buttonNames.push("B (ESTOP)");
       else if (btnIdx === 5) buttonNames.push("RB (Deadman)");
-      else if (btnIdx === 7) buttonNames.push("RT (Deadman)");
+      else if (btnIdx === 7) buttonNames.push(`RT (${rtVal.toFixed(2)})`);
       else if (btnIdx === 8) buttonNames.push("Select (Disarm)");
       else if (btnIdx === 9) buttonNames.push("Start (Arm)");
       else buttonNames.push(btnIdx);
     });
     const pressedButtonsStr = buttonNames.length > 0 ? buttonNames.join(", ") : "None";
-
-    // Intended Deadman switch: Hold RB (5) or RT (7) past 50% pull (value > 0.5)
-    const deadmanPressed = Boolean(
-      (gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5)) ||
-      (gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5))
-    );
 
     // Safety buttons: A (0) or B (1) triggers ESTOP
     const estopPressed = Boolean(
@@ -4971,29 +4986,40 @@ function startGamepadLoop() {
     const armPressed = Boolean(gp.buttons[9] && (gp.buttons[9].pressed || gp.buttons[9].value > 0.5));
     const disarmPressed = Boolean(gp.buttons[8] && (gp.buttons[8].pressed || gp.buttons[8].value > 0.5));
 
+    let txStatus = 'IDLE';
     if (estopPressed) {
+      txStatus = 'SUPPRESSED: E-Stop Active';
       if (typeof triggerEstop === 'function') triggerEstop();
-      updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr);
+      updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr, rawX, rawY, rtVal, txStatus, gp.id);
       lastSentJoystick = { x: 0, y: 0, deadman: deadmanPressed };
       lastGamepadSendTime = Date.now();
     } else if (armPressed) {
+      txStatus = 'ARM TRIGGERED';
       if (typeof armNormalDrive === 'function') armNormalDrive();
       lastGamepadSendTime = Date.now() + 500;
     } else if (disarmPressed) {
+      txStatus = 'DISARM TRIGGERED';
       if (typeof disarmNormalDrive === 'function') disarmNormalDrive();
       lastGamepadSendTime = Date.now() + 500;
     }
 
-    // Sync with HUD
-    updateGamepadHUD(turn, throttle, deadmanPressed, pressedButtonsStr);
-
     // Send joystick commands to server
     if (!estopPressed && !armPressed && !disarmPressed) {
       const now = Date.now();
-      const changed = Math.abs(turn - lastSentJoystick.x) > 0.02 ||
-                      Math.abs(throttle - lastSentJoystick.y) > 0.02 ||
+      const isArmed = window.roverState && window.roverState.drive && window.roverState.drive.armed;
+
+      const changed = Math.abs(turn - lastSentJoystick.x) > 0.01 ||
+                      Math.abs(throttle - lastSentJoystick.y) > 0.01 ||
                       deadmanPressed !== lastSentJoystick.deadman;
-      const timeElapsed = now - lastGamepadSendTime > 100;
+      const timeElapsed = now - lastGamepadSendTime > 50;
+
+      if (!isArmed && (turn !== 0 || throttle !== 0 || deadmanPressed)) {
+        txStatus = 'SUPPRESSED: Disarmed';
+      } else if (!deadmanPressed && (turn !== 0 || throttle !== 0)) {
+        txStatus = 'SUPPRESSED: Deadman Released';
+      } else if (throttle === 0 && turn === 0 && !deadmanPressed && !changed) {
+        txStatus = 'SUPPRESSED: Neutral';
+      }
 
       if (changed || (timeElapsed && (turn !== 0 || throttle !== 0 || deadmanPressed))) {
         sendServerMessage({
@@ -5004,8 +5030,14 @@ function startGamepadLoop() {
         });
         lastSentJoystick = { x: turn, y: throttle, deadman: deadmanPressed };
         lastGamepadSendTime = now;
+        if (deadmanPressed && (turn !== 0 || throttle !== 0)) {
+          txStatus = 'TRANSMITTED';
+        }
       }
     }
+
+    // Sync with HUD
+    updateGamepadHUD(turn, throttle, deadmanPressed, pressedButtonsStr, rawX, rawY, rtVal, txStatus, gp.id);
 
     requestAnimationFrame(poll);
   }

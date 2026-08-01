@@ -425,6 +425,101 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("if (deadmanPressed)", server_code)
         self.assertIn("cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';", server_code)
 
+    def test_gamepad_exact_simulated_axis_and_deadman_mappings(self):
+        """Simulate exact gamepad axis & button inputs and verify expected linear/angular command logic."""
+        def process_gamepad_input(axes, button7_val, deadband=0.10):
+            raw_x = axes[0] if len(axes) > 0 else 0.0
+            raw_y = axes[1] if len(axes) > 1 else 0.0
+
+            throttle = -raw_y
+            turn = raw_x
+
+            if abs(throttle) < deadband:
+                throttle = 0.0
+            if abs(turn) < deadband:
+                turn = 0.0
+
+            deadman = button7_val > 0.5
+            return {'x': turn, 'y': throttle, 'deadman': deadman}
+
+        def process_server_command(msg, is_armed=True, floor_testing=True):
+            if not is_armed:
+                return {'targetLinear': 0.0, 'targetAngular': 0.0, 'cmdSource': 'NONE'}
+
+            deadman = msg.get('deadman', True)
+            if not deadman:
+                return {'targetLinear': 0.0, 'targetAngular': 0.0, 'cmdSource': 'NONE'}
+
+            x = msg.get('x', 0.0)
+            y = msg.get('y', 0.0)
+
+            throttle = 0.0 if abs(y) < 0.10 else (1.0 if y > 0 else -1.0) * (abs(y) ** 2.0)
+            turn_scaled = 0.0
+            if abs(x) >= 0.10:
+                min_coeff = 0.35
+                norm_stick = (abs(x) - 0.10) / 0.90
+                scaled_stick = norm_stick ** 1.5
+                turn_scaled = (1.0 if x > 0 else -1.0) * (min_coeff + scaled_stick * (1.0 - min_coeff))
+
+            max_linear = 0.17 if floor_testing else 0.80
+            max_angular = 0.90 if floor_testing else 3.00
+
+            target_linear = throttle * max_linear
+            target_angular = -turn_scaled * max_angular
+
+            return {'targetLinear': target_linear, 'targetAngular': target_angular, 'cmdSource': 'GAMEPAD'}
+
+        # 1. Neutral: axes [0.001, 0.014, 0.008, 0.006], button 7 value 0 -> Expected command: zero
+        c1 = process_gamepad_input([0.001, 0.014, 0.008, 0.006], 0.0)
+        self.assertEqual(c1['y'], 0.0)
+        self.assertEqual(c1['x'], 0.0)
+        self.assertFalse(c1['deadman'])
+        s1 = process_server_command(c1)
+        self.assertEqual(s1['targetLinear'], 0.0)
+        self.assertEqual(s1['targetAngular'], 0.0)
+
+        # 2. Forward without deadman: axes [0.0, -1.0, 0.0, 0.0], button 7 value 0 -> Expected command: zero
+        c2 = process_gamepad_input([0.0, -1.0, 0.0, 0.0], 0.0)
+        self.assertFalse(c2['deadman'])
+        s2 = process_server_command(c2)
+        self.assertEqual(s2['targetLinear'], 0.0)
+        self.assertEqual(s2['targetAngular'], 0.0)
+
+        # 3. Deadman without movement: axes [0.0, 0.0, 0.0, 0.0], button 7 value 1 -> Expected command: zero
+        c3 = process_gamepad_input([0.0, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c3['deadman'])
+        s3 = process_server_command(c3)
+        self.assertEqual(s3['targetLinear'], 0.0)
+        self.assertEqual(s3['targetAngular'], 0.0)
+
+        # 4. Deadman plus forward: axes [0.0, -0.93, 0.0, 0.0], button 7 value 1 -> Expected: positive linear command
+        c4 = process_gamepad_input([0.0, -0.93, 0.0, 0.0], 1.0)
+        self.assertTrue(c4['deadman'])
+        self.assertGreater(c4['y'], 0.0)
+        s4 = process_server_command(c4)
+        self.assertGreater(s4['targetLinear'], 0.0)
+        self.assertEqual(s4['cmdSource'], 'GAMEPAD')
+
+        # 5. Deadman plus reverse: axes [0.0, 0.93, 0.0, 0.0], button 7 value 1 -> Expected: negative linear command
+        c5 = process_gamepad_input([0.0, 0.93, 0.0, 0.0], 1.0)
+        self.assertTrue(c5['deadman'])
+        self.assertLess(c5['y'], 0.0)
+        s5 = process_server_command(c5)
+        self.assertLess(s5['targetLinear'], 0.0)
+        self.assertEqual(s5['cmdSource'], 'GAMEPAD')
+
+        # 6. Deadman plus left turn: axes [-0.93, 0.0, 0.0, 0.0], button 7 value 1 -> Expected: positive angular command (CCW left turn)
+        c6_left = process_gamepad_input([-0.93, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c6_left['deadman'])
+        s6_left = process_server_command(c6_left)
+        self.assertGreater(s6_left['targetAngular'], 0.0)
+
+        # 7. Deadman plus right turn: axes [0.93, 0.0, 0.0, 0.0], button 7 value 1 -> Expected: negative angular command (CW right turn)
+        c7_right = process_gamepad_input([0.93, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c7_right['deadman'])
+        s7_right = process_server_command(c7_right)
+        self.assertLess(s7_right['targetAngular'], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()
