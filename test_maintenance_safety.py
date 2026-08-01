@@ -301,8 +301,35 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         # 3. Launch files
         slam_launch_path = os.path.join(bringup_dir, 'launch', 'slam.launch.py')
         nav_launch_path = os.path.join(bringup_dir, 'launch', 'navigation.launch.py')
+        foundation_launch_path = os.path.join(bringup_dir, 'launch', 'foundation.launch.py')
+        self.assertTrue(os.path.exists(foundation_launch_path), "foundation.launch.py must exist.")
         self.assertTrue(os.path.exists(slam_launch_path), "slam.launch.py must exist.")
         self.assertTrue(os.path.exists(nav_launch_path), "navigation.launch.py must exist.")
+
+    def test_package_setup_data_files_and_xml_dependencies(self):
+        """Verify setup.py data_files installs all required launch and config files, and package.xml contains dependencies."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        setup_py_path = os.path.join(bringup_dir, 'setup.py')
+        package_xml_path = os.path.join(bringup_dir, 'package.xml')
+
+        with open(setup_py_path, 'r', encoding='utf-8') as f:
+            setup_code = f.read()
+
+        # 1. Verify setup.py data_files config
+        self.assertIn("glob('launch/*.launch.py')", setup_code)
+        self.assertIn("glob('config/*')", setup_code)
+        self.assertIn("(os.path.join('share', package_name, 'launch'), launch_files)", setup_code)
+        self.assertIn("(os.path.join('share', package_name, 'config'), config_files)", setup_code)
+
+        # 2. Verify package.xml runtime dependencies
+        with open(package_xml_path, 'r', encoding='utf-8') as f:
+            xml_code = f.read()
+
+        self.assertIn('<exec_depend>launch</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>launch_ros</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>slam_toolbox</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>nav2_bringup</exec_depend>', xml_code)
+        self.assertIn('<depend>tf2_ros</depend>', xml_code)
 
 
 if __name__ == '__main__':
