@@ -16,15 +16,46 @@ def generate_launch_description():
         description='Full path to SLAM Toolbox configuration YAML file'
     )
 
+    autostart_arg = DeclareLaunchArgument(
+        'autostart',
+        default_value='true',
+        description='Automatically configure and activate slam_toolbox lifecycle node'
+    )
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock if true'
+    )
+
     slam_node = Node(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        parameters=[LaunchConfiguration('params_file')]
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ]
+    )
+
+    lifecycle_manager_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_slam',
+        output='screen',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'autostart': LaunchConfiguration('autostart'),
+            'node_names': ['slam_toolbox'],
+            'bond_timeout': 4.0
+        }]
     )
 
     return LaunchDescription([
         params_file_arg,
-        slam_node
+        autostart_arg,
+        use_sim_time_arg,
+        slam_node,
+        lifecycle_manager_node
     ])

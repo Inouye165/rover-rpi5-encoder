@@ -331,7 +331,32 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn('<exec_depend>launch_ros</exec_depend>', xml_code)
         self.assertIn('<exec_depend>slam_toolbox</exec_depend>', xml_code)
         self.assertIn('<exec_depend>nav2_bringup</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>nav2_lifecycle_manager</exec_depend>', xml_code)
         self.assertIn('<depend>tf2_ros</depend>', xml_code)
+
+    def test_slam_launch_automatic_lifecycle_and_safety(self):
+        """Verify slam.launch.py includes lifecycle management, defaults autostart to true, and contains no motion components."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        slam_launch_path = os.path.join(bringup_dir, 'launch', 'slam.launch.py')
+
+        with open(slam_launch_path, 'r', encoding='utf-8') as f:
+            launch_code = f.read()
+
+        # 1. Automatic lifecycle management
+        self.assertIn("package='nav2_lifecycle_manager'", launch_code)
+        self.assertIn("executable='lifecycle_manager'", launch_code)
+        self.assertIn("'node_names': ['slam_toolbox']", launch_code)
+
+        # 2. Autostart default true
+        self.assertIn("default_value='true'", launch_code)
+        self.assertIn("'autostart'", launch_code)
+
+        # 3. No movement-producing Nav2 nodes or cmd_vel publishers
+        self.assertNotIn("controller_server", launch_code)
+        self.assertNotIn("planner_server", launch_code)
+        self.assertNotIn("velocity_smoother", launch_code)
+        self.assertNotIn("behavior_server", launch_code)
+        self.assertNotIn("/cmd_vel", launch_code)
 
 
 if __name__ == '__main__':
