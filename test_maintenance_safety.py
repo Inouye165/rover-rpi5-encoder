@@ -393,6 +393,38 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertNotIn('/api/drive/arm', script_code)
         self.assertNotIn('/cmd_vel', script_code)
 
+    def test_gamepad_safety_and_event_listener_integrity(self):
+        """Verify frontend and backend gamepad safety interlocks, deadband, and event listener integrity."""
+        app_js_path = os.path.join(os.path.dirname(__file__), 'public', 'app.js')
+        server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
+
+        with open(app_js_path, 'r', encoding='utf-8') as f:
+            app_code = f.read()
+
+        with open(server_js_path, 'r', encoding='utf-8') as f:
+            server_code = f.read()
+
+        # 1. Event listener names must be standard HTML5 gamepaddisconnected (not typo gamepaddisconnect)
+        self.assertNotIn("window.addEventListener('gamepaddisconnect',", app_code)
+        self.assertIn("window.addEventListener('gamepaddisconnected',", app_code)
+
+        # 2. Check gamepad connection function & loop
+        self.assertIn("function checkGamepadConnection()", app_code)
+        self.assertIn("function startGamepadLoop()", app_code)
+
+        # 3. Deadband filtering (0.10) to block resting drift
+        self.assertIn("Math.abs(throttle) < 0.10", app_code)
+        self.assertIn("Math.abs(turn) < 0.10", app_code)
+
+        # 4. Safety deadman buttons (RB=5, RT=7)
+        self.assertIn("gp.buttons[5]", app_code)
+        self.assertIn("gp.buttons[7]", app_code)
+
+        # 5. Server-side deadman enforcement
+        self.assertIn("deadmanPressed = msg.deadman === true;", server_code)
+        self.assertIn("if (deadmanPressed)", server_code)
+        self.assertIn("cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';", server_code)
+
 
 if __name__ == '__main__':
     unittest.main()

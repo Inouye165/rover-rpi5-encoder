@@ -6094,7 +6094,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('gamepaddisconnect', () => {
+window.addEventListener('gamepaddisconnected', () => {
   if (typeof driveRover === 'function') driveRover('stop');
   sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
   lastSentJoystick = { x: 0, y: 0, deadman: false };
