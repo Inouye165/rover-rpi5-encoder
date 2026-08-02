@@ -47,7 +47,7 @@ def test_compute_ticks_delta_reset():
 
 
 def test_straight_movement():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.718, ticks_per_revolution=1894.0)
     # Baseline
     kin.update([0, 0, 0, 0], 100.0)
 
@@ -65,7 +65,7 @@ def test_straight_movement():
 
 
 def test_reverse_movement():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.718, ticks_per_revolution=1894.0)
     kin.update([1000, 1000, 1000, 1000], 100.0)
 
     # Move backwards by 1 rev
@@ -80,7 +80,7 @@ def test_reverse_movement():
 
 
 def test_in_place_ccw_turn():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.718, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # CCW turn: Left backward (-500 ticks), Right forward (+500 ticks)
@@ -92,7 +92,7 @@ def test_in_place_ccw_turn():
 
 
 def test_in_place_cw_turn():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.718, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # CW turn: Left forward (+500 ticks), Right backward (-500 ticks)
@@ -103,7 +103,7 @@ def test_in_place_cw_turn():
 
 
 def test_curved_motion():
-    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.197, ticks_per_revolution=1894.0)
+    kin = EncoderKinematics(wheel_radius_m=0.0325, track_width_m=0.718, ticks_per_revolution=1894.0)
     kin.update([0, 0, 0, 0], 100.0)
 
     # Left side moves slower than right side
@@ -112,6 +112,30 @@ def test_curved_motion():
     assert kin.x > 0.0
     assert kin.y > 0.0
     assert kin.yaw > 0.0
+
+
+def test_effective_track_width_rotation_kinematics():
+    """Verify that equal and opposite wheel travel of ~2.256m per side yields 2pi radians (360 deg) rotation with 0.718m effective width."""
+    track_width_m = 0.718
+    physical_track_width_m = 0.197
+    wheel_radius_m = 0.0325
+    ticks_per_rev = 1894.0
+
+    kin = EncoderKinematics(wheel_radius_m=wheel_radius_m, track_width_m=track_width_m, ticks_per_revolution=ticks_per_rev)
+    kin.update([0, 0, 0, 0], 100.0)
+
+    # Wheel distance s = pi * track_width_m = 2.25566359... ~ 2.256 m
+    s_wheel = math.pi * track_width_m
+    ticks_per_meter = ticks_per_rev / (2.0 * math.pi * wheel_radius_m)
+    ticks_delta = s_wheel * ticks_per_meter
+
+    # Left backward (-ticks_delta), Right forward (+ticks_delta)
+    ok, msg = kin.update([-ticks_delta, ticks_delta, -ticks_delta, ticks_delta], 101.0)
+    assert ok
+    # Rotation delta_theta = (s_right - s_left) / W = 2 * pi rad -> normalizes to 0
+    assert abs(normalize_angle(kin.yaw)) < 1e-3
+    assert abs(s_wheel - 2.25566) < 0.001
+    assert abs(physical_track_width_m - 0.197) < 1e-5
 
 
 def test_four_wheel_grouping_and_disagreement():

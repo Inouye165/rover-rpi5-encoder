@@ -94,7 +94,8 @@ let gpDeadmanPressed = false;
 
 // Calibration variables
 let currentWheelDiameter = 0.065; // synchronized from ESP32 parameters
-let currentTrackWidth = 0.197;    // synchronized from ESP32 parameters (geometric baseline)
+let currentTrackWidth = 0.718;    // synchronized from ESP32 parameters / calibration_db (effective track width)
+const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
 let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 'out_and_back'
 let testTimer = null;
 let testStartOdom = null;
@@ -5722,7 +5723,7 @@ function updateCalibrationReadiness() {
 
   // Active parameter readouts
   const diaVal = currentWheelDiameter || 0.065;
-  const trackVal = currentTrackWidth || 0.197;
+  const trackVal = currentTrackWidth || 0.718;
   const wheelDiaMm = diaVal * 1000.0;
   const trackMm = trackVal * 1000.0;
   const ticksPerRev = 1894.0;

@@ -6,6 +6,7 @@ import unittest
 import os
 import sys
 import json
+import math
 
 # Append yahboom-encoder root directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -243,14 +244,15 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("authenticatedFetch('/api/maintenance/run_test'", app_code)
 
     def test_track_width_source_of_truth_and_validation(self):
-        """Verify geometric baseline 0.197m default, elimination of 0.382 hidden default, migration, range validation, and status reporting."""
+        """Verify effective skid-steer track width 0.718m default, physical spacing 0.197m, migration, range validation, and status reporting."""
         server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
         with open(server_js_path, 'r', encoding='utf-8') as f:
             server_code = f.read()
 
-        # 1. Server TRACK_WIDTH default is 0.197
-        self.assertIn('let TRACK_WIDTH = 0.197;', server_code)
-        self.assertIn("let trackWidthSource = 'GEOMETRIC_BASELINE';", server_code)
+        # 1. Server TRACK_WIDTH default is 0.718, physical is 0.197
+        self.assertIn('let TRACK_WIDTH = 0.718;', server_code)
+        self.assertIn('const PHYSICAL_TRACK_WIDTH_M = 0.197;', server_code)
+        self.assertIn("let trackWidthSource = 'CALIBRATION_DB';", server_code)
 
         # 2. Hardcoded 0.382 has been removed from TRACK_WIDTH initialization and backtracking
         self.assertNotIn('let TRACK_WIDTH = 0.382;', server_code)
@@ -265,16 +267,32 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         if os.path.exists(calib_json_path):
             with open(calib_json_path, 'r', encoding='utf-8') as f:
                 calib_db = json.load(f)
-            self.assertEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.197)
+            self.assertEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.718)
 
         # 5. Check ESP32 RoverConfig.cpp default and range validation
         esp_config_path = os.path.join(os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'RoverConfig.cpp')
         if os.path.exists(esp_config_path):
             with open(esp_config_path, 'r', encoding='utf-8') as f:
                 esp_code = f.read()
-            self.assertIn('float WHEEL_SEPARATION_M = 0.197f;', esp_code)
-            self.assertIn('preferences.getFloat("wheel_sep", 0.197f);', esp_code)
-            self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 0.500f', esp_code)
+            self.assertIn('float WHEEL_SEPARATION_M = 0.718f;', esp_code)
+            self.assertIn('preferences.getFloat("wheel_sep", 0.718f);', esp_code)
+            self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 1.000f', esp_code)
+
+    def test_skid_steer_effective_track_width_rotation_math(self):
+        """Regression test: equal and opposite wheel travel of ~2.256m per side yields 2pi radians (360 deg) rotation with 0.718m effective width."""
+        w_effective = 0.718
+        w_physical = 0.197
+
+        # Wheel travel s = pi * w_effective = 2.25566359... ~ 2.256 m
+        s_travel = math.pi * w_effective
+        self.assertAlmostEqual(s_travel, 2.25566359, places=5)
+        self.assertAlmostEqual(round(s_travel, 3), 2.256, places=3)
+
+        # Differential drive rotation delta_theta = (s_right - s_left) / w_effective
+        # With s_right = +s_travel and s_left = -s_travel:
+        delta_theta = (s_travel - (-s_travel)) / w_effective
+        self.assertAlmostEqual(delta_theta, 2.0 * math.pi, places=5)
+        self.assertEqual(w_physical, 0.197)
 
     def test_nav2_and_slam_readiness_configurations(self):
         """Verify presence and valid parameters for SLAM Toolbox, Nav2, and launch files."""

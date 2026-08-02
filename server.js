@@ -180,8 +180,9 @@ let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
 let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
-let TRACK_WIDTH = 0.197;   // Geometric baseline: 7.75 inches = 0.19685 m
-let trackWidthSource = 'GEOMETRIC_BASELINE';
+let TRACK_WIDTH = 0.718;   // Effective skid-steer track width calibrated from floor tests (0.718 m)
+const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
+let trackWidthSource = 'CALIBRATION_DB';
 
 // Limits configuration and active command source
 let floorTesting = false; // default to safe floor testing limits on startup
@@ -381,14 +382,14 @@ function loadCalibrationDb() {
           WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
         }
         const rawTrack = calibrationDb.currentConfig.effectiveTrackWidth;
-        if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 0.500 && Math.abs(rawTrack - 0.170) >= 0.005 && Math.abs(rawTrack - 0.382) >= 0.005) {
+        if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 1.000 && Math.abs(rawTrack - 0.170) >= 0.005 && Math.abs(rawTrack - 0.382) >= 0.005) {
           TRACK_WIDTH = rawTrack;
           trackWidthSource = 'CALIBRATION_DB';
         } else {
-          console.log(`[Config DB Migration] Migrated uncalibrated/out-of-range track width (${rawTrack}m) to physical geometric baseline 0.197m`);
-          calibrationDb.currentConfig.effectiveTrackWidth = 0.197;
-          TRACK_WIDTH = 0.197;
-          trackWidthSource = 'GEOMETRIC_BASELINE';
+          console.log(`[Config DB Migration] Migrated uncalibrated/out-of-range track width (${rawTrack}m) to effective calibrated track width 0.718m`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.718;
+          TRACK_WIDTH = 0.718;
+          trackWidthSource = 'CALIBRATION_DB';
           saveCalibrationDb();
         }
         console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m (source=${trackWidthSource})`);
@@ -415,7 +416,7 @@ function loadCalibrationDb() {
     console.error('[Config DB] Failed to load calibration database, using defaults:', err.message);
     if (!calibrationDb || typeof calibrationDb !== 'object') {
       calibrationDb = {
-        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.197 },
+        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.718 },
         proposedConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         previousConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         fwdTrim: { left: 1.0, right: 1.0 },
