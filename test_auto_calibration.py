@@ -490,8 +490,26 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("if (!isOdomFresh) {\n      sendMotorSpeeds(0, 0, 0, 0);", self.server_code,
             "RUNNING phase must immediately sendMotorSpeeds(0,0,0,0) when odometry becomes stale")
 
+    def test_61_source_odometry_age_check_required_before_updating_last_success(self):
+        """61. Verify fetchRosOdometry checks parsed.odometry_age_ms < 2000 before updating lastOdomSuccessTime."""
+        self.assertIn("parsed.odometry_age_ms < 2000", self.server_code,
+            "fetchRosOdometry must verify parsed.odometry_age_ms < 2000 before treating sample as fresh")
+
+    def test_62_single_request_settlement_handled_guard_present(self):
+        """62. Verify fetchRosOdometry uses request-local handled guard to settle requests once."""
+        self.assertIn("let handled = false;", self.server_code,
+            "fetchRosOdometry must use handled guard per request")
+        self.assertIn("if (handled) return;", self.server_code,
+            "fetchRosOdometry handlers must check handled guard")
+
+    def test_63_arming_phase_requires_both_armed_and_fresh_odometry(self):
+        """63. Verify transition from ARMING to RUNNING requires both isArmed and isOdomFresh."""
+        self.assertIn("if (isArmed && isOdomFresh) {", self.server_code,
+            "ARMING transition must require both isArmed and isOdomFresh")
+
 
 if __name__ == '__main__':
     unittest.main()
+
 
 

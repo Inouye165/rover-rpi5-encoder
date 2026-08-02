@@ -2575,14 +2575,28 @@ function fetchRosOdometry() {
   }
 
   odomFetchPromise = new Promise((resolve) => {
+    let handled = false;
+
+    function finish(result) {
+      if (handled) return;
+      handled = true;
+      resolve(result);
+    }
+
     const req = http.get('http://127.0.0.1:3003/api/odom', { timeout: 250 }, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
+        if (handled) return;
         try {
           if (res.statusCode === 200) {
             const parsed = JSON.parse(data);
-            if (parsed && parsed.ok === true) {
+            const isSourceFresh = parsed && parsed.ok === true &&
+              typeof parsed.odometry_age_ms === 'number' &&
+              Number.isFinite(parsed.odometry_age_ms) &&
+              parsed.odometry_age_ms < 2000;
+
+            if (isSourceFresh) {
               const fetchTime = Date.now();
               if (fetchTime >= lastOdomSuccessTime) {
                 lastOdomSuccessTime = fetchTime;
@@ -2591,30 +2605,33 @@ function fetchRosOdometry() {
                   ...parsed,
                   fetchedAt: fetchTime,
                   valid: true,
-                  odometry_age_ms: parsed.odometry_age_ms || 0
+                  odometry_age_ms: parsed.odometry_age_ms
                 };
               }
-              return resolve(latestRosOdom);
+              return finish(latestRosOdom);
             }
           }
         } catch (e) {}
-        handleOdomError('Invalid JSON or status code non-200');
-        resolve(latestRosOdom);
+        handleOdomError('Invalid JSON, HTTP non-200, or stale source odometry');
+        finish(latestRosOdom);
       });
     });
 
     req.on('error', (err) => {
-      handleOdomError(err.message);
-      resolve(latestRosOdom);
+      if (handled) return;
+      handleOdomError(err.message || 'HTTP request error');
+      finish(latestRosOdom);
     });
 
     req.on('timeout', () => {
+      if (handled) return;
       req.destroy();
       handleOdomError('Request timeout (250ms)');
-      resolve(latestRosOdom);
+      finish(latestRosOdom);
     });
 
     function handleOdomError(msg) {
+      if (handled) return;
       odomConsecutiveErrors++;
       const now = Date.now();
       const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
