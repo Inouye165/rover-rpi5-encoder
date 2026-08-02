@@ -1,13 +1,38 @@
 const UI_BUILD_ID = '2026.07.31-operator-auth';
 
+function isRememberBrowserEnabled() {
+  const checkbox = document.getElementById('remember-token-checkbox');
+  if (checkbox) return checkbox.checked;
+  return !!(localStorage.getItem('rover_operator_token'));
+}
+
+function setStoredOperatorToken(val, remember) {
+  if (!val) {
+    sessionStorage.removeItem('rover_operator_token');
+    localStorage.removeItem('rover_operator_token');
+    return;
+  }
+  sessionStorage.setItem('rover_operator_token', val);
+  if (remember) {
+    localStorage.setItem('rover_operator_token', val);
+  } else {
+    localStorage.removeItem('rover_operator_token');
+  }
+}
+
 function getOrSyncOperatorToken() {
   const inputToken = document.getElementById('operator-token-input');
+  let val = '';
   if (inputToken && inputToken.value && inputToken.value.trim()) {
-    const val = inputToken.value.trim();
-    sessionStorage.setItem('rover_operator_token', val);
-    return val;
+    val = inputToken.value.trim();
   }
-  return sessionStorage.getItem('rover_operator_token') || '';
+  if (!val) {
+    val = sessionStorage.getItem('rover_operator_token') || localStorage.getItem('rover_operator_token') || '';
+  }
+  if (val) {
+    setStoredOperatorToken(val, isRememberBrowserEnabled());
+  }
+  return val;
 }
 
 function getOperatorAuthHeaders() {
@@ -20,9 +45,10 @@ function showAuthErrorMessage(msg) {
   if (typeof logSystem === 'function') {
     logSystem(`[AUTH ERROR] ${displayMsg}`);
   }
-  const errBanner = document.getElementById('v2-autonomy-error-banner') || 
-                    document.getElementById('v2-calib-error-banner') || 
-                    document.getElementById('maint-test-error-banner');
+  const banner1 = document.getElementById('v2-autonomy-error-banner');
+  const banner2 = document.getElementById('v2-calib-error-banner');
+  const banner3 = document.getElementById('maint-test-error-banner');
+  const errBanner = banner1 || banner2 || banner3;
   if (errBanner) {
     errBanner.textContent = displayMsg;
     errBanner.style.display = 'block';
@@ -59,13 +85,7 @@ async function authenticatedFetch(url, options = {}) {
     const res = await fetch(url, { ...options, headers });
 
     if (res.status === 401 || res.status === 403) {
-      let errText = 'Operator token missing or invalid. Enter the token and try again.';
-      try {
-        const json = await res.clone().json();
-        if (json && json.error) {
-          errText = json.error;
-        }
-      } catch (e) {}
+      let errText = (res.status === 401) ? 'Operator token missing.' : 'Operator token invalid.';
       showAuthErrorMessage(errText);
       return { ok: false, status: res.status, res, json: { ok: false, error: errText } };
     }
@@ -5850,22 +5870,56 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSaveToken = document.getElementById('btn-save-token');
   const btnClearToken = document.getElementById('btn-clear-token');
   const inputToken = document.getElementById('operator-token-input');
+  const rememberCheckbox = document.getElementById('remember-token-checkbox');
+
+  // Token restoration on page load: prefer sessionStorage, otherwise restore localStorage
+  const sessionTok = sessionStorage.getItem('rover_operator_token');
+  const localTok = localStorage.getItem('rover_operator_token');
+  let activeTok = '';
+
+  if (sessionTok && sessionTok.trim()) {
+    activeTok = sessionTok.trim();
+    if (rememberCheckbox) {
+      rememberCheckbox.checked = !!(localTok && localTok.trim() && localTok.trim() === activeTok);
+    }
+  } else if (localTok && localTok.trim()) {
+    activeTok = localTok.trim();
+    if (rememberCheckbox) {
+      rememberCheckbox.checked = true;
+    }
+    sessionStorage.setItem('rover_operator_token', activeTok);
+  }
+
+  if (inputToken && activeTok) {
+    inputToken.value = activeTok;
+    inputToken.placeholder = 'Operator Token (Active)';
+  }
+
+  if (rememberCheckbox) {
+    rememberCheckbox.addEventListener('change', () => {
+      const curTok = getOrSyncOperatorToken();
+      if (curTok) {
+        setStoredOperatorToken(curTok, rememberCheckbox.checked);
+        if (typeof logSystem === 'function') {
+          logSystem(rememberCheckbox.checked ? 'Operator token remembered in localStorage.' : 'Operator token stored in sessionStorage only.');
+        }
+      }
+    });
+  }
 
   if (inputToken) {
-    const existingToken = sessionStorage.getItem('rover_operator_token');
-    if (existingToken) {
-      inputToken.value = existingToken;
-      inputToken.placeholder = 'Operator Token (Active)';
-    }
     inputToken.addEventListener('input', () => {
       const val = inputToken.value.trim();
       if (val) {
-        sessionStorage.setItem('rover_operator_token', val);
+        setStoredOperatorToken(val, isRememberBrowserEnabled());
+        inputToken.placeholder = 'Operator Token (Active)';
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'auth', token: val }));
         }
       } else {
         sessionStorage.removeItem('rover_operator_token');
+        localStorage.removeItem('rover_operator_token');
+        inputToken.placeholder = 'Operator Token';
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'deauth' }));
         }
@@ -5877,10 +5931,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSaveToken.addEventListener('click', () => {
       const val = getOrSyncOperatorToken();
       if (val) {
+        if (inputToken) inputToken.placeholder = 'Operator Token (Active)';
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'auth', token: val }));
         }
-        logSystem('Operator token stored in sessionStorage.');
+        const storageType = isRememberBrowserEnabled() ? 'localStorage' : 'sessionStorage';
+        if (typeof logSystem === 'function') {
+          logSystem(`Operator token stored in ${storageType}.`);
+        }
       } else {
         showAuthErrorMessage('Enter an operator token first.');
       }
@@ -5890,6 +5948,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClearToken) {
     btnClearToken.addEventListener('click', () => {
       sessionStorage.removeItem('rover_operator_token');
+      localStorage.removeItem('rover_operator_token');
       if (inputToken) {
         inputToken.value = '';
         inputToken.placeholder = 'Operator Token';
@@ -5897,7 +5956,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'deauth' }));
       }
-      logSystem('Operator authorization cleared.');
+      if (typeof logSystem === 'function') {
+        logSystem('Operator authorization cleared.');
+      }
     });
   }
 

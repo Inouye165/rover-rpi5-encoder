@@ -88,16 +88,18 @@ class TestDOMContract(unittest.TestCase):
         self.assertIn("roverState.firmware", self.app_js)
 
     def test_token_storage_and_security(self):
-        """Verify operator token uses sessionStorage only, is not in version output or source, and /api/auth/token is absent."""
+        """Verify operator token supports sessionStorage and localStorage, is not in version output or source, and /api/auth/token is absent."""
         self.assertIn("sessionStorage.getItem('rover_operator_token')", self.app_js)
         self.assertIn("sessionStorage.setItem('rover_operator_token'", self.app_js)
         self.assertIn("sessionStorage.removeItem('rover_operator_token')", self.app_js)
-        self.assertNotIn("localStorage.getItem('rover_operator_token')", self.app_js)
-        self.assertNotIn("localStorage.setItem('rover_operator_token'", self.app_js)
+        self.assertIn("localStorage.getItem('rover_operator_token')", self.app_js)
+        self.assertIn("localStorage.setItem('rover_operator_token'", self.app_js)
+        self.assertIn("localStorage.removeItem('rover_operator_token')", self.app_js)
         self.assertNotIn("/api/auth/token", self.app_js)
         self.assertNotIn("/api/auth/token", self.index_html)
         self.assertIn('type="password"', self.index_html)
-        self.assertIn('autocomplete="off"', self.index_html)
+        self.assertIn('autocomplete="current-password"', self.index_html)
+        self.assertIn('autocomplete="username"', self.index_html)
         self.assertIn("type: 'deauth'", self.app_js)
 
     def test_five_canonical_tabs_unchanged(self):

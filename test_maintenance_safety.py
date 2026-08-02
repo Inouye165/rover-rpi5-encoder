@@ -235,7 +235,7 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("const activeProtectedRequests = new Map();", app_code)
 
         # 4. Token preservation on page refresh
-        self.assertIn("inputToken.value = existingToken;", app_code)
+        self.assertIn("inputToken.value = activeTok;", app_code)
 
         # 5. Protected endpoints use authenticatedFetch
         self.assertIn("authenticatedFetch('/api/drive/arm'", app_code)

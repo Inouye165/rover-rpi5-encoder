@@ -42,7 +42,11 @@
           <span class="status-indicator off"></span> Gamepad: Disconnected
         </div>
         <form class="operator-token-selector" onsubmit="return false;" style="display: flex; gap: 4px; align-items: center;">
-          <input type="password" id="operator-token-input" name="rover-operator-token" placeholder="Operator Token" autocomplete="new-password" style="width: 110px; padding: 2px 6px; font-size: 11px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: #fff;">
+          <input type="text" id="operator-username-hidden" name="username" value="operator" autocomplete="username" style="display:none;" tabindex="-1" aria-hidden="true">
+          <input type="password" id="operator-token-input" name="rover-operator-token" placeholder="Operator Token" autocomplete="current-password" style="width: 110px; padding: 2px 6px; font-size: 11px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: #fff;">
+          <label id="remember-token-label" style="display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-muted, #94a3b8); cursor: pointer; user-select: none;" title="Remember token in this browser across sessions">
+            <input type="checkbox" id="remember-token-checkbox" style="cursor: pointer; width: 12px; height: 12px; accent-color: #00f2fe;"> Remember
+          </label>
           <button type="button" id="btn-save-token" style="padding: 2px 8px; font-size: 11px; background: #00f2fe; color: #090e16; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Auth</button>
           <button type="button" id="btn-clear-token" style="padding: 2px 6px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; cursor: pointer;">Clear</button>
         </form>
