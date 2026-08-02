@@ -176,7 +176,7 @@ def main():
         print(f"ERROR: Active ROS parameter verification failed! Expected 0.718, got: {param_out.strip()}", file=sys.stderr)
         client.close()
         sys.exit(1)
-    print("✓ Active ROS 2 Parameter Verification: PASS (track_width_m = 0.718)")
+    print(" [OK] Active ROS 2 Parameter Verification: PASS (track_width_m = 0.718)")
 
     # 2. Cockpit API status check
     status_cmd = "curl -s http://localhost:3000/api/drive/status"
@@ -190,7 +190,7 @@ def main():
             print(f"ERROR: Cockpit API verification failed! Got trackWidthM={track_width_api}, source={track_source_api}", file=sys.stderr)
             client.close()
             sys.exit(1)
-        print("✓ Cockpit API Verification: PASS (trackWidthM = 0.718, source = CALIBRATION_DB)")
+        print(" [OK] Cockpit API Verification: PASS (trackWidthM = 0.718, source = CALIBRATION_DB)")
     except Exception as e:
         print(f"ERROR: Failed to parse Cockpit API response: {e}\nRaw output: {api_out}", file=sys.stderr)
         client.close()
