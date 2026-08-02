@@ -264,6 +264,61 @@ async function runTests() {
       console.log('✓ Validation Test Passed: Malformed / NaN / unsupported axis inputs rejected with 400');
     }
 
+    // --------------------------------------------------------------------------
+    // Test 7: Kinematic Motor Outputs & Channel Mapping Verification
+    // --------------------------------------------------------------------------
+    {
+      const computeCmdVelDiagnostics = serverModule.computeCmdVelDiagnostics;
+      assert.strictEqual(typeof computeCmdVelDiagnostics, 'function', 'computeCmdVelDiagnostics helper must be exported');
+
+      // 1. Positive linear commands all four motors forward
+      const posLin = computeCmdVelDiagnostics(0.1, 0.0, 0.1, 0.0);
+      assert(posLin.channels.m1_left_front > 0, 'Positive linear: M1 (LF) must be > 0');
+      assert(posLin.channels.m2_right_front > 0, 'Positive linear: M2 (RF) must be > 0');
+      assert(posLin.channels.m3_left_rear > 0, 'Positive linear: M3 (LR) must be > 0');
+      assert(posLin.channels.m4_right_rear > 0, 'Positive linear: M4 (RR) must be > 0');
+
+      // 2. Negative linear commands all four motors backward
+      const negLin = computeCmdVelDiagnostics(-0.1, 0.0, -0.1, 0.0);
+      assert(negLin.channels.m1_left_front < 0, 'Negative linear: M1 (LF) must be < 0');
+      assert(negLin.channels.m2_right_front < 0, 'Negative linear: M2 (RF) must be < 0');
+      assert(negLin.channels.m3_left_rear < 0, 'Negative linear: M3 (LR) must be < 0');
+      assert(negLin.channels.m4_right_rear < 0, 'Negative linear: M4 (RR) must be < 0');
+
+      // 3. Positive angular commands: left-front & left-rear backward (<0), right-front & right-rear forward (>0)
+      const posAng = computeCmdVelDiagnostics(0.0, 0.2, 0.0, 0.2);
+      assert(posAng.channels.m1_left_front < 0, 'Positive angular: M1 (LF) must be < 0');
+      assert(posAng.channels.m3_left_rear < 0, 'Positive angular: M3 (LR) must be < 0');
+      assert(posAng.channels.m2_right_front > 0, 'Positive angular: M2 (RF) must be > 0');
+      assert(posAng.channels.m4_right_rear > 0, 'Positive angular: M4 (RR) must be > 0');
+
+      // 4. Negative angular commands: left-front & left-rear forward (>0), right-front & right-rear backward (<0)
+      const negAng = computeCmdVelDiagnostics(0.0, -0.2, 0.0, -0.2);
+      assert(negAng.channels.m1_left_front > 0, 'Negative angular: M1 (LF) must be > 0');
+      assert(negAng.channels.m3_left_rear > 0, 'Negative angular: M3 (LR) must be > 0');
+      assert(negAng.channels.m2_right_front < 0, 'Negative angular: M2 (RF) must be < 0');
+      assert(negAng.channels.m4_right_rear < 0, 'Negative angular: M4 (RR) must be < 0');
+
+      // 5. All four channels receive nonzero output for an angular-only command above deadband
+      assert(Math.abs(posAng.channels.m1_left_front) > 0, 'M1 output must be non-zero');
+      assert(Math.abs(posAng.channels.m2_right_front) > 0, 'M2 output must be non-zero');
+      assert(Math.abs(posAng.channels.m3_left_rear) > 0, 'M3 output must be non-zero');
+      assert(Math.abs(posAng.channels.m4_right_rear) > 0, 'M4 output must be non-zero');
+
+      // 6. Front and rear motors on the same side receive equivalent intended targets
+      assert.strictEqual(posAng.channels.m1_left_front, posAng.channels.m3_left_rear, 'M1 and M3 targets must match');
+      assert.strictEqual(posAng.channels.m2_right_front, posAng.channels.m4_right_rear, 'M2 and M4 targets must match');
+
+      // 7. Zero command produces four zero motor outputs
+      const zeroCmd = computeCmdVelDiagnostics(0.0, 0.0, 0.0, 0.0);
+      assert.strictEqual(zeroCmd.channels.m1_left_front, 0, 'Zero cmd: M1 must be 0');
+      assert.strictEqual(zeroCmd.channels.m2_right_front, 0, 'Zero cmd: M2 must be 0');
+      assert.strictEqual(zeroCmd.channels.m3_left_rear, 0, 'Zero cmd: M3 must be 0');
+      assert.strictEqual(zeroCmd.channels.m4_right_rear, 0, 'Zero cmd: M4 must be 0');
+
+      console.log('✓ Kinematics Test Passed: Motor targets, channel mappings, directions, and zero commands verified across all 4 channels');
+    }
+
     // Disable autonomy at end of test suite
     await httpRequest({
       hostname: '127.0.0.1',
