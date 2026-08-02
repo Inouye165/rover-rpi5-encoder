@@ -430,6 +430,36 @@ class TestAutoCalibrationSafety(unittest.TestCase):
             "so ESP32-confirmed arm state changes propagate to calib-status WS consumers"
         )
 
+    def test_51_keepalive_loop_suppresses_func_motion_during_auto_calib(self):
+        """51. Verify startDriveKeepaliveLoop suppresses background FUNC_MOTION packets when autoCalibState is active."""
+        self.assertIn('if (isMaintenance || isPositionActive) return;', self.server_code,
+            "Drive keepalive loop must check isMaintenance before emitting FUNC_MOTION packets")
+
+    def test_52_arm_confirmation_gate_and_no_nonzero_output_before_arm(self):
+        """52. Verify arm confirmation gate sets phase ARMING initially and zero motor command before arming."""
+        self.assertIn("phase: 'ARMING'", self.server_code,
+            "Start route must set autoCalibState.phase to 'ARMING'")
+        self.assertIn("if (autoCalibState.phase === 'ARMING')", self.server_code,
+            "runAutoCalibTick must handle ARMING phase")
+
+    def test_53_arm_confirmation_timeout_triggers_arm_timeout_reason(self):
+        """53. Verify arm confirmation failure triggers arm_timeout stop reason."""
+        self.assertIn("stopAutoCalibration('arm_timeout'", self.server_code,
+            "Arm confirmation timeout must trigger stopAutoCalibration('arm_timeout')")
+
+    def test_54_loss_of_armed_state_during_active_test_stops_safely(self):
+        """54. Verify loss of armed state during active test triggers armed_lost stop reason."""
+        self.assertIn("stopAutoCalibration('armed_lost'", self.server_code,
+            "Mid-test disarm must trigger stopAutoCalibration('armed_lost')")
+
+    def test_55_stop_auto_calibration_preserves_requested_test_name(self):
+        """55. Verify stopAutoCalibration captures completed test identifier before resetting autoCalibState."""
+        self.assertIn("const completedTest = autoCalibState.test;", self.server_code,
+            "stopAutoCalibration must capture completedTest before resetting autoCalibState.test")
+        self.assertIn("Test '${completedTest}' stopped", self.server_code,
+            "Console stop log must log completedTest instead of null")
+
 
 if __name__ == '__main__':
     unittest.main()
+

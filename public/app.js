@@ -5619,7 +5619,7 @@ function openLowEndCalibration() {
 // ────────────────────────────────────────────────────────────
 // Closed-Loop Automatic Calibration UI Logic
 // ────────────────────────────────────────────────────────────
-let pendingAutoCalibTest = null;
+var pendingAutoCalibTest = null;
 let autoCalibPollingInterval = null;
 
 function promptAutoCalib(testType) {
@@ -5843,18 +5843,27 @@ function updateAutoCalibUI(status) {
       }
     });
 
-    setText('res-test-type', status.test || '-');
-    if (status.startPose) {
-      setText('res-start-pose', `(${status.startPose.x.toFixed(3)}, ${status.startPose.y.toFixed(3)}, ${status.startPose.yawDeg.toFixed(1)}°)`);
+    setText('res-test-type', (res && res.test) ? res.test : (status.test || '-'));
+    const startP = (res && res.startPose) || status.startPose;
+    if (startP) {
+      setText('res-start-pose', `(${startP.x.toFixed(3)}, ${startP.y.toFixed(3)}, ${startP.yawDeg.toFixed(1)}°)`);
     }
-    if (status.finalPose) {
-      setText('res-ending-pose', `(${status.finalPose.x.toFixed(3)}, ${status.finalPose.y.toFixed(3)}, ${status.finalPose.yawDeg.toFixed(1)}°)`);
+    const finalP = (res && res.finalPose) || status.finalPose;
+    if (finalP) {
+      setText('res-ending-pose', `(${finalP.x.toFixed(3)}, ${finalP.y.toFixed(3)}, ${finalP.yawDeg.toFixed(1)}°)`);
     }
-    setText('res-measured-dist', `${(status.reportedDistance || 0).toFixed(3)} m`);
-    setText('res-measured-yaw', `${(status.reportedYawDegrees || 0).toFixed(1)}°`);
-    setText('res-target-errors', `Dist Err: ${status.distanceError > 0 ? '+' : ''}${status.distanceError || 0}m | Yaw Err: ${status.yawErrorDegrees > 0 ? '+' : ''}${status.yawErrorDegrees || 0}°`);
-    setText('res-elapsed-time', `${((status.elapsedMs || 0) / 1000.0).toFixed(1)} s`);
-    setText('res-stop-reason', `${status.stopReason || '-'} ${status.fault ? '(' + status.fault + ')' : ''}`);
+    const rDist = (res && res.reportedDistance !== undefined) ? res.reportedDistance : (status.reportedDistance || 0);
+    setText('res-measured-dist', `${rDist.toFixed(3)} m`);
+    const rYaw = (res && res.reportedYawDegrees !== undefined) ? res.reportedYawDegrees : (status.reportedYawDegrees || 0);
+    setText('res-measured-yaw', `${rYaw.toFixed(1)}°`);
+    const dErr = (res && res.distanceError !== undefined) ? res.distanceError : (status.distanceError || 0);
+    const yErr = (res && res.yawErrorDegrees !== undefined) ? res.yawErrorDegrees : (status.yawErrorDegrees || 0);
+    setText('res-target-errors', `Dist Err: ${dErr > 0 ? '+' : ''}${dErr}m | Yaw Err: ${yErr > 0 ? '+' : ''}${yErr}°`);
+    const elMs = (res && res.elapsedMs !== undefined) ? res.elapsedMs : (status.elapsedMs || 0);
+    setText('res-elapsed-time', `${(elMs / 1000.0).toFixed(1)} s`);
+    const sReason = (res && res.stopReason) || status.stopReason || '-';
+    const sFault = (res && res.fault !== undefined) ? res.fault : status.fault;
+    setText('res-stop-reason', `${sReason} ${sFault ? '(' + sFault + ')' : ''}`);
   }
 }
 

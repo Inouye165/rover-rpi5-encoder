@@ -717,9 +717,9 @@ function startDriveKeepaliveLoop() {
 
     if (!serialPort || !serialPort.isOpen) return;
 
-    // Guard: Do not send conflicting background velocity commands during position/autotests
+    // Guard: Do not send conflicting background velocity commands during position/autotests or maintenance (including auto calibration)
     const isPositionActive = positionMode.some(m => m === true) || (autoTestStep > 0);
-    if (isPositionActive) return;
+    if (isMaintenance || isPositionActive) return;
 
     if (!isArmed) return;
 
@@ -2727,7 +2727,9 @@ function computeRepeatabilityStats(logs = []) {
 }
 
 function stopAutoCalibration(reason, detail) {
-  if (!autoCalibState.active && autoCalibState.phase !== 'RUNNING') return;
+  if (!autoCalibState.active && autoCalibState.phase !== 'RUNNING' && autoCalibState.phase !== 'ARMING') return;
+
+  const completedTest = autoCalibState.test;
 
   // 1. Immediately set zero motor speeds and send disarm command
   sendMotorSpeeds(0, 0, 0, 0);
@@ -2757,26 +2759,26 @@ function stopAutoCalibration(reason, detail) {
     autoCalibState.finalPose = { x: 0, y: 0, yaw: 0, yawDeg: 0 };
   }
 
-  if (autoCalibState.test === 'forward_1m') {
+  if (completedTest === 'forward_1m') {
     autoCalibState.distanceError = parseFloat((autoCalibState.reportedDistance - 1.000).toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat(autoCalibState.reportedYawDegrees.toFixed(2));
-  } else if (autoCalibState.test === 'turn_left_90') {
+  } else if (completedTest === 'turn_left_90') {
     autoCalibState.distanceError = parseFloat(autoCalibState.reportedDistance.toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat((autoCalibState.reportedYawDegrees - 90.0).toFixed(2));
-  } else if (autoCalibState.test === 'turn_right_90') {
+  } else if (completedTest === 'turn_right_90') {
     autoCalibState.distanceError = parseFloat(autoCalibState.reportedDistance.toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat((autoCalibState.reportedYawDegrees - (-90.0)).toFixed(2));
   }
 
   let passed = false;
   if (reason === 'target_reached') {
-    if (autoCalibState.test === 'forward_1m') {
+    if (completedTest === 'forward_1m') {
       passed = (autoCalibState.reportedDistance >= 0.97 && autoCalibState.reportedDistance <= 1.03) &&
                (Math.abs(autoCalibState.reportedYawDegrees) <= 5.0);
-    } else if (autoCalibState.test === 'turn_left_90') {
+    } else if (completedTest === 'turn_left_90') {
       passed = (autoCalibState.reportedYawDegrees >= 87.0 && autoCalibState.reportedYawDegrees <= 93.0) &&
                (autoCalibState.reportedDistance <= 0.10);
-    } else if (autoCalibState.test === 'turn_right_90') {
+    } else if (completedTest === 'turn_right_90') {
       passed = (autoCalibState.reportedYawDegrees >= -93.0 && autoCalibState.reportedYawDegrees <= -87.0) &&
                (autoCalibState.reportedDistance <= 0.10);
     }
@@ -2785,7 +2787,7 @@ function stopAutoCalibration(reason, detail) {
 
   // 4. Save lastResult for UI
   autoCalibState.lastResult = {
-    test: autoCalibState.test,
+    test: completedTest,
     phase: autoCalibState.phase,
     stopReason: autoCalibState.stopReason,
     fault: autoCalibState.fault,
@@ -2807,8 +2809,8 @@ function stopAutoCalibration(reason, detail) {
     id: `run-${nowTs}-${Math.floor(Math.random() * 1000)}`,
     timestamp: nowTs,
     isoDate: new Date(nowTs).toISOString(),
-    test: autoCalibState.test,
-    testType: autoCalibState.test,
+    test: completedTest,
+    testType: completedTest,
     phase: autoCalibState.phase,
     stopReason: autoCalibState.stopReason,
     fault: autoCalibState.fault,
@@ -2843,7 +2845,7 @@ function stopAutoCalibration(reason, detail) {
     autoCalibTimer = null;
   }
 
-  console.log(`[Auto Calib] Test '${autoCalibState.test}' stopped. Reason: ${reason}. Pass: ${passed}`);
+  console.log(`[Auto Calib] Test '${completedTest}' stopped. Reason: ${reason}. Pass: ${passed}`);
   broadcastAutoCalibStatus();
 }
 
@@ -2873,6 +2875,37 @@ async function runAutoCalibTick() {
   }
   if (!autoCalibState.safetyChecks.odomValid) {
     stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
+    return;
+  }
+
+  const isArmed = Boolean(latestNormalDriveStatus?.armed);
+  autoCalibState.armed = isArmed;
+
+  if (autoCalibState.phase === 'ARMING') {
+    if (isArmed) {
+      autoCalibState.phase = 'RUNNING';
+      autoCalibState.startedAt = now;
+      autoCalibState.elapsedMs = 0;
+      autoCalibState.startPose = {
+        x: latestRosOdom.x,
+        y: latestRosOdom.y,
+        yaw: latestRosOdom.yaw,
+        yawDeg: latestRosOdom.yaw_deg
+      };
+      autoCalibState.currentPose = { ...autoCalibState.startPose };
+    } else {
+      if (autoCalibState.elapsedMs > 2000) {
+        stopAutoCalibration('arm_timeout', 'Failed to confirm Normal Drive armed state within 2.0s');
+        return;
+      }
+      autoCalibState.motorCommand = [0, 0, 0, 0];
+      broadcastAutoCalibStatus();
+      return;
+    }
+  }
+
+  if (!isArmed) {
+    stopAutoCalibration('armed_lost', 'Normal Drive disarmed during active test');
     return;
   }
 
@@ -3050,7 +3083,7 @@ app.post('/api/calibration/auto/start', async (req, res) => {
     lastResult: null,
     active: true,
     test: test,
-    phase: 'RUNNING',
+    phase: 'ARMING',
     startedAt: Date.now(),
     elapsedMs: 0,
     target: test === 'forward_1m' ? { distanceM: 1.000, yawDeg: 0 } : (test === 'turn_left_90' ? { distanceM: 0, yawDeg: 90.0 } : { distanceM: 0, yawDeg: -90.0 }),
