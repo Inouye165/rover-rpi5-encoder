@@ -1433,9 +1433,25 @@ function parseTelemetryPacket(extType, data) {
       const diameter = data.readFloatLE(0);
       const separation = data.readFloatLE(4);
       WHEEL_RADIUS = diameter / 2.0;
-      TRACK_WIDTH = separation;
-      console.log(`[Config Sync] ESP32 reported wheel diameter = ${diameter.toFixed(4)} m, effective track width = ${separation.toFixed(4)} m`);
-      broadcast({ type: 'rover_params_sync', diameter, separation });
+
+      const targetTrackWidth = (calibrationDb && calibrationDb.currentConfig && typeof calibrationDb.currentConfig.effectiveTrackWidth === 'number')
+        ? calibrationDb.currentConfig.effectiveTrackWidth
+        : 0.718;
+
+      if (Math.abs(separation - targetTrackWidth) > 0.005) {
+        console.log(`[Config Sync] ESP32 reported separation ${separation.toFixed(4)}m; syncing to active calibrated track width ${targetTrackWidth.toFixed(4)}m...`);
+        TRACK_WIDTH = targetTrackWidth;
+        trackWidthSource = 'CALIBRATION_DB';
+        const diaBytes = floatToLEBytes(diameter || (WHEEL_RADIUS * 2.0));
+        const sepBytes = floatToLEBytes(targetTrackWidth);
+        sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+      } else {
+        TRACK_WIDTH = separation;
+        trackWidthSource = 'CALIBRATION_DB';
+      }
+
+      console.log(`[Config Sync] ESP32 reported wheel diameter = ${diameter.toFixed(4)} m, effective track width = ${TRACK_WIDTH.toFixed(4)} m`);
+      broadcast({ type: 'rover_params_sync', diameter, separation: TRACK_WIDTH });
     }
 
   } else if (extType === 0x38) { // TYPE_ROVER_TRIMS (Forward)
