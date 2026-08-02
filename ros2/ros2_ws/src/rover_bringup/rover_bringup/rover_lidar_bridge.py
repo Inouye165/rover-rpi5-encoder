@@ -141,8 +141,11 @@ def build_laserscan(
         if not math.isfinite(raw_deg) or not math.isfinite(dist_mm) or dist_mm <= 0:
             continue
 
+        # Convert native RPLIDAR Clockwise angleDeg into ROS standard Counter-Clockwise angle
+        ccw_deg = (360.0 - raw_deg) % 360.0
+
         # Apply angle offset and normalise to [0, 360)
-        adj_deg = (raw_deg + angle_offset_deg) % 360.0
+        adj_deg = (ccw_deg + angle_offset_deg) % 360.0
         if adj_deg < 0.0:
             adj_deg += 360.0
 

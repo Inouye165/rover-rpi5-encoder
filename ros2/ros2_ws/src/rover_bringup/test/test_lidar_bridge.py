@@ -119,11 +119,12 @@ class TestPayloadParsing:
 
     def test_parse_multiple_valid_points(self):
         """Several valid points populate the correct bins."""
+        # Native CW: 45° → 315, 180° → 180, 270.5° → 89
         pts = _make_points([(45.0, 2000), (180.0, 500), (270.5, 800)])
         msg = _default_scan(pts)
-        assert math.isclose(msg.ranges[45], 2.0, rel_tol=1e-6)
+        assert math.isclose(msg.ranges[315], 2.0, rel_tol=1e-6)
         assert math.isclose(msg.ranges[180], 0.5, rel_tol=1e-6)
-        assert math.isclose(msg.ranges[270], 0.8, rel_tol=1e-6)
+        assert math.isclose(msg.ranges[89], 0.8, rel_tol=1e-6)
 
     def test_empty_payload_returns_all_inf(self):
         """No points → all bins are inf."""
@@ -132,25 +133,25 @@ class TestPayloadParsing:
         assert len(msg.ranges) == _NUM_BINS
 
     def test_quality_maps_to_intensities(self):
-        """quality field is reflected in intensities at the matching bin."""
+        """quality field is reflected in intensities at the matching bin (native 90° CW → bin 270)."""
         pts = [{"angleDeg": 90.0, "distanceMm": 1500, "quality": 25}]
         msg = _default_scan(pts)
-        assert math.isclose(msg.intensities[90], 25.0, rel_tol=1e-6)
+        assert math.isclose(msg.intensities[270], 25.0, rel_tol=1e-6)
 
     def test_missing_quality_key_uses_zero(self):
-        """Points without a quality key get intensity 0 (not an error)."""
+        """Points without a quality key get intensity 0 (native 10° CW → bin 350)."""
         pts = [{"angleDeg": 10.0, "distanceMm": 1000}]
         msg = _default_scan(pts)
-        assert math.isclose(msg.intensities[10], 0.0, abs_tol=1e-9)
+        assert math.isclose(msg.intensities[350], 0.0, abs_tol=1e-9)
 
     def test_malformed_point_skipped(self):
-        """Dict with wrong types is silently skipped; valid neighbours still parsed."""
+        """Dict with wrong types is silently skipped; valid neighbours still parsed (native 45° CW → bin 315)."""
         pts = [
             {"angleDeg": "bad", "distanceMm": 1000, "quality": 0},  # bad type
             {"angleDeg": 45.0, "distanceMm": 1000, "quality": 31},   # good
         ]
         msg = _default_scan(pts)
-        assert math.isclose(msg.ranges[45], 1.0, rel_tol=1e-6)
+        assert math.isclose(msg.ranges[315], 1.0, rel_tol=1e-6)
 
 
 # ===========================================================================
@@ -204,13 +205,13 @@ class TestMmToMeters:
 
 class TestAngularOrdering:
     def test_output_bins_are_sequential(self):
-        """ranges[i] corresponds to angle i degrees; the grid is always sorted."""
+        """ranges[i] corresponds to angle i degrees CCW."""
         pts = _make_points([(350.0, 1000), (0.0, 1200), (90.0, 800)])
         msg = _default_scan(pts)
-        # bin 0 = 0°, bin 90 = 90°, bin 350 = 350°
+        # bin 0 = 0° (native 0°), bin 270 = 270° (native 90° CW), bin 10 = 10° (native 350° CW)
         assert math.isclose(msg.ranges[0], 1.2, rel_tol=1e-6)
-        assert math.isclose(msg.ranges[90], 0.8, rel_tol=1e-6)
-        assert math.isclose(msg.ranges[350], 1.0, rel_tol=1e-6)
+        assert math.isclose(msg.ranges[270], 0.8, rel_tol=1e-6)
+        assert math.isclose(msg.ranges[10], 1.0, rel_tol=1e-6)
 
     def test_num_bins_is_360(self):
         msg = _default_scan()
@@ -227,7 +228,7 @@ class TestAngularOrdering:
 
 class TestAngleOffset:
     def test_offset_shifts_bin(self):
-        """A 10° offset moves a reading at 0° into bin 10."""
+        """A 10° offset moves a reading at native 0° into bin 10."""
         pts = _make_points([(0.0, 1000)])
         msg = build_laserscan(
             points=pts,
@@ -243,8 +244,8 @@ class TestAngleOffset:
         assert math.isinf(msg.ranges[0])
 
     def test_negative_offset_wraps(self):
-        """A -10° offset on a reading at 5° → bin 355."""
-        pts = _make_points([(5.0, 1000)])
+        """A -10° offset on a reading at native 355° (CCW 5°) → bin 355."""
+        pts = _make_points([(355.0, 1000)])
         msg = build_laserscan(
             points=pts,
             stamp_sec=0, stamp_nanosec=0,
@@ -257,7 +258,7 @@ class TestAngleOffset:
         assert math.isclose(msg.ranges[355], 1.0, rel_tol=1e-6)
 
     def test_zero_offset_is_identity(self):
-        pts = _make_points([(45.0, 2000)])
+        pts = _make_points([(315.0, 2000)])
         msg = build_laserscan(
             points=pts,
             stamp_sec=0, stamp_nanosec=0,
@@ -301,7 +302,7 @@ class TestReverseScan:
         assert math.isclose(msg_fwd.angle_max, msg_rev.angle_min, abs_tol=1e-9)
 
     def test_reverse_scan_reverses_range_order(self):
-        """With reverse_scan, a point at angleDeg=0 ends up at the last bin."""
+        """With reverse_scan, a point at native angleDeg=0 ends up at the last bin."""
         pts = _make_points([(0.0, 1000)])
         msg = build_laserscan(
             points=pts, stamp_sec=0, stamp_nanosec=0,
@@ -319,9 +320,9 @@ class TestReverseScan:
 
 class TestMissingAngularBins:
     def test_empty_bins_are_inf(self):
-        pts = _make_points([(90.0, 1000)])
+        pts = _make_points([(270.0, 1000)])
         msg = _default_scan(pts)
-        # All bins except 90 should be inf
+        # All bins except 90 (from native 270 CW) should be inf
         for i, r in enumerate(msg.ranges):
             if i == 90:
                 assert math.isclose(r, 1.0, rel_tol=1e-6)
@@ -329,12 +330,54 @@ class TestMissingAngularBins:
                 assert math.isinf(r), f"Bin {i} should be inf, got {r}"
 
     def test_missing_bins_have_zero_intensity(self):
-        pts = _make_points([(90.0, 1000)])
+        pts = _make_points([(270.0, 1000)])
         msg = _default_scan(pts)
         for i, intens in enumerate(msg.intensities):
             if i != 90:
                 assert math.isclose(intens, 0.0, abs_tol=1e-9), \
                     f"Missing bin {i} intensity should be 0.0, got {intens}"
+
+
+# ===========================================================================
+# 8. Synthetic Physical Landmarks (Step 6 Verification)
+# ===========================================================================
+
+class TestSyntheticLandmarks:
+    """
+    Step 6 verification tests with synthetic physical landmarks.
+    Verify that native RPLIDAR CW angles map to correct ROS CCW bins:
+    - Front (native 0°) → ROS bin 0 (angle 0 rad, +X)
+    - Left (native 270° CW) → ROS bin 90 (angle +pi/2 rad, +Y)
+    - Rear (native 180° CW) → ROS bin 180 (angle pi rad, -X)
+    - Right (native 90° CW) → ROS bin 270 (angle -pi/2 rad, -Y)
+    """
+    def test_synthetic_landmarks_alignment(self):
+        pts = [
+            {"angleDeg": 0.0, "distanceMm": 1000, "quality": 40},    # Front: 1.0m
+            {"angleDeg": 270.0, "distanceMm": 1500, "quality": 35},  # Left: 1.5m
+            {"angleDeg": 180.0, "distanceMm": 2000, "quality": 30},  # Rear: 2.0m
+            {"angleDeg": 90.0, "distanceMm": 2500, "quality": 25},   # Right: 2.5m
+        ]
+        msg = _default_scan(pts)
+
+        # 1. Check range values & landmark bin placements
+        assert math.isclose(msg.ranges[0], 1.0, rel_tol=1e-6), "Front landmark must be at bin 0 (0 rad)"
+        assert math.isclose(msg.ranges[90], 1.5, rel_tol=1e-6), "Left landmark must be at bin 90 (+pi/2 rad)"
+        assert math.isclose(msg.ranges[180], 2.0, rel_tol=1e-6), "Rear landmark must be at bin 180 (pi rad)"
+        assert math.isclose(msg.ranges[270], 2.5, rel_tol=1e-6), "Right landmark must be at bin 270 (-pi/2 rad)"
+
+        # 2. Check intensities pairing
+        assert math.isclose(msg.intensities[0], 40.0, rel_tol=1e-6)
+        assert math.isclose(msg.intensities[90], 35.0, rel_tol=1e-6)
+        assert math.isclose(msg.intensities[180], 30.0, rel_tol=1e-6)
+        assert math.isclose(msg.intensities[270], 25.0, rel_tol=1e-6)
+
+        # 3. Check ranges count and metadata
+        assert len(msg.ranges) == 360
+        assert len(msg.intensities) == 360
+        assert math.isclose(msg.angle_min, 0.0, abs_tol=1e-9)
+        assert math.isclose(msg.angle_increment, math.radians(1.0), rel_tol=1e-6)
+        assert msg.angle_increment > 0.0, "angle_increment must be positive for CCW sweep"
 
 
 # ===========================================================================
@@ -382,10 +425,10 @@ class TestInvalidSamples:
         assert math.isclose(msg.ranges[0], 12.0, rel_tol=1e-6)
 
     def test_closer_of_two_same_bin_wins(self):
-        """Two points map to bin 45; the closer one (1.0m) should win."""
+        """Two points map to bin 45 (native 315° CW); the closer one (1.0m) should win."""
         pts = [
-            {"angleDeg": 45.0, "distanceMm": 1000, "quality": 31},
-            {"angleDeg": 45.9, "distanceMm": 2000, "quality": 31},
+            {"angleDeg": 315.0, "distanceMm": 1000, "quality": 31},
+            {"angleDeg": 314.1, "distanceMm": 2000, "quality": 31},
         ]
         msg = _default_scan(pts)
         assert math.isclose(msg.ranges[45], 1.0, rel_tol=1e-6)
@@ -646,7 +689,7 @@ class TestAllInfiniteScan:
         """One valid point surrounded by out-of-range readings: only valid bin is finite."""
         pts = [
             {"angleDeg": 0.0,   "distanceMm": 5,    "quality": 0},   # too close
-            {"angleDeg": 45.0,  "distanceMm": 2000, "quality": 31},  # valid: 2.0 m
+            {"angleDeg": 315.0, "distanceMm": 2000, "quality": 31},  # valid: 2.0 m (native 315° CW → bin 45)
             {"angleDeg": 90.0,  "distanceMm": 99999,"quality": 0},   # too far
         ]
         msg = _default_scan(pts)
