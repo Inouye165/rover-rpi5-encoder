@@ -459,7 +459,39 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("Test '${completedTest}' stopped", self.server_code,
             "Console stop log must log completedTest instead of null")
 
+    def test_56_single_flight_odom_promise_prevents_concurrent_fetches(self):
+        """56. Verify fetchRosOdometry uses single-flight odomFetchPromise to serialize HTTP requests."""
+        self.assertIn("let odomFetchPromise = null;", self.server_code,
+            "server.js must declare odomFetchPromise")
+        self.assertIn("if (odomFetchPromise) {\n    return odomFetchPromise;\n  }", self.server_code,
+            "fetchRosOdometry must return existing odomFetchPromise if in flight")
+
+    def test_57_last_good_sample_timestamp_prevents_failed_overwrites(self):
+        """57. Verify transient HTTP failures maintain valid = true if sample age is < 2000ms."""
+        self.assertIn("let lastOdomSuccessTime = 0;", self.server_code,
+            "server.js must track lastOdomSuccessTime")
+        self.assertIn("latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);", self.server_code,
+            "handleOdomError must preserve sample validity if cached sample is fresh")
+
+    def test_58_auto_calib_tick_in_flight_guard_prevents_overlapping_ticks(self):
+        """58. Verify runAutoCalibTick uses autoCalibTickInFlight guard to prevent overlapping ticks."""
+        self.assertIn("let autoCalibTickInFlight = false;", self.server_code,
+            "server.js must declare autoCalibTickInFlight guard")
+        self.assertIn("if (autoCalibTickInFlight) return;", self.server_code,
+            "runAutoCalibTick must check autoCalibTickInFlight guard")
+
+    def test_59_status_endpoint_does_not_launch_competing_odometry_fetches(self):
+        """59. Verify calibration status endpoint does not launch competing odometry fetches when active."""
+        self.assertIn("if (!autoCalibState.active) {\n    await fetchRosOdometry();\n  }", self.server_code,
+            "Status endpoint must skip fetchRosOdometry when autoCalibState.active is true")
+
+    def test_60_genuinely_stale_odometry_in_running_immediately_zeroes_motors(self):
+        """60. Verify genuinely stale odometry in RUNNING phase immediately commands zero motor output."""
+        self.assertIn("if (!isOdomFresh) {\n      sendMotorSpeeds(0, 0, 0, 0);", self.server_code,
+            "RUNNING phase must immediately sendMotorSpeeds(0,0,0,0) when odometry becomes stale")
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

@@ -2565,9 +2565,16 @@ let autoCalibState = {
 };
 
 let autoCalibTimer = null;
+let odomFetchPromise = null;
+let lastOdomSuccessTime = 0;
+let odomConsecutiveErrors = 0;
 
 function fetchRosOdometry() {
-  return new Promise((resolve) => {
+  if (odomFetchPromise) {
+    return odomFetchPromise;
+  }
+
+  odomFetchPromise = new Promise((resolve) => {
     const req = http.get('http://127.0.0.1:3003/api/odom', { timeout: 250 }, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
@@ -2575,28 +2582,51 @@ function fetchRosOdometry() {
         try {
           if (res.statusCode === 200) {
             const parsed = JSON.parse(data);
-            latestRosOdom = {
-              ...parsed,
-              fetchedAt: Date.now(),
-              valid: parsed.ok === true && (parsed.odometry_age_ms || 0) < 2000
-            };
-            return resolve(latestRosOdom);
+            if (parsed && parsed.ok === true) {
+              const fetchTime = Date.now();
+              if (fetchTime >= lastOdomSuccessTime) {
+                lastOdomSuccessTime = fetchTime;
+                odomConsecutiveErrors = 0;
+                latestRosOdom = {
+                  ...parsed,
+                  fetchedAt: fetchTime,
+                  valid: true,
+                  odometry_age_ms: parsed.odometry_age_ms || 0
+                };
+              }
+              return resolve(latestRosOdom);
+            }
           }
         } catch (e) {}
-        latestRosOdom.valid = false;
+        handleOdomError('Invalid JSON or status code non-200');
         resolve(latestRosOdom);
       });
     });
-    req.on('error', () => {
-      latestRosOdom.valid = false;
+
+    req.on('error', (err) => {
+      handleOdomError(err.message);
       resolve(latestRosOdom);
     });
+
     req.on('timeout', () => {
       req.destroy();
-      latestRosOdom.valid = false;
+      handleOdomError('Request timeout (250ms)');
       resolve(latestRosOdom);
     });
+
+    function handleOdomError(msg) {
+      odomConsecutiveErrors++;
+      const now = Date.now();
+      const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+      latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);
+      latestRosOdom.odometry_age_ms = sampleAge;
+      latestRosOdom.consecutive_errors = odomConsecutiveErrors;
+    }
+  }).finally(() => {
+    odomFetchPromise = null;
   });
+
+  return odomFetchPromise;
 }
 
 function broadcastAutoCalibStatus() {
@@ -2844,70 +2874,86 @@ function stopAutoCalibration(reason, detail) {
     clearInterval(autoCalibTimer);
     autoCalibTimer = null;
   }
+  autoCalibTickInFlight = false;
 
   console.log(`[Auto Calib] Test '${completedTest}' stopped. Reason: ${reason}. Pass: ${passed}`);
   broadcastAutoCalibStatus();
 }
 
+let autoCalibTickInFlight = false;
+
 async function runAutoCalibTick() {
   if (!autoCalibState.active) return;
+  if (autoCalibTickInFlight) return;
 
-  const now = Date.now();
-  autoCalibState.elapsedMs = now - autoCalibState.startedAt;
+  autoCalibTickInFlight = true;
+  try {
+    const now = Date.now();
+    autoCalibState.elapsedMs = now - autoCalibState.startedAt;
 
-  const encSnap = getEncoderSnapshot();
-  await fetchRosOdometry();
+    const encSnap = getEncoderSnapshot();
+    await fetchRosOdometry();
 
-  autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
-  autoCalibState.odomAgeMs = latestRosOdom.odometry_age_ms || 99999;
+    const odomAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+    const isOdomFresh = (lastOdomSuccessTime > 0 && odomAge < 2000);
 
-  autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
-  autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
-  autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
+    autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
+    autoCalibState.odomAgeMs = odomAge;
 
-  if (!autoCalibState.safetyChecks.serialConnected) {
-    stopAutoCalibration('serial_disconnected', 'Serial connection lost');
-    return;
-  }
-  if (!autoCalibState.safetyChecks.telemetryValid) {
-    stopAutoCalibration('telemetry_stale', 'Encoder telemetry stale or lost');
-    return;
-  }
-  if (!autoCalibState.safetyChecks.odomValid) {
-    stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
-    return;
-  }
+    autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
+    autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
+    autoCalibState.safetyChecks.odomValid = isOdomFresh;
 
-  const isArmed = Boolean(latestNormalDriveStatus?.armed);
-  autoCalibState.armed = isArmed;
-
-  if (autoCalibState.phase === 'ARMING') {
-    if (isArmed) {
-      autoCalibState.phase = 'RUNNING';
-      autoCalibState.startedAt = now;
-      autoCalibState.elapsedMs = 0;
-      autoCalibState.startPose = {
-        x: latestRosOdom.x,
-        y: latestRosOdom.y,
-        yaw: latestRosOdom.yaw,
-        yawDeg: latestRosOdom.yaw_deg
-      };
-      autoCalibState.currentPose = { ...autoCalibState.startPose };
-    } else {
-      if (autoCalibState.elapsedMs > 2000) {
-        stopAutoCalibration('arm_timeout', 'Failed to confirm Normal Drive armed state within 2.0s');
-        return;
-      }
-      autoCalibState.motorCommand = [0, 0, 0, 0];
-      broadcastAutoCalibStatus();
+    if (!autoCalibState.safetyChecks.serialConnected) {
+      stopAutoCalibration('serial_disconnected', 'Serial connection lost');
       return;
     }
-  }
+    if (!autoCalibState.safetyChecks.telemetryValid) {
+      stopAutoCalibration('telemetry_stale', 'Encoder telemetry stale or lost');
+      return;
+    }
 
-  if (!isArmed) {
-    stopAutoCalibration('armed_lost', 'Normal Drive disarmed during active test');
-    return;
-  }
+    const isArmed = Boolean(latestNormalDriveStatus?.armed);
+    autoCalibState.armed = isArmed;
+
+    if (autoCalibState.phase === 'ARMING') {
+      if (isArmed && isOdomFresh) {
+        autoCalibState.phase = 'RUNNING';
+        autoCalibState.startedAt = now;
+        autoCalibState.elapsedMs = 0;
+        autoCalibState.startPose = {
+          x: latestRosOdom.x,
+          y: latestRosOdom.y,
+          yaw: latestRosOdom.yaw,
+          yawDeg: latestRosOdom.yaw_deg
+        };
+        autoCalibState.currentPose = { ...autoCalibState.startPose };
+      } else {
+        if (autoCalibState.elapsedMs > 2000) {
+          if (!isArmed) {
+            stopAutoCalibration('arm_timeout', 'Failed to confirm Normal Drive armed state within 2.0s');
+          } else {
+            stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable during arming');
+          }
+          return;
+        }
+        autoCalibState.motorCommand = [0, 0, 0, 0];
+        broadcastAutoCalibStatus();
+        return;
+      }
+    }
+
+    if (!isArmed) {
+      stopAutoCalibration('armed_lost', 'Normal Drive disarmed during active test');
+      return;
+    }
+
+    if (!isOdomFresh) {
+      sendMotorSpeeds(0, 0, 0, 0);
+      autoCalibState.motorCommand = [0, 0, 0, 0];
+      stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
+      return;
+    }
 
   const start = autoCalibState.startPose;
   const curX = latestRosOdom.x;
@@ -3036,6 +3082,9 @@ async function runAutoCalibTick() {
   }
 
   broadcastAutoCalibStatus();
+  } finally {
+    autoCalibTickInFlight = false;
+  }
 }
 
 app.post('/api/calibration/auto/start', async (req, res) => {
@@ -3135,13 +3184,19 @@ app.post('/api/calibration/auto/clear_result', (req, res) => {
 });
 
 app.get('/api/calibration/auto/status', async (req, res) => {
-  await fetchRosOdometry();
+  if (!autoCalibState.active) {
+    await fetchRosOdometry();
+  }
   const encSnap = getEncoderSnapshot();
+  const now = Date.now();
+  const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+  const isOdomFresh = (lastOdomSuccessTime > 0 && sampleAge < 2000);
+
   autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
-  autoCalibState.odomAgeMs = latestRosOdom.odometry_age_ms || 99999;
+  autoCalibState.odomAgeMs = sampleAge;
   autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
   autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
-  autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
+  autoCalibState.safetyChecks.odomValid = isOdomFresh;
   // Synchronize armed from the authoritative normal-drive status before responding.
   autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed);
   res.json({ ok: true, status: autoCalibState });
