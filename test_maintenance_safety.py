@@ -603,6 +603,166 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         s7_right = process_server_command(c7_right)
         self.assertLess(s7_right['targetAngular'], 0.0)
 
+    def test_deploy_recreates_container_with_docker_compose(self):
+        """Regression test: Ensure deploy_yahboom.py uses docker compose --force-recreate instead of docker restart."""
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        self.assertIn('docker compose up -d --force-recreate', deploy_code)
+        self.assertNotIn('docker restart rover-ros2', deploy_code)
+
+    def test_numeric_parameter_comparison_accepts_full_precision(self):
+        """Regression test: Ensure active full-precision values are parsed and numerically compared with tolerance."""
+        import deploy_yahboom as deploy
+        
+        # Test full precision parsing
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 0.3408575433"), 0.3408575433, places=9)
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 1974.1666666667"), 1974.1666666667, places=9)
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 0.197"), 0.197, places=3)
+        
+        # Test numerical comparison helper
+        self.assertTrue(deploy.compare_numeric_param(0.3408575433, 0.3408575433, tolerance=1e-3))
+        self.assertTrue(deploy.compare_numeric_param(1974.1666666667, 1974.1666666667, tolerance=1e-3))
+        self.assertTrue(deploy.compare_numeric_param(0.197, 0.197, tolerance=1e-3))
+        self.assertFalse(deploy.compare_numeric_param(0.500, 0.3408575433, tolerance=1e-3))
+
+    def test_ros_verification_tolerates_delayed_node_discovery(self):
+        """Regression test: Ensure ROS verification retries and succeeds when node discovery is delayed."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        
+        # Sequence of exec_remote responses:
+        # 1. Container inspect -> running
+        # 2. Node list -> missing nodes
+        # 3. Container inspect -> running
+        # 4. Node list -> all 6 nodes
+        # 5..7. Parameter queries -> track_width, ticks_per_rev, physical_track_width
+        # 8..9. Topic echo queries -> /scan, /odom
+        all_nodes_str = "\n".join(deploy.EXPECTED_ROS_NODES)
+        
+        responses = [
+            (0, "true", ""),                                 # 1. container inspect
+            (0, "/base_link_to_laser_frame_publisher", ""),   # 2. incomplete node list
+            (0, "true", ""),                                 # 3. container inspect
+            (0, all_nodes_str, ""),                          # 4. complete node list
+            (0, "Double value is: 0.3408575433", ""),        # 5. param track_width_m
+            (0, "Double value is: 1974.1666666667", ""),     # 6. param ticks_per_revolution
+            (0, "Double value is: 0.197", ""),               # 7. param physical_track_width_m
+            (0, "header: stamp...", ""),                     # 8. topic /scan
+            (0, "header: stamp...", "")                      # 9. topic /odom
+        ]
+        
+        call_count = 0
+        def mock_exec_remote(client, cmd, password=None):
+            nonlocal call_count
+            resp = responses[min(call_count, len(responses) - 1)]
+            call_count += 1
+            return resp
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_remote):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=5, poll_interval=0.01)
+
+        self.assertTrue(success)
+        self.assertEqual(last_err, "")
+        self.assertGreater(len(history), 0, "History must contain failed attempt(s) prior to discovery completion")
+        self.assertEqual(history[0]['stage'], 'node_list')
+
+    def test_failure_messages_identify_missing_node_topic_or_parameter(self):
+        """Regression test: Ensure failure messages explicitly name missing node, topic, or parameter."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+
+        # 1. Test missing node failure message
+        incomplete_nodes = "\n".join(deploy.EXPECTED_ROS_NODES[:-1]) # Missing /rover_system_health
+        def mock_exec_missing_node(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, incomplete_nodes, ""
+            return 0, "", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_missing_node):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('/rover_system_health', last_err, "Failure message must explicitly identify missing node")
+
+        # 2. Test missing topic failure message (/scan)
+        all_nodes_str = "\n".join(deploy.EXPECTED_ROS_NODES)
+        def mock_exec_missing_topic(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, all_nodes_str, ""
+            if "physical_track_width_m" in cmd:
+                return 0, "Double value is: 0.197", ""
+            if "ticks_per_revolution" in cmd:
+                return 0, "Double value is: 1974.1666666667", ""
+            if "track_width_m" in cmd:
+                return 0, "Double value is: 0.3408575433", ""
+            if "/scan" in cmd:
+                return 1, "", "Timeout receiving /scan"
+            return 0, "header: stamp...", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_missing_topic):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('/scan', last_err, "Failure message must explicitly identify failed topic")
+
+        # 3. Test missing/invalid parameter failure message (ticks_per_revolution)
+        def mock_exec_bad_param(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, all_nodes_str, ""
+            if "ticks_per_revolution" in cmd:
+                return 1, "", "Parameter ticks_per_revolution not set"
+            if "physical_track_width_m" in cmd:
+                return 0, "Double value is: 0.197", ""
+            if "track_width_m" in cmd:
+                return 0, "Double value is: 0.3408575433", ""
+            return 0, "header: stamp...", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_bad_param):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('ticks_per_revolution', last_err, "Failure message must explicitly identify failed parameter")
+
+    def test_remote_git_cleanliness_checked_after_container_recreation(self):
+        """Regression test: Ensure remote Git cleanliness is verified after container recreation."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        recreate_idx = deploy_code.find('docker compose up -d --force-recreate')
+        git_clean_idx = deploy_code.rfind('verify_remote_git_clean')
+        
+        self.assertGreater(recreate_idx, -1)
+        self.assertGreater(git_clean_idx, recreate_idx, "verify_remote_git_clean must be called after container recreation")
+
+        # Test verify_remote_git_clean function directly
+        mock_client = MagicMock()
+        with unittest.mock.patch('deploy_yahboom.exec_remote', return_value=(0, " M ros2/compose.yaml\n", "")):
+            is_clean, err = deploy.verify_remote_git_clean(mock_client)
+            self.assertFalse(is_clean)
+            self.assertIn("ros2/compose.yaml", err)
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', return_value=(0, "", "")):
+            is_clean, err = deploy.verify_remote_git_clean(mock_client)
+            self.assertTrue(is_clean)
+            self.assertEqual(err, "")
+
 
 if __name__ == '__main__':
     unittest.main()
+
