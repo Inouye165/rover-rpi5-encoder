@@ -21,7 +21,6 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
-deploy_yahboom.py
 
 # Private rover documentation and credentials
 private/
