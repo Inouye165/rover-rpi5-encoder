@@ -153,7 +153,7 @@ let autoTestStep = 0; // 0=idle, 1..6 (3 cycles of fwd/bwd)
 let autoTestStartTicks = [0, 0, 0, 0];
 let currentAutoTestSpeedLimit = 25; // Dynamic cycle limits: 25, 45, 65
 let autoTestRunLogs = []; // Array of telemetry logs for data exports
-const TICKS_PER_REV = 937.2;
+const TICKS_PER_REV = 1974.1666666667;
 const KP_POSITION = 0.15;
 const MIN_POSITION_SPEED = 20;
 const MAX_POSITION_SPEED = 60;
@@ -180,7 +180,7 @@ let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
 let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
-let TRACK_WIDTH = 0.718;   // Effective skid-steer track width calibrated from floor tests (0.718 m)
+let TRACK_WIDTH = 0.3408575433; // Effective skid-steer track width calibrated from 360-deg floor tests (0.3408575433 m)
 const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
 let trackWidthSource = 'CALIBRATION_DB';
 
@@ -382,13 +382,23 @@ function loadCalibrationDb() {
           WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
         }
         const rawTrack = calibrationDb.currentConfig.effectiveTrackWidth;
-        if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 1.000 && Math.abs(rawTrack - 0.170) >= 0.005 && Math.abs(rawTrack - 0.382) >= 0.005) {
+        const storedTpr = calibrationDb.currentConfig.ticksPerRevolution;
+
+        if (Math.abs(rawTrack - 0.718) < 0.05 || !storedTpr || Math.abs(storedTpr - 937.2) < 10.0) {
+          console.log(`[Config DB Migration] Migrated legacy track width (${rawTrack}m) to corrected scale 0.3408575433m with 1974.1667 ticks/rev`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.3408575433;
+          calibrationDb.currentConfig.ticksPerRevolution = 1974.1666666667;
+          TRACK_WIDTH = 0.3408575433;
+          trackWidthSource = 'CALIBRATION_DB';
+          saveCalibrationDb();
+        } else if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 1.000) {
           TRACK_WIDTH = rawTrack;
           trackWidthSource = 'CALIBRATION_DB';
         } else {
-          console.log(`[Config DB Migration] Migrated uncalibrated/out-of-range track width (${rawTrack}m) to effective calibrated track width 0.718m`);
-          calibrationDb.currentConfig.effectiveTrackWidth = 0.718;
-          TRACK_WIDTH = 0.718;
+          console.log(`[Config DB Migration] Reset out-of-range track width (${rawTrack}m) to effective track width 0.3408575433m`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.3408575433;
+          calibrationDb.currentConfig.ticksPerRevolution = 1974.1666666667;
+          TRACK_WIDTH = 0.3408575433;
           trackWidthSource = 'CALIBRATION_DB';
           saveCalibrationDb();
         }
@@ -992,7 +1002,7 @@ function parseTelemetryPacket(extType, data) {
         const dLeftTicks = (dm1 + dm3) / 2.0;
         const dRightTicks = (dm2 + dm4) / 2.0;
 
-        const TICKS_PER_REV = 937.2;
+        const TICKS_PER_REV = 1974.1666666667;
         const M_PER_TICK = (2.0 * Math.PI * WHEEL_RADIUS) / TICKS_PER_REV;
 
         const dLeftDist = dLeftTicks * M_PER_TICK;
@@ -1436,7 +1446,7 @@ function parseTelemetryPacket(extType, data) {
 
       const targetTrackWidth = (calibrationDb && calibrationDb.currentConfig && typeof calibrationDb.currentConfig.effectiveTrackWidth === 'number')
         ? calibrationDb.currentConfig.effectiveTrackWidth
-        : 0.718;
+        : 0.3408575433;
 
       if (Math.abs(separation - targetTrackWidth) > 0.005) {
         console.log(`[Config Sync] ESP32 reported separation ${separation.toFixed(4)}m; syncing to active calibrated track width ${targetTrackWidth.toFixed(4)}m...`);

@@ -37,15 +37,15 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertEqual(self.node.odom_frame, 'odom')
         self.assertEqual(self.node.base_frame, 'base_link')
         self.assertEqual(self.node.publish_rate_hz, 20.0)
-        self.assertEqual(self.node.get_parameter('track_width_m').get_parameter_value().double_value, 0.718)
+        self.assertAlmostEqual(self.node.get_parameter('track_width_m').get_parameter_value().double_value, 0.3408575433, places=6)
         self.assertEqual(self.node.get_parameter('physical_track_width_m').get_parameter_value().double_value, 0.197)
-        self.assertEqual(self.node.get_parameter('ticks_per_revolution').get_parameter_value().double_value, 1894.0)
+        self.assertAlmostEqual(self.node.get_parameter('ticks_per_revolution').get_parameter_value().double_value, 1974.1666666667, places=4)
         self.assertEqual(self.node.get_parameter('wheel_diameter_m').get_parameter_value().double_value, 0.065)
-        self.assertEqual(self.node.kinematics.track_width_m, 0.718)
+        self.assertAlmostEqual(self.node.kinematics.track_width_m, 0.3408575433, places=6)
         self.assertEqual(self.node.kinematics.physical_track_width_m, 0.197)
 
     def test_runtime_config_and_server_defaults_match_code_default(self):
-        """Verify that server.js, app.js, and launch/node default parameter track_width_m is 0.718."""
+        """Verify that server.js, app.js, and launch/node default parameter track_width_m is 0.3408575433."""
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 
         # Check server.js
@@ -53,13 +53,13 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         if os.path.exists(server_js):
             with open(server_js, 'r', encoding='utf-8') as f:
                 content = f.read()
-            self.assertIn('let TRACK_WIDTH = 0.718;', content)
-            self.assertIn('effectiveTrackWidth: 0.718', content)
+            self.assertIn('let TRACK_WIDTH = 0.3408575433;', content)
+            self.assertIn('effectiveTrackWidth = 0.3408575433', content)
             self.assertIn('const PHYSICAL_TRACK_WIDTH_M = 0.197;', content)
 
         # Check node default declared parameter
         param_val = self.node.get_parameter('track_width_m').get_parameter_value().double_value
-        self.assertEqual(param_val, 0.718, f"Runtime launch/node default track_width_m must be 0.718, got {param_val}")
+        self.assertAlmostEqual(param_val, 0.3408575433, places=6)
 
     @patch('requests.Session.get')
     def test_poll_and_publish_success(self, mock_get):

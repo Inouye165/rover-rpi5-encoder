@@ -132,7 +132,7 @@ volatile bool positionModeM2 = false;
 volatile bool positionModeM3 = false;
 volatile bool positionModeM4 = false;
 
-const float TICKS_PER_REV = 937.2; // 11 PPR * 21.3 ratio * 4x multiplier
+const float TICKS_PER_REV = 1974.1666666667f; // Measured 4-wheel average ticks/revolution (1974.1667)
 const float KP_POSITION = 0.4;
 const int MIN_POSITION_PWM = 15;
 const int MAX_POSITION_PWM = 65;

@@ -2,7 +2,7 @@
 # nav2_params.yaml - ROS 2 Navigation2 Parameters for Yahboom Pi 5 Rover
 # ==============================================================================
 # Configured for ROS 2 Jazzy, RPLIDAR C1 (/scan), Encoder Odometry (/odom),
-# effective skid-steer track width 0.718m (physical 0.197m), and planar 2D navigation.
+# effective skid-steer track width 0.340858m (physical 0.197m), 1974.1667 ticks/rev, and planar 2D navigation.
 # ==============================================================================
 
 amcl:

@@ -1,15 +1,18 @@
 {
   "currentConfig": {
     "wheelDiameter": 0.065,
-    "effectiveTrackWidth": 0.718
+    "effectiveTrackWidth": 0.3408575433,
+    "ticksPerRevolution": 1974.1666666667
   },
   "proposedConfig": {
     "wheelDiameter": null,
-    "effectiveTrackWidth": null
+    "effectiveTrackWidth": null,
+    "ticksPerRevolution": null
   },
   "previousConfig": {
     "wheelDiameter": null,
-    "effectiveTrackWidth": null
+    "effectiveTrackWidth": null,
+    "ticksPerRevolution": null
   },
   "fwdTrim": {
     "left": 1.0,

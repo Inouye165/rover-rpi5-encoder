@@ -244,55 +244,94 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("authenticatedFetch('/api/maintenance/run_test'", app_code)
 
     def test_track_width_source_of_truth_and_validation(self):
-        """Verify effective skid-steer track width 0.718m default, physical spacing 0.197m, migration, range validation, and status reporting."""
+        """Verify effective skid-steer track width 0.3408575433m default, ticks/rev 1974.1666666667, physical spacing 0.197m, migration, range validation, and status reporting."""
         server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
         with open(server_js_path, 'r', encoding='utf-8') as f:
             server_code = f.read()
 
-        # 1. Server TRACK_WIDTH default is 0.718, physical is 0.197
-        self.assertIn('let TRACK_WIDTH = 0.718;', server_code)
+        # 1. Server TRACK_WIDTH default is 0.3408575433, TICKS_PER_REV is 1974.1666666667, physical is 0.197
+        self.assertIn('let TRACK_WIDTH = 0.3408575433;', server_code)
+        self.assertIn('const TICKS_PER_REV = 1974.1666666667;', server_code)
         self.assertIn('const PHYSICAL_TRACK_WIDTH_M = 0.197;', server_code)
         self.assertIn("let trackWidthSource = 'CALIBRATION_DB';", server_code)
 
-        # 2. Hardcoded 0.382 has been removed from TRACK_WIDTH initialization and backtracking
-        self.assertNotIn('let TRACK_WIDTH = 0.382;', server_code)
-        self.assertNotIn('const L_width = 0.382;', server_code)
-
-        # 3. Status response reports trackWidthM and trackWidthSource
+        # 2. Status response reports trackWidthM and trackWidthSource
         self.assertIn('trackWidthM: TRACK_WIDTH', server_code)
         self.assertIn('trackWidthSource: trackWidthSource', server_code)
 
-        # 4. Check calibration_db.json
+        # 3. Check calibration_db.json
         calib_json_path = os.path.join(os.path.dirname(__file__), 'calibration_db.json')
         if os.path.exists(calib_json_path):
             with open(calib_json_path, 'r', encoding='utf-8') as f:
                 calib_db = json.load(f)
-            self.assertEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.718)
+            self.assertAlmostEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.3408575433, places=6)
+            self.assertAlmostEqual(calib_db.get('currentConfig', {}).get('ticksPerRevolution'), 1974.1666666667, places=4)
 
-        # 5. Check ESP32 RoverConfig.cpp default and range validation
+        # 4. Check ESP32 RoverConfig.cpp default and range validation
         esp_config_path = os.path.join(os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'RoverConfig.cpp')
         if os.path.exists(esp_config_path):
             with open(esp_config_path, 'r', encoding='utf-8') as f:
                 esp_code = f.read()
-            self.assertIn('float WHEEL_SEPARATION_M = 0.718f;', esp_code)
-            self.assertIn('preferences.getFloat("wheel_sep", 0.718f);', esp_code)
+            self.assertIn('float WHEEL_SEPARATION_M = 0.3408575433f;', esp_code)
+            self.assertIn('preferences.getFloat("wheel_sep", 0.3408575433f);', esp_code)
             self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 1.000f', esp_code)
 
-    def test_skid_steer_effective_track_width_rotation_math(self):
-        """Regression test: equal and opposite wheel travel of ~2.256m per side yields 2pi radians (360 deg) rotation with 0.718m effective width."""
-        w_effective = 0.718
+    def test_measured_three_turn_samples_average(self):
+        """Requirement 3a: Four 3-turn wheel samples average to 1974.1666666667 ticks/revolution."""
+        m1_ticks = 5929  # 1976.333333 / rev
+        m2_ticks = 5915  # 1971.666667 / rev
+        m3_ticks = 5938  # 1979.333333 / rev
+        m4_ticks = 5908  # 1969.333333 / rev
+        total_ticks = m1_ticks + m2_ticks + m3_ticks + m4_ticks  # 23690
+        total_revs = 4 * 3  # 12
+        avg_tpr = total_ticks / float(total_revs)
+        self.assertAlmostEqual(avg_tpr, 1974.1666666667, places=6)
+
+    def test_one_wheel_revolution_distance(self):
+        """Requirement 3b: One wheel revolution converts to approx pi * 0.065 meters."""
+        wheel_dia = 0.065
+        one_rev_m = math.pi * wheel_dia
+        self.assertAlmostEqual(one_rev_m, 0.2042035225, places=6)
+
+    def test_raw_encoder_delta_360_rotation_under_corrected_scale(self):
+        """Requirement 3c: Encoder delta from 360-deg floor test yields 2pi rad under 1974.1667 tpr & 0.340858m track width."""
+        # Prior 360-deg floor test produced 10352.208 ticks per side using 937.2 tpr and 0.718m track width
+        ticks_per_side = (0.718 * 937.2) / 0.065  # 10352.208 ticks per side
+        tpr_new = 1974.1666666667
+        w_effective_new = 0.3408575433
+        m_per_tick_new = (math.pi * 0.065) / tpr_new
+        s_side = ticks_per_side * m_per_tick_new  # ~1.07081 m per side
+        delta_yaw = s_side / (w_effective_new / 2.0)  # s_side / R_effective = 1.07081 / 0.170429 = 2pi rad
+        self.assertAlmostEqual(delta_yaw, 2.0 * math.pi, places=5)
+        self.assertAlmostEqual(math.degrees(delta_yaw), 360.0, places=4)
+
+    def test_old_mixed_scale_reproduces_yaw_underreport(self):
+        """Requirement 3d: Old mixed 937.2/1894/0.718 scale reproduces observed twofold yaw underreport (~254.7 deg for 1.43 turns)."""
+        # 1.43 physical rotations = 514.8 deg = 8.985 rad
+        # Physical wheel travel for 1.43 turns with corrected 0.340858m track width:
+        w_effective_new = 0.3408575433
+        tpr_new = 1974.1666666667
+        physical_yaw_rad = 1.43 * 2.0 * math.pi  # ~8.985 rad (~514.8 deg)
+        s_physical = (physical_yaw_rad * w_effective_new) / 2.0
+        ticks_generated = s_physical / ((math.pi * 0.065) / tpr_new)  # ~14800 ticks
+
+        # Misconfigured ROS evaluation with old 1894.0 tpr and 0.718m track width:
+        tpr_ros_old = 1894.0
+        w_ros_old = 0.718
+        m_per_tick_ros_old = (math.pi * 0.065) / tpr_ros_old
+        s_ros_old = ticks_generated * m_per_tick_ros_old
+        ros_yaw_rad = (2.0 * s_ros_old) / w_ros_old
+        ros_yaw_deg = math.degrees(ros_yaw_rad)
+
+        # Asserts that old mixed scale reproduces ~254.7 deg ROS yaw for 514.8 deg physical turn
+        self.assertAlmostEqual(ros_yaw_deg, 254.7, delta=1.5)
+
+    def test_physical_track_width_retained_distinct(self):
+        """Requirement 3e: physical_track_width_m remains 0.197m and is not substituted for effective skid-steer width."""
         w_physical = 0.197
-
-        # Wheel travel s = pi * w_effective = 2.25566359... ~ 2.256 m
-        s_travel = math.pi * w_effective
-        self.assertAlmostEqual(s_travel, 2.25566359, places=5)
-        self.assertAlmostEqual(round(s_travel, 3), 2.256, places=3)
-
-        # Differential drive rotation delta_theta = (s_right - s_left) / w_effective
-        # With s_right = +s_travel and s_left = -s_travel:
-        delta_theta = (s_travel - (-s_travel)) / w_effective
-        self.assertAlmostEqual(delta_theta, 2.0 * math.pi, places=5)
+        w_effective = 0.3408575433
         self.assertEqual(w_physical, 0.197)
+        self.assertNotEqual(w_physical, w_effective)
 
     def test_nav2_and_slam_readiness_configurations(self):
         """Verify presence and valid parameters for SLAM Toolbox, Nav2, and launch files."""

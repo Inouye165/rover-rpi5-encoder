@@ -94,7 +94,7 @@ let gpDeadmanPressed = false;
 
 // Calibration variables
 let currentWheelDiameter = 0.065; // synchronized from ESP32 parameters
-let currentTrackWidth = 0.718;    // synchronized from ESP32 parameters / calibration_db (effective track width)
+let currentTrackWidth = 0.3408575433;    // synchronized from ESP32 parameters / calibration_db (effective track width)
 const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
 let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 'out_and_back'
 let testTimer = null;
@@ -626,7 +626,7 @@ function handleServerMessage(msg) {
           const deltaM3 = msg.m3 - prevM3;
           const deltaM4 = msg.m4 - prevM4;
 
-          const tpr = 937.2;
+          const tpr = 1974.1666666667;
           const rpm1 = (deltaM1 / dt) / tpr * 60.0;
           const rpm2 = (deltaM2 / dt) / tpr * 60.0;
           const rpm3 = (deltaM3 / dt) / tpr * 60.0;
@@ -5723,10 +5723,10 @@ function updateCalibrationReadiness() {
 
   // Active parameter readouts
   const diaVal = currentWheelDiameter || 0.065;
-  const trackVal = currentTrackWidth || 0.718;
+  const trackVal = currentTrackWidth || 0.3408575433;
   const wheelDiaMm = diaVal * 1000.0;
   const trackMm = trackVal * 1000.0;
-  const ticksPerRev = 1894.0;
+  const ticksPerRev = 1974.1666666667;
 
   if (elDia) elDia.textContent = `${diaVal.toFixed(3)} m (${wheelDiaMm.toFixed(1)} mm)`;
   if (elTrack) elTrack.textContent = `${trackVal.toFixed(3)} m (${trackMm.toFixed(1)} mm)`;

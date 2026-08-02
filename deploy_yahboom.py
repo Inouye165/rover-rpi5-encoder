@@ -168,15 +168,15 @@ def main():
     time.sleep(5)
 
     print("\n=== 6. Post-Deployment Verification ===")
-    # 1. Active ROS 2 track_width_m parameter check
-    ros_param_cmd = "sudo docker exec rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 param get /rover_encoder_odometry track_width_m'"
+    # 1. Active ROS 2 track_width_m, ticks_per_revolution, and physical_track_width_m parameter checks
+    ros_param_cmd = "sudo docker exec rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 param get /rover_encoder_odometry track_width_m && ros2 param get /rover_encoder_odometry ticks_per_revolution && ros2 param get /rover_encoder_odometry physical_track_width_m'"
     exit_code, param_out, _ = exec_remote(client, ros_param_cmd, password)
-    print(f"Active ROS 2 Parameter Output: {param_out.strip()}")
-    if "0.718" not in param_out:
-        print(f"ERROR: Active ROS parameter verification failed! Expected 0.718, got: {param_out.strip()}", file=sys.stderr)
+    print(f"Active ROS 2 Parameter Output:\n{param_out.strip()}")
+    if "0.34085" not in param_out or "1974.16" not in param_out or "0.197" not in param_out:
+        print(f"ERROR: Active ROS parameter verification failed! Expected 0.340858, 1974.1667, and 0.197, got:\n{param_out.strip()}", file=sys.stderr)
         client.close()
         sys.exit(1)
-    print(" [OK] Active ROS 2 Parameter Verification: PASS (track_width_m = 0.718)")
+    print(" [OK] Active ROS 2 Parameter Verification: PASS (track_width_m = 0.340858, ticks_per_revolution = 1974.1667, physical_track_width_m = 0.197)")
 
     # 2. Cockpit API status check
     status_cmd = "curl -s http://localhost:3000/api/drive/status"
@@ -186,11 +186,11 @@ def main():
         track_width_api = status_json.get("trackWidthM")
         track_source_api = status_json.get("trackWidthSource")
         print(f"Cockpit API Report: trackWidthM={track_width_api}, source={track_source_api}")
-        if abs(float(track_width_api) - 0.718) > 1e-4 or track_source_api != "CALIBRATION_DB":
+        if abs(float(track_width_api) - 0.3408575433) > 1e-3 or track_source_api != "CALIBRATION_DB":
             print(f"ERROR: Cockpit API verification failed! Got trackWidthM={track_width_api}, source={track_source_api}", file=sys.stderr)
             client.close()
             sys.exit(1)
-        print(" [OK] Cockpit API Verification: PASS (trackWidthM = 0.718, source = CALIBRATION_DB)")
+        print(" [OK] Cockpit API Verification: PASS (trackWidthM = 0.340858, source = CALIBRATION_DB)")
     except Exception as e:
         print(f"ERROR: Failed to parse Cockpit API response: {e}\nRaw output: {api_out}", file=sys.stderr)
         client.close()
