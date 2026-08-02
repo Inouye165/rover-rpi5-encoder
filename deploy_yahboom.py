@@ -204,6 +204,14 @@ def main():
         client.close()
         sys.exit(1)
 
+    # 4. Post-deployment Git Working Tree Clean Check
+    exit_code, git_status_out, _ = exec_remote(client, "cd /home/ron/yahboom-encoder && git status --porcelain")
+    if git_status_out.strip():
+        print(f"ERROR: Remote Pi git checkout contains unexpected untracked/modified files after deployment:\n{git_status_out.strip()}", file=sys.stderr)
+        client.close()
+        sys.exit(1)
+    print(" [OK] Remote Pi Git Clean Verification: PASS (0 untracked or modified files)")
+
     client.close()
 
     print("\n==================================================")

@@ -26,8 +26,8 @@ sudo -n docker run --rm \
     --memory-swap=3g \
     --pids-limit=256 \
     -v "$(pwd)/ros2_ws:/ros2_ws" \
-    -v "$(pwd)/compose.yaml:/ros2_ws/compose.yaml:ro" \
-    -v "$(pwd)/Dockerfile:/ros2_ws/Dockerfile:ro" \
+    -v "$(pwd)/compose.yaml:/ros2_meta/compose.yaml:ro" \
+    -v "$(pwd)/Dockerfile:/ros2_meta/Dockerfile:ro" \
     -w /ros2_ws \
     rover-ros2:jazzy \
     /bin/bash -c "

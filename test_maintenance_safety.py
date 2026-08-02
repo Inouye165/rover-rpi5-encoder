@@ -333,6 +333,32 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertEqual(w_physical, 0.197)
         self.assertNotEqual(w_physical, w_effective)
 
+    def test_no_unintended_docker_mount_placeholders_in_ros2_ws(self):
+        """Regression test: Ensure compose.yaml and build.sh do not bind-mount files into /ros2_ws/ (which creates 0-byte host files)."""
+        repo_root = os.path.dirname(__file__)
+        compose_path = os.path.join(repo_root, 'ros2', 'compose.yaml')
+        build_sh_path = os.path.join(repo_root, 'ros2', 'scripts', 'build.sh')
+
+        if os.path.exists(compose_path):
+            with open(compose_path, 'r', encoding='utf-8') as f:
+                compose_content = f.read()
+            self.assertNotIn(':/ros2_ws/compose.yaml', compose_content)
+            self.assertNotIn(':/ros2_ws/Dockerfile', compose_content)
+
+        if os.path.exists(build_sh_path):
+            with open(build_sh_path, 'r', encoding='utf-8') as f:
+                build_sh_content = f.read()
+            self.assertNotIn(':/ros2_ws/compose.yaml', build_sh_content)
+            self.assertNotIn(':/ros2_ws/Dockerfile', build_sh_content)
+
+    def test_deploy_script_post_deployment_git_clean_check(self):
+        """Regression test: Ensure deploy_yahboom.py includes post-deployment git status --porcelain clean verification."""
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        self.assertIn('git status --porcelain', deploy_code)
+
     def test_nav2_and_slam_readiness_configurations(self):
         """Verify presence and valid parameters for SLAM Toolbox, Nav2, and launch files."""
         bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')

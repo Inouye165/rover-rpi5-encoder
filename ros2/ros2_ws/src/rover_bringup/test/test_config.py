@@ -3,6 +3,7 @@ import pytest
 
 def find_file(filename):
     search_paths = [
+        os.path.join('/ros2_meta', filename),
         os.path.join('/ros2_ws', filename),
         os.path.join(os.path.dirname(__file__), '..', '..', '..', filename),
         os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', filename),

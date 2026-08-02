@@ -21,8 +21,8 @@ services:
       - ./volumes/logs:/ros2_ws/logs
       - ./volumes/rosbag:/ros2_ws/rosbag
       - ./scripts:/ros2_ws/scripts:ro
-      - ./compose.yaml:/ros2_ws/compose.yaml:ro
-      - ./Dockerfile:/ros2_ws/Dockerfile:ro
+      - ./compose.yaml:/ros2_meta/compose.yaml:ro
+      - ./Dockerfile:/ros2_meta/Dockerfile:ro
     command: |
       bash -c '
       if [ ! -f /ros2_ws/install/setup.bash ]; then
