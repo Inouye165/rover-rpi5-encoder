@@ -532,10 +532,24 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("cmdSource = 'NONE';", self.server_code,
             "stopAutoCalibration must reset cmdSource to NONE")
 
+    def test_68_auto_calib_tuned_defaults_and_env_overrides(self):
+        """68. Verify source defaults are 0.80 and 0.50 rad/s and remain environment-overridable."""
+        self.assertIn("AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;", self.server_code,
+            "AUTO_CALIB_TURN_RADPS default in server.js must be 0.80")
+        self.assertIn("AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;", self.server_code,
+            "AUTO_CALIB_MIN_TURN_RADPS default in server.js must be 0.50")
+
+    def test_69_geometry_constants_integrity(self):
+        """69. Verify calibration geometry constants (TICKS_PER_REV, effective & physical track width) remain unchanged."""
+        self.assertIn("const TICKS_PER_REV = 1974.1666666667;", self.server_code,
+            "TICKS_PER_REV must equal 1974.1666666667")
+        self.assertIn("TRACK_WIDTH = 0.3408575433;", self.server_code,
+            "Effective track width must equal 0.3408575433 m")
+        self.assertIn("const PHYSICAL_TRACK_WIDTH_M = 0.197;", self.server_code,
+            "Physical track width must equal 0.197 m")
+
 
 if __name__ == '__main__':
     unittest.main()
-
-
 
 

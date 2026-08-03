@@ -2905,8 +2905,8 @@ function stopAutoCalibration(reason, detail) {
 
 const AUTO_CALIB_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_FORWARD_MPS) || 0.15;
 const AUTO_CALIB_MIN_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_MIN_FORWARD_MPS) || 0.05;
-const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.40;
-const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.15;
+const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;
+const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;
 
 let autoCalibTickInFlight = false;
 

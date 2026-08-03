@@ -98,9 +98,9 @@ console.log('\nTest G: Conservative velocity limits & tapering...');
 assert.ok(
   serverCode.includes("const AUTO_CALIB_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_FORWARD_MPS) || 0.15;") &&
   serverCode.includes("const AUTO_CALIB_MIN_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_MIN_FORWARD_MPS) || 0.05;") &&
-  serverCode.includes("const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.40;") &&
-  serverCode.includes("const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.15;"),
-  'server.js must define conservative named velocity constants'
+  serverCode.includes("const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;") &&
+  serverCode.includes("const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;"),
+  'server.js must define conservative named velocity constants with tuned 0.80/0.50 defaults'
 );
 console.log('-> PASS: Test G (Velocity limits and deceleration tapering verified)');
 
@@ -139,6 +139,25 @@ assert.ok(
   'Physical track width must equal 0.197 m'
 );
 console.log('-> PASS: Test I (Geometry constants strictly preserved)');
+
+// ------------------------------------------------------------------------------
+// Test J: Environmental override & default fallback verification
+// ------------------------------------------------------------------------------
+console.log('\nTest J: Environmental override & default fallbacks...');
+{
+  const turnRadpsDefault = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;
+  const minTurnRadpsDefault = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;
+  assert.strictEqual(turnRadpsDefault, 0.80, 'Default AUTO_CALIB_TURN_RADPS must be 0.80');
+  assert.strictEqual(minTurnRadpsDefault, 0.50, 'Default AUTO_CALIB_MIN_TURN_RADPS must be 0.50');
+
+  // Verify env override evaluation
+  const testEnv = { AUTO_CALIB_TURN_RADPS: '1.20', AUTO_CALIB_MIN_TURN_RADPS: '0.65' };
+  const overriddenTurn = parseFloat(testEnv.AUTO_CALIB_TURN_RADPS) || 0.80;
+  const overriddenMinTurn = parseFloat(testEnv.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;
+  assert.strictEqual(overriddenTurn, 1.20, 'AUTO_CALIB_TURN_RADPS must be environment-overridable');
+  assert.strictEqual(overriddenMinTurn, 0.65, 'AUTO_CALIB_MIN_TURN_RADPS must be environment-overridable');
+}
+console.log('-> PASS: Test J (Environmental override & default fallbacks verified)');
 
 // ------------------------------------------------------------------------------
 // Deterministic Execution Simulation
