@@ -51,19 +51,20 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("ROS odometry is unavailable or stale.", self.server_code)
 
     def test_5_forward_test_commands_straight_forward(self):
-        """5. Verify forward test commands all four wheels forward ([spd, spd, spd, spd])."""
+        """5. Verify forward test sets targetLinear > 0 and targetAngular = 0.0."""
         self.assertIn("testType === 'forward_1m'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [spd, spd, spd, spd]", self.server_code)
+        self.assertIn("targetLinear = parseFloat(lin.toFixed(3));", self.server_code)
+        self.assertIn("targetAngular = 0.0;", self.server_code)
 
     def test_6_left_test_commands_in_place_left_rotation(self):
-        """6. Verify left turn test commands in-place left spin ([-spd, spd, -spd, spd])."""
+        """6. Verify left turn test sets targetLinear = 0.0 and positive targetAngular."""
         self.assertIn("testType === 'turn_left_90'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [-spd, spd, -spd, spd]", self.server_code)
+        self.assertIn("targetAngular = parseFloat(ang.toFixed(3));", self.server_code)
 
     def test_7_right_test_commands_in_place_right_rotation(self):
-        """7. Verify right turn test commands in-place right spin ([spd, -spd, spd, -spd])."""
+        """7. Verify right turn test sets targetLinear = 0.0 and negative targetAngular."""
         self.assertIn("testType === 'turn_right_90'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [spd, -spd, spd, -spd]", self.server_code)
+        self.assertIn("targetAngular = parseFloat((-ang).toFixed(3));", self.server_code)
 
     def test_8_target_reached_causes_zero_command_and_disarm(self):
         """8. Verify target reached causes zero motor speed and disarm."""
@@ -486,9 +487,9 @@ class TestAutoCalibrationSafety(unittest.TestCase):
             "Status endpoint must skip fetchRosOdometry when autoCalibState.active is true")
 
     def test_60_genuinely_stale_odometry_in_running_immediately_zeroes_motors(self):
-        """60. Verify genuinely stale odometry in RUNNING phase immediately commands zero motor output."""
-        self.assertIn("if (!isOdomFresh) {\n      sendMotorSpeeds(0, 0, 0, 0);", self.server_code,
-            "RUNNING phase must immediately sendMotorSpeeds(0,0,0,0) when odometry becomes stale")
+        """60. Verify genuinely stale odometry in RUNNING phase immediately triggers stopAutoCalibration('odom_stale')."""
+        self.assertIn("if (!isOdomFresh) {\n      stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');", self.server_code,
+            "RUNNING phase must immediately stop with odom_stale when odometry becomes stale")
 
     def test_61_source_odometry_age_check_required_before_updating_last_success(self):
         """61. Verify fetchRosOdometry checks parsed.odometry_age_ms < 2000 before updating lastOdomSuccessTime."""
@@ -507,9 +508,34 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("if (isArmed && isOdomFresh) {", self.server_code,
             "ARMING transition must require both isArmed and isOdomFresh")
 
+    def test_64_cmd_source_auto_calib_ownership(self):
+        """64. Verify cmdSource = 'AUTO_CALIB' is set when starting an automatic calibration test."""
+        self.assertIn("cmdSource = 'AUTO_CALIB';", self.server_code,
+            "server.js must set cmdSource = 'AUTO_CALIB' during auto calibration")
+
+    def test_65_keepalive_loop_transmits_auto_calib_func_motion(self):
+        """65. Verify startDriveKeepaliveLoop isMaintenance allows autoCalibState.active to send FUNC_MOTION."""
+        self.assertIn("const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';", self.server_code,
+            "isMaintenance must not block drive keepalive during auto calibration")
+
+    def test_66_conservative_auto_calib_velocity_constants_defined(self):
+        """66. Verify named conservative velocity constants are defined."""
+        self.assertIn("AUTO_CALIB_FORWARD_MPS", self.server_code,
+            "AUTO_CALIB_FORWARD_MPS constant must be defined")
+        self.assertIn("AUTO_CALIB_TURN_RADPS", self.server_code,
+            "AUTO_CALIB_TURN_RADPS constant must be defined")
+
+    def test_67_stop_auto_calibration_zeros_targets_and_sends_func_motion_zero(self):
+        """67. Verify stopAutoCalibration zeros targets, clears cmdSource, and sends zero FUNC_MOTION packet."""
+        self.assertIn("targetLinear = 0.0;\n  targetAngular = 0.0;", self.server_code,
+            "stopAutoCalibration must zero linear and angular targets")
+        self.assertIn("cmdSource = 'NONE';", self.server_code,
+            "stopAutoCalibration must reset cmdSource to NONE")
+
 
 if __name__ == '__main__':
     unittest.main()
+
 
 
 

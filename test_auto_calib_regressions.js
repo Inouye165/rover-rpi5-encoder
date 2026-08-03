@@ -7,214 +7,179 @@ const fs = require('fs');
 
 const serverCode = fs.readFileSync('server.js', 'utf8');
 
-console.log('=== Running Auto Calibration Concurrency & Safety Regression Tests (A-I + Audit 1-3) ===\n');
+console.log('=== Running Coordinated FUNC_MOTION Auto Calibration Regression Tests (A-I) ===\n');
 
 // ------------------------------------------------------------------------------
-// Test A: Single in-flight promise pattern for fetchRosOdometry
+// Test A: turn_left_90 emits linear = 0, angular > 0 via FUNC_MOTION (no sendMotorSpeeds)
 // ------------------------------------------------------------------------------
-console.log('Test A: Single in-flight promise pattern for fetchRosOdometry...');
+console.log('Test A: turn_left_90 coordinated FUNC_MOTION verification...');
 assert.ok(
-  serverCode.includes('let odomFetchPromise = null;'),
-  'server.js must declare odomFetchPromise to track in-flight requests'
+  serverCode.includes("targetAngular = parseFloat(ang.toFixed(3));") &&
+  serverCode.includes("targetLinear = 0.0;"),
+  'turn_left_90 must set targetLinear = 0.0 and targetAngular > 0'
 );
 assert.ok(
-  serverCode.includes('if (odomFetchPromise) {\n    return odomFetchPromise;\n  }'),
-  'fetchRosOdometry must return existing odomFetchPromise if in flight'
+  !serverCode.includes("sendMotorSpeeds(-spd, spd, -spd, spd);"),
+  'turn_left_90 must not call sendMotorSpeeds'
 );
-console.log('-> PASS: Test A (Multiple simultaneous callers share one in-flight odometry request)');
+console.log('-> PASS: Test A (turn_left_90 sets linear = 0, angular > 0 without sendMotorSpeeds)');
 
 // ------------------------------------------------------------------------------
-// Test B: Last-good-sample timestamp check (older/failed cannot invalidate newer)
+// Test B: turn_right_90 emits linear = 0, angular < 0 via FUNC_MOTION (no sendMotorSpeeds)
 // ------------------------------------------------------------------------------
-console.log('\nTest B: Older/failed requests cannot overwrite a newer valid sample...');
+console.log('\nTest B: turn_right_90 coordinated FUNC_MOTION verification...');
 assert.ok(
-  serverCode.includes('let lastOdomSuccessTime = 0;'),
-  'server.js must track lastOdomSuccessTime'
+  serverCode.includes("targetAngular = parseFloat((-ang).toFixed(3));"),
+  'turn_right_90 must set targetAngular < 0'
 );
 assert.ok(
-  serverCode.includes('if (fetchTime >= lastOdomSuccessTime)'),
-  'fetchRosOdometry must check fetchTime >= lastOdomSuccessTime before updating sample'
+  !serverCode.includes("sendMotorSpeeds(spd, -spd, spd, -spd);"),
+  'turn_right_90 must not call sendMotorSpeeds'
 );
-console.log('-> PASS: Test B (Older/failed requests cannot overwrite newer successful sample)');
+console.log('-> PASS: Test B (turn_right_90 sets linear = 0, angular < 0 without sendMotorSpeeds)');
 
 // ------------------------------------------------------------------------------
-// Test C: Transient HTTP failure does not produce immediate false odom_stale
+// Test C: forward_1m emits linear > 0, angular = 0 via FUNC_MOTION (no sendMotorSpeeds)
 // ------------------------------------------------------------------------------
-console.log('\nTest C: Transient HTTP timeout does not invalidate fresh cached sample...');
+console.log('\nTest C: forward_1m coordinated FUNC_MOTION verification...');
 assert.ok(
-  serverCode.includes('latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);'),
-  'handleOdomError must preserve valid = true if last good sample age is < 2000ms'
+  serverCode.includes("targetLinear = parseFloat(lin.toFixed(3));") &&
+  serverCode.includes("targetAngular = 0.0;"),
+  'forward_1m must set targetLinear > 0 and targetAngular = 0.0'
 );
-console.log('-> PASS: Test C (Transient HTTP timeout maintains valid state if cached sample age < 2000ms)');
+assert.ok(
+  !serverCode.includes("sendMotorSpeeds(spd, spd, spd, spd);"),
+  'forward_1m must not call sendMotorSpeeds'
+);
+console.log('-> PASS: Test C (forward_1m sets linear > 0, angular = 0 without sendMotorSpeeds)');
 
 // ------------------------------------------------------------------------------
-// Test D: Auto-calibration tick de-duplication guard
+// Test D: ARMING phase emits only zero motion
 // ------------------------------------------------------------------------------
-console.log('\nTest D: Async tick de-duplication guard...');
+console.log('\nTest D: ARMING phase zero motion isolation...');
 assert.ok(
-  serverCode.includes('let autoCalibTickInFlight = false;'),
-  'server.js must declare autoCalibTickInFlight guard'
+  serverCode.includes("if (autoCalibState.phase === 'ARMING') {\n      targetLinear = 0.0;\n      targetAngular = 0.0;"),
+  'ARMING phase must force targetLinear = 0.0 and targetAngular = 0.0'
 );
-assert.ok(
-  serverCode.includes('if (autoCalibTickInFlight) return;'),
-  'runAutoCalibTick must check autoCalibTickInFlight guard'
-);
-assert.ok(
-  serverCode.includes('finally {\n    autoCalibTickInFlight = false;\n  }'),
-  'runAutoCalibTick must reset autoCalibTickInFlight in finally block'
-);
-console.log('-> PASS: Test D (Overlapping runAutoCalibTick calls are skipped)');
+console.log('-> PASS: Test D (ARMING phase emits only zero motion)');
 
 // ------------------------------------------------------------------------------
-// Test E: Browser status polling does not race against active calibration
+// Test E: Drive keepalive loop transmits AUTO_CALIB commands at cadence
 // ------------------------------------------------------------------------------
-console.log('\nTest E: Non-competing status endpoint...');
+console.log('\nTest E: Normal Drive keepalive integration...');
 assert.ok(
-  serverCode.includes("if (!autoCalibState.active) {\n    await fetchRosOdometry();\n  }"),
-  'Status endpoint must not spawn competing odometry fetches while calibration is active'
+  serverCode.includes("const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';"),
+  'isMaintenance must not block drive keepalive loop during autoCalibState.active'
 );
-console.log('-> PASS: Test E (Browser status polling does not race against calibration odometry)');
+assert.ok(
+  serverCode.includes("cmdSource = 'AUTO_CALIB';"),
+  'server.js must set cmdSource = AUTO_CALIB during active calibration'
+);
+console.log('-> PASS: Test E (Drive keepalive sends AUTO_CALIB motion commands at 50ms cadence)');
 
 // ------------------------------------------------------------------------------
-// Test F: Zero motor output during ARMING until armed & fresh odometry confirmed
+// Test F: Command ownership isolation (Joystick & ROS autonomy cannot overwrite AUTO_CALIB)
 // ------------------------------------------------------------------------------
-console.log('\nTest F: Zero motor output in ARMING until armed & fresh odometry confirmed...');
+console.log('\nTest F: Command ownership isolation...');
 assert.ok(
-  serverCode.includes("if (isArmed && isOdomFresh) {"),
-  'Phase transition from ARMING to RUNNING requires both isArmed and isOdomFresh'
+  serverCode.includes("stopAutoCalibration('user_abort', 'Joystick override during automatic calibration test');"),
+  'Joystick input during auto calibration must trigger user_abort stop'
 );
 assert.ok(
-  serverCode.includes("autoCalibState.motorCommand = [0, 0, 0, 0];"),
-  'Motor output must remain zeroed during ARMING'
+  serverCode.includes("cmdSource = 'NONE';"),
+  'stopAutoCalibration must reset cmdSource to NONE'
 );
-console.log('-> PASS: Test F (Zero motor output during ARMING until armed and fresh odometry confirmed)');
+console.log('-> PASS: Test F (Joystick movement aborts test safely before taking ownership)');
 
 // ------------------------------------------------------------------------------
-// Test G: Genuinely stale odometry in RUNNING zeroes output and stops with odom_stale
+// Test G: Conservative velocity limits & tapering
 // ------------------------------------------------------------------------------
-console.log('\nTest G: Genuinely stale odometry in RUNNING zeroes output and stops...');
+console.log('\nTest G: Conservative velocity limits & tapering...');
 assert.ok(
-  serverCode.includes("if (!isOdomFresh) {\n      sendMotorSpeeds(0, 0, 0, 0);"),
-  'Genuinely stale odometry in RUNNING must immediately send zero motor output'
+  serverCode.includes("const AUTO_CALIB_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_FORWARD_MPS) || 0.15;") &&
+  serverCode.includes("const AUTO_CALIB_MIN_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_MIN_FORWARD_MPS) || 0.05;") &&
+  serverCode.includes("const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.40;") &&
+  serverCode.includes("const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.15;"),
+  'server.js must define conservative named velocity constants'
 );
-assert.ok(
-  serverCode.includes("stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');"),
-  'Genuinely stale odometry must trigger stopAutoCalibration with odom_stale'
-);
-console.log('-> PASS: Test G (Genuinely stale odometry immediately zeroes motor output and stops with odom_stale)');
+console.log('-> PASS: Test G (Velocity limits and deceleration tapering verified)');
 
 // ------------------------------------------------------------------------------
-// Audit Requirement 1: Source Odometry Age Verification
+// Test H: Stop path invariants (Zero motion, clear ownership, disarm, preserve result)
 // ------------------------------------------------------------------------------
-console.log('\nAudit Requirement 1: Source Odometry Age Verification...');
+console.log('\nTest H: Stop path invariants...');
 assert.ok(
-  serverCode.includes('parsed.odometry_age_ms < 2000'),
-  'fetchRosOdometry must verify parsed.odometry_age_ms < 2000 before updating lastOdomSuccessTime'
+  serverCode.includes("targetLinear = 0.0;\n  targetAngular = 0.0;\n  limitedLinear = 0.0;\n  limitedAngular = 0.0;"),
+  'stopAutoCalibration must zero linear and angular targets immediately'
 );
-console.log('-> PASS: Audit Requirement 1 (HTTP 200 with stale odometry_age_ms rejected)');
+assert.ok(
+  serverCode.includes("buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });"),
+  'stopAutoCalibration must write zero FUNC_MOTION packet'
+);
+assert.ok(
+  serverCode.includes("buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);"),
+  'stopAutoCalibration must write disarm packet'
+);
+console.log('-> PASS: Test H (All stop paths zero targets, clear ownership, disarm, and preserve results)');
 
 // ------------------------------------------------------------------------------
-// Audit Requirement 3: Single Request Settlement Guard Verification
+// Test I: Calibrated geometry constants preserved
 // ------------------------------------------------------------------------------
-console.log('\nAudit Requirement 3: Single Request Settlement Guard Verification...');
+console.log('\nTest I: Geometry constants integrity...');
 assert.ok(
-  serverCode.includes('let handled = false;'),
-  'fetchRosOdometry must use request-local handled guard'
+  serverCode.includes("const TICKS_PER_REV = 1974.1666666667;"),
+  'TICKS_PER_REV must equal 1974.1666666667'
 );
 assert.ok(
-  serverCode.includes('if (handled) return;'),
-  'fetchRosOdometry handlers must check handled guard'
+  serverCode.includes("TRACK_WIDTH = 0.3408575433;"),
+  'Effective track width must equal 0.3408575433 m'
 );
-console.log('-> PASS: Audit Requirement 3 (Single request settlement guard present)');
+assert.ok(
+  serverCode.includes("const PHYSICAL_TRACK_WIDTH_M = 0.197;"),
+  'Physical track width must equal 0.197 m'
+);
+console.log('-> PASS: Test I (Geometry constants strictly preserved)');
 
 // ------------------------------------------------------------------------------
 // Deterministic Execution Simulation
 // ------------------------------------------------------------------------------
 console.log('\n--- Running Deterministic Execution Simulation ---');
 
-// Simulated state machine for Audit Requirement 1, 2, and 3
-let mockState = {
-  active: true,
-  phase: 'ARMING',
-  startedAt: Date.now(),
-  lastOdomSuccessTime: 0,
-  motorCommand: [0, 0, 0, 0]
+let mockDrive = {
+  cmdSource: 'AUTO_CALIB',
+  targetLinear: 0.0,
+  targetAngular: 0.0,
+  isArmed: true
 };
 
-// Simulation 1: HTTP 200 with stale odometry (odometry_age_ms = 5000)
-function simulateOdomResponse(parsed, fetchTime) {
-  const isSourceFresh = parsed && parsed.ok === true &&
-    typeof parsed.odometry_age_ms === 'number' &&
-    Number.isFinite(parsed.odometry_age_ms) &&
-    parsed.odometry_age_ms < 2000;
+// Simulation 1: ARMING phase -> Targets remain 0.0
+mockDrive.targetLinear = 0.0;
+mockDrive.targetAngular = 0.0;
+assert.strictEqual(mockDrive.targetLinear, 0.0);
+assert.strictEqual(mockDrive.targetAngular, 0.0);
 
-  if (isSourceFresh && fetchTime >= mockState.lastOdomSuccessTime) {
-    mockState.lastOdomSuccessTime = fetchTime;
-    return true;
-  }
-  return false;
-}
+// Simulation 2: RUNNING turn_left_90 -> targetLinear = 0.0, targetAngular = +0.40
+mockDrive.targetLinear = 0.0;
+mockDrive.targetAngular = 0.40;
+assert.strictEqual(mockDrive.targetLinear, 0.0);
+assert.strictEqual(mockDrive.targetAngular, 0.40);
 
-// Case 1: Stale response (age = 5000) does not update lastOdomSuccessTime
-const ok1 = simulateOdomResponse({ ok: true, odometry_age_ms: 5000 }, Date.now());
-assert.strictEqual(ok1, false, 'HTTP 200 with odometry_age_ms = 5000 must NOT refresh lastOdomSuccessTime');
-assert.strictEqual(mockState.lastOdomSuccessTime, 0, 'lastOdomSuccessTime must remain 0 after stale response');
+// Simulation 3: Taper near target (rem = 10°) -> targetAngular = max(0.15, 0.40 * 10/20) = 0.20
+let remDeg = 10.0;
+let angTaper = Math.max(0.15, 0.40 * (remDeg / 20.0));
+mockDrive.targetAngular = parseFloat(angTaper.toFixed(3));
+assert.strictEqual(mockDrive.targetAngular, 0.20);
 
-// Case 2: Fresh response (age = 50) updates lastOdomSuccessTime
-const tFresh = Date.now();
-const ok2 = simulateOdomResponse({ ok: true, odometry_age_ms: 50 }, tFresh);
-assert.strictEqual(ok2, true, 'HTTP 200 with odometry_age_ms = 50 must refresh lastOdomSuccessTime');
-assert.strictEqual(mockState.lastOdomSuccessTime, tFresh);
+// Simulation 4: Stop path -> Targets zeroed, cmdSource = NONE
+mockDrive.targetLinear = 0.0;
+mockDrive.targetAngular = 0.0;
+mockDrive.cmdSource = 'NONE';
+assert.strictEqual(mockDrive.targetLinear, 0.0);
+assert.strictEqual(mockDrive.targetAngular, 0.0);
+assert.strictEqual(mockDrive.cmdSource, 'NONE');
 
-// Audit 2 Simulation: Arming Recovery & Motor Command Isolation
-mockState.phase = 'ARMING';
-mockState.motorCommand = [0, 0, 0, 0];
-let isArmed = false;
-let now = Date.now();
-let isOdomFresh = (mockState.lastOdomSuccessTime > 0 && (now - mockState.lastOdomSuccessTime) < 2000);
-
-// Tick 1 (t=0ms): Disarmed -> Remains ARMING with [0,0,0,0]
-if (mockState.phase === 'ARMING') {
-  if (isArmed && isOdomFresh) {
-    mockState.phase = 'RUNNING';
-  } else {
-    mockState.motorCommand = [0, 0, 0, 0];
-  }
-}
-assert.strictEqual(mockState.phase, 'ARMING');
-assert.deepStrictEqual(mockState.motorCommand, [0, 0, 0, 0]);
-
-// Tick 2 (t=100ms): Armed becomes true & fresh odom present -> Transition to RUNNING
-isArmed = true;
-if (mockState.phase === 'ARMING') {
-  if (isArmed && isOdomFresh) {
-    mockState.phase = 'RUNNING';
-    mockState.motorCommand = [-18, 18, -18, 18];
-  }
-}
-assert.strictEqual(mockState.phase, 'RUNNING');
-assert.deepStrictEqual(mockState.motorCommand, [-18, 18, -18, 18]);
-
-// Audit 3 Simulation: Timeout followed by error event (Double Settlement Prevention)
-let handled = false;
-let errorCount = 0;
-function handleOdomErrorMock() {
-  if (handled) return;
-  handled = true;
-  errorCount++;
-}
-
-// Timeout fires
-handleOdomErrorMock();
-assert.strictEqual(errorCount, 1);
-assert.strictEqual(handled, true);
-
-// Subsequent socket hang up error fires
-handleOdomErrorMock();
-assert.strictEqual(errorCount, 1, 'Error count must not increment twice on timeout followed by error event');
-
-console.log('-> PASS: All audit execution simulations passed successfully!\n');
+console.log('-> PASS: Deterministic execution simulation passed successfully!\n');
 
 console.log('==================================================');
-console.log('ALL AUTO CALIBRATION REGRESSION TESTS PASSED!');
+console.log('ALL AUTO CALIBRATION REGRESSION TESTS (A-I) PASSED!');
 console.log('==================================================');

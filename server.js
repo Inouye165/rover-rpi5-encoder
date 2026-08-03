@@ -654,7 +654,7 @@ function startDriveKeepaliveLoop() {
     }
 
     const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
-    const isMaintenance = (typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE';
+    const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';
 
     // Safety events bypass slew limiter and force immediate zero
     if (!isArmed || isMaintenance) {
@@ -2778,9 +2778,15 @@ function stopAutoCalibration(reason, detail) {
 
   const completedTest = autoCalibState.test;
 
-  // 1. Immediately set zero motor speeds and send disarm command
+  // 1. Immediately set zero linear/angular targets & send zero FUNC_MOTION and disarm commands
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
   sendMotorSpeeds(0, 0, 0, 0);
   if (serialPort && serialPort.isOpen) {
+    const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+    serialPort.write(motionPkt);
     const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
     serialPort.write(disarmPkt);
   }
@@ -2897,6 +2903,11 @@ function stopAutoCalibration(reason, detail) {
   broadcastAutoCalibStatus();
 }
 
+const AUTO_CALIB_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_FORWARD_MPS) || 0.15;
+const AUTO_CALIB_MIN_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_MIN_FORWARD_MPS) || 0.05;
+const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.40;
+const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.15;
+
 let autoCalibTickInFlight = false;
 
 async function runAutoCalibTick() {
@@ -2905,6 +2916,7 @@ async function runAutoCalibTick() {
 
   autoCalibTickInFlight = true;
   try {
+    cmdSource = 'AUTO_CALIB';
     const now = Date.now();
     autoCalibState.elapsedMs = now - autoCalibState.startedAt;
 
@@ -2934,6 +2946,12 @@ async function runAutoCalibTick() {
     autoCalibState.armed = isArmed;
 
     if (autoCalibState.phase === 'ARMING') {
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+      limitedLinear = 0.0;
+      limitedAngular = 0.0;
+      autoCalibState.motorCommand = [0, 0, 0, 0];
+
       if (isArmed && isOdomFresh) {
         autoCalibState.phase = 'RUNNING';
         autoCalibState.startedAt = now;
@@ -2954,7 +2972,6 @@ async function runAutoCalibTick() {
           }
           return;
         }
-        autoCalibState.motorCommand = [0, 0, 0, 0];
         broadcastAutoCalibStatus();
         return;
       }
@@ -2966,137 +2983,141 @@ async function runAutoCalibTick() {
     }
 
     if (!isOdomFresh) {
-      sendMotorSpeeds(0, 0, 0, 0);
-      autoCalibState.motorCommand = [0, 0, 0, 0];
       stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
       return;
     }
 
-  const start = autoCalibState.startPose;
-  const curX = latestRosOdom.x;
-  const curY = latestRosOdom.y;
-  const curYaw = latestRosOdom.yaw;
-  const curYawDeg = latestRosOdom.yaw_deg;
+    const start = autoCalibState.startPose;
+    const curX = latestRosOdom.x;
+    const curY = latestRosOdom.y;
+    const curYaw = latestRosOdom.yaw;
+    const curYawDeg = latestRosOdom.yaw_deg;
 
-  autoCalibState.currentPose = { x: curX, y: curY, yaw: curYaw, yawDeg: curYawDeg };
+    autoCalibState.currentPose = { x: curX, y: curY, yaw: curYaw, yawDeg: curYawDeg };
 
-  const dx = curX - start.x;
-  const dy = curY - start.y;
-  const distMoved = Math.sqrt(dx * dx + dy * dy);
+    const dx = curX - start.x;
+    const dy = curY - start.y;
+    const distMoved = Math.sqrt(dx * dx + dy * dy);
 
-  let yawDiffRad = curYaw - start.yaw;
-  while (yawDiffRad > Math.PI) yawDiffRad -= 2 * Math.PI;
-  while (yawDiffRad < -Math.PI) yawDiffRad += 2 * Math.PI;
-  const yawDiffDeg = yawDiffRad * (180.0 / Math.PI);
+    let yawDiffRad = curYaw - start.yaw;
+    while (yawDiffRad > Math.PI) yawDiffRad -= 2 * Math.PI;
+    while (yawDiffRad < -Math.PI) yawDiffRad += 2 * Math.PI;
+    const yawDiffDeg = yawDiffRad * (180.0 / Math.PI);
 
-  const testType = autoCalibState.test;
+    const testType = autoCalibState.test;
 
-  if (testType === 'forward_1m') {
-    const forwardDist = dx * Math.cos(start.yaw) + dy * Math.sin(start.yaw);
-    autoCalibState.reportedDistance = forwardDist;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: forwardDist, yawDeg: yawDiffDeg };
+    if (testType === 'forward_1m') {
+      const forwardDist = dx * Math.cos(start.yaw) + dy * Math.sin(start.yaw);
+      autoCalibState.reportedDistance = forwardDist;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: forwardDist, yawDeg: yawDiffDeg };
 
-    if (autoCalibState.elapsedMs > 12000) {
-      stopAutoCalibration('timeout', 'Forward 1m test exceeded 12s timeout');
-      return;
-    }
-    if (Math.abs(yawDiffDeg) > 15.0) {
-      stopAutoCalibration('yaw_limit', `Yaw deviation (${yawDiffDeg.toFixed(1)}°) exceeded 15° limit`);
-      return;
-    }
-    if (forwardDist < -0.05) {
-      stopAutoCalibration('unexpected_direction', 'Rover moving backward unexpectedly');
-      return;
-    }
-    if (forwardDist >= 1.050) {
-      stopAutoCalibration('target_reached', '1.050m hard stop reached');
-      return;
-    }
+      if (autoCalibState.elapsedMs > 12000) {
+        stopAutoCalibration('timeout', 'Forward 1m test exceeded 12s timeout');
+        return;
+      }
+      if (Math.abs(yawDiffDeg) > 15.0) {
+        stopAutoCalibration('yaw_limit', `Yaw deviation (${yawDiffDeg.toFixed(1)}°) exceeded 15° limit`);
+        return;
+      }
+      if (forwardDist < -0.05) {
+        stopAutoCalibration('unexpected_direction', 'Rover moving backward unexpectedly');
+        return;
+      }
+      if (forwardDist >= 1.050) {
+        stopAutoCalibration('target_reached', '1.050m hard stop reached');
+        return;
+      }
 
-    const rem = 1.000 - forwardDist;
-    if (rem <= 0 || forwardDist >= 1.000) {
-      stopAutoCalibration('target_reached', 'Target 1.000m reached');
-      return;
-    }
+      const rem = 1.000 - forwardDist;
+      if (rem <= 0 || forwardDist >= 1.000) {
+        stopAutoCalibration('target_reached', 'Target 1.000m reached');
+        return;
+      }
 
-    let spd = 18;
-    if (rem < 0.25) {
-      spd = Math.max(10, Math.round(18 * (rem / 0.25)));
-    }
-    autoCalibState.motorCommand = [spd, spd, spd, spd];
-    sendMotorSpeeds(spd, spd, spd, spd);
+      let lin = AUTO_CALIB_FORWARD_MPS;
+      if (rem < 0.25) {
+        lin = Math.max(AUTO_CALIB_MIN_FORWARD_MPS, AUTO_CALIB_FORWARD_MPS * (rem / 0.25));
+      }
+      targetLinear = parseFloat(lin.toFixed(3));
+      targetAngular = 0.0;
+      const vx = Math.round(targetLinear * 1000);
+      autoCalibState.motorCommand = [vx, 0, 0, 0];
 
-  } else if (testType === 'turn_left_90') {
-    autoCalibState.reportedDistance = distMoved;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
+    } else if (testType === 'turn_left_90') {
+      autoCalibState.reportedDistance = distMoved;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
 
-    if (autoCalibState.elapsedMs > 8000) {
-      stopAutoCalibration('timeout', 'Turn Left 90° test exceeded 8s timeout');
-      return;
-    }
-    if (distMoved > 0.20) {
-      stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
-      return;
-    }
-    if (yawDiffDeg < -5.0) {
-      stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
-      return;
-    }
-    if (yawDiffDeg >= 95.0) {
-      stopAutoCalibration('target_reached', '95° hard angle stop reached');
-      return;
-    }
+      if (autoCalibState.elapsedMs > 8000) {
+        stopAutoCalibration('timeout', 'Turn Left 90° test exceeded 8s timeout');
+        return;
+      }
+      if (distMoved > 0.20) {
+        stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
+        return;
+      }
+      if (yawDiffDeg < -5.0) {
+        stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
+        return;
+      }
+      if (yawDiffDeg >= 95.0) {
+        stopAutoCalibration('target_reached', '95° hard angle stop reached');
+        return;
+      }
 
-    const rem = 90.0 - yawDiffDeg;
-    if (rem <= 0 || yawDiffDeg >= 90.0) {
-      stopAutoCalibration('target_reached', 'Target +90° angle reached');
-      return;
-    }
+      const rem = 90.0 - yawDiffDeg;
+      if (rem <= 0 || yawDiffDeg >= 90.0) {
+        stopAutoCalibration('target_reached', 'Target +90° angle reached');
+        return;
+      }
 
-    let spd = 18;
-    if (rem < 20.0) {
-      spd = Math.max(10, Math.round(18 * (rem / 20.0)));
-    }
-    autoCalibState.motorCommand = [-spd, spd, -spd, spd];
-    sendMotorSpeeds(-spd, spd, -spd, spd);
+      let ang = AUTO_CALIB_TURN_RADPS;
+      if (rem < 20.0) {
+        ang = Math.max(AUTO_CALIB_MIN_TURN_RADPS, AUTO_CALIB_TURN_RADPS * (rem / 20.0));
+      }
+      targetLinear = 0.0;
+      targetAngular = parseFloat(ang.toFixed(3));
+      const vz = Math.round(targetAngular * 1000);
+      autoCalibState.motorCommand = [0, 0, vz, 0];
 
-  } else if (testType === 'turn_right_90') {
-    autoCalibState.reportedDistance = distMoved;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
+    } else if (testType === 'turn_right_90') {
+      autoCalibState.reportedDistance = distMoved;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
 
-    if (autoCalibState.elapsedMs > 8000) {
-      stopAutoCalibration('timeout', 'Turn Right 90° test exceeded 8s timeout');
-      return;
-    }
-    if (distMoved > 0.20) {
-      stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
-      return;
-    }
-    if (yawDiffDeg > 5.0) {
-      stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
-      return;
-    }
-    if (yawDiffDeg <= -95.0) {
-      stopAutoCalibration('target_reached', '-95° hard angle stop reached');
-      return;
-    }
+      if (autoCalibState.elapsedMs > 8000) {
+        stopAutoCalibration('timeout', 'Turn Right 90° test exceeded 8s timeout');
+        return;
+      }
+      if (distMoved > 0.20) {
+        stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
+        return;
+      }
+      if (yawDiffDeg > 5.0) {
+        stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
+        return;
+      }
+      if (yawDiffDeg <= -95.0) {
+        stopAutoCalibration('target_reached', '-95° hard angle stop reached');
+        return;
+      }
 
-    const rem = 90.0 - Math.abs(yawDiffDeg);
-    if (rem <= 0 || yawDiffDeg <= -90.0) {
-      stopAutoCalibration('target_reached', 'Target -90° angle reached');
-      return;
-    }
+      const rem = 90.0 - Math.abs(yawDiffDeg);
+      if (rem <= 0 || yawDiffDeg <= -90.0) {
+        stopAutoCalibration('target_reached', 'Target -90° angle reached');
+        return;
+      }
 
-    let spd = 18;
-    if (rem < 20.0) {
-      spd = Math.max(10, Math.round(18 * (rem / 20.0)));
+      let ang = AUTO_CALIB_TURN_RADPS;
+      if (rem < 20.0) {
+        ang = Math.max(AUTO_CALIB_MIN_TURN_RADPS, AUTO_CALIB_TURN_RADPS * (rem / 20.0));
+      }
+      targetLinear = 0.0;
+      targetAngular = parseFloat((-ang).toFixed(3));
+      const vz = Math.round(targetAngular * 1000);
+      autoCalibState.motorCommand = [0, 0, vz, 0];
     }
-    autoCalibState.motorCommand = [spd, -spd, spd, -spd];
-    sendMotorSpeeds(spd, -spd, spd, -spd);
-  }
 
   broadcastAutoCalibStatus();
   } finally {
@@ -3144,6 +3165,12 @@ app.post('/api/calibration/auto/start', async (req, res) => {
     yaw: latestRosOdom.yaw,
     yawDeg: latestRosOdom.yaw_deg
   };
+
+  cmdSource = 'AUTO_CALIB';
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
 
   autoCalibState = {
     lastResult: null,
