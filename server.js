@@ -170,6 +170,15 @@ let driveCommandNeedsFlush = false;
 let driveLoopStarted = false;
 let latestCalibrationStatus = null;
 let latestMaintenanceStatus = null;
+let latestLoopTiming = {
+  lastDurationUs: 0,
+  minDurationUs: 0,
+  avgDurationUs: 0,
+  maxDurationUs: 0,
+  missedDeadlines: 0,
+  totalIterations: 0,
+  updatedAt: null
+};
 
 // Phase 4 Coordinated Drive Odometry State
 let odomX = 0.0;
@@ -1383,6 +1392,16 @@ function parseTelemetryPacket(extType, data) {
       const missedDeadlines = data.readUInt32LE(16);
       const totalIterations = data.readUInt32LE(20);
       
+      latestLoopTiming = {
+        lastDurationUs,
+        minDurationUs,
+        avgDurationUs,
+        maxDurationUs,
+        missedDeadlines,
+        totalIterations,
+        updatedAt: Date.now()
+      };
+
       broadcast({
         type: 'loop_timing',
         lastDurationUs,
@@ -1390,7 +1409,8 @@ function parseTelemetryPacket(extType, data) {
         avgDurationUs,
         maxDurationUs,
         missedDeadlines,
-        totalIterations
+        totalIterations,
+        updatedAt: latestLoopTiming.updatedAt
       });
     }
 
@@ -3446,7 +3466,8 @@ app.get('/api/status', (req, res) => {
     armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false,
     autonomyEnabled: autonomyState.enabled,
     autonomyState: autonomyState.state,
-    cmdSource: cmdSource
+    cmdSource: cmdSource,
+    loopTiming: latestLoopTiming
   });
 });
 
@@ -4867,5 +4888,6 @@ module.exports = {
   autonomyState,
   getAutonomyStatusObject,
   resetAutonomyToSafe,
-  computeCmdVelDiagnostics
+  computeCmdVelDiagnostics,
+  getLatestLoopTiming: () => latestLoopTiming
 };

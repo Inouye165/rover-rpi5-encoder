@@ -1063,7 +1063,23 @@
             </div>
           </div>
 
-          <!-- Section C: Connections and Services -->
+          <!-- Section B2: 100 Hz Control Loop Health -->
+          <div class="v2-card" id="diagnostics-loop-health">
+            <div class="v2-card-header">
+              <h3>⚡ 100 Hz Control Loop Health</h3>
+              <span id="v2-diag-badge-loop" class="badge badge-info">WAITING FOR DATA</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item"><span class="v2-status-label">Loop Health Status:</span> <span id="v2-diag-val-loop-status" class="status-val">Waiting for telemetry...</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Missed Deadlines (>10ms):</span> <span id="v2-diag-val-loop-missed" class="status-val">0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Last Duration:</span> <span id="v2-diag-val-loop-last" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Average Duration:</span> <span id="v2-diag-val-loop-avg" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Minimum Duration:</span> <span id="v2-diag-val-loop-min" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Maximum Duration:</span> <span id="v2-diag-val-loop-max" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Total Iterations:</span> <span id="v2-diag-val-loop-total" class="status-val">0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Data Age:</span> <span id="v2-diag-val-loop-age" class="status-val">-- ms</span></div>
+            </div>
+          </div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px;">
             <div class="v2-card" id="diagnostics-services">
               <div class="v2-card-header">

@@ -1058,6 +1058,57 @@ function handleServerMessage(msg) {
     }
 
     case 'loop_timing': {
+      window._latestLoopTiming = {
+        lastDurationUs: msg.lastDurationUs,
+        minDurationUs: msg.minDurationUs,
+        avgDurationUs: msg.avgDurationUs,
+        maxDurationUs: msg.maxDurationUs,
+        missedDeadlines: msg.missedDeadlines,
+        totalIterations: msg.totalIterations,
+        updatedAt: Date.now()
+      };
+
+      const elBadge = document.getElementById('v2-diag-badge-loop');
+      const elStatus = document.getElementById('v2-diag-val-loop-status');
+      const elMissed = document.getElementById('v2-diag-val-loop-missed');
+      const elLast = document.getElementById('v2-diag-val-loop-last');
+      const elAvg = document.getElementById('v2-diag-val-loop-avg');
+      const elMin = document.getElementById('v2-diag-val-loop-min');
+      const elMax = document.getElementById('v2-diag-val-loop-max');
+      const elTotal = document.getElementById('v2-diag-val-loop-total');
+      const elAge = document.getElementById('v2-diag-val-loop-age');
+
+      if (elMissed) elMissed.innerText = msg.missedDeadlines;
+      if (elLast) elLast.innerText = `${msg.lastDurationUs} us (${(msg.lastDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elAvg) elAvg.innerText = `${msg.avgDurationUs} us (${(msg.avgDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elMin) elMin.innerText = `${msg.minDurationUs} us (${(msg.minDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elMax) elMax.innerText = `${msg.maxDurationUs} us (${(msg.maxDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elTotal) elTotal.innerText = msg.totalIterations;
+      if (elAge) elAge.innerText = '0 ms';
+
+      const isDeadlineViolated = msg.maxDurationUs >= 10000;
+      const hasMissedDeadlines = msg.missedDeadlines > 0;
+
+      if (hasMissedDeadlines || isDeadlineViolated) {
+        if (elBadge) {
+          elBadge.className = 'badge badge-danger';
+          elBadge.innerText = 'DEADLINE VIOLATION';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-danger';
+          elStatus.innerText = `VIOLATION: ${msg.missedDeadlines} missed deadlines (Max: ${msg.maxDurationUs} us)`;
+        }
+      } else {
+        if (elBadge) {
+          elBadge.className = 'badge badge-healthy';
+          elBadge.innerText = 'HEALTHY (100 Hz)';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-healthy';
+          elStatus.innerText = 'HEALTHY: 0 missed deadlines (10ms budget met)';
+        }
+      }
+
       // Rate-limit console logs for timing stats to every 5 seconds to avoid flooding the log viewer,
       // or print immediately if a new deadline is missed.
       if (!window._lastTimingLogTime) window._lastTimingLogTime = 0;
