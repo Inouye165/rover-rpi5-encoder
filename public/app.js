@@ -863,7 +863,73 @@ function handleServerMessage(msg) {
       }
       break;
 
+    case 'bno08x_imu': {
+      realIMUActive = true;
+
+      // Extract quaternion
+      const qw = msg.orientation ? msg.orientation.w : 1.0;
+      const qx = msg.orientation ? msg.orientation.x : 0.0;
+      const qy = msg.orientation ? msg.orientation.y : 0.0;
+      const qz = msg.orientation ? msg.orientation.z : 0.0;
+
+      // Compute Euler pitch and roll from quaternion
+      const sinr_cosp = 2 * (qw * qx + qy * qz);
+      const cosr_cosp = 1 - 2 * (qx * qx + qy * qy);
+      const rollRad = Math.atan2(sinr_cosp, cosr_cosp);
+
+      const sinp = 2 * (qw * qy - qz * qx);
+      const pitchRad = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+
+      const siny_cosp = 2 * (qw * qz + qx * qy);
+      const cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+      const yawRad = Math.atan2(siny_cosp, cosy_cosp);
+
+      imuRoll = rollRad * 180 / Math.PI;
+      imuPitch = pitchRad * 180 / Math.PI;
+      imuYaw = yawRad * 180 / Math.PI;
+
+      const gx = msg.gyro ? (msg.gyro.x * 180 / Math.PI) : 0.0;
+      const gy = msg.gyro ? (msg.gyro.y * 180 / Math.PI) : 0.0;
+      const gz = msg.gyro ? (msg.gyro.z * 180 / Math.PI) : 0.0;
+
+      const ax = msg.accel ? (msg.accel.x / 9.80665) : 0.0; // g units for UI
+      const ay = msg.accel ? (msg.accel.y / 9.80665) : 0.0;
+      const az = msg.accel ? (msg.accel.z / 9.80665) : 0.0;
+
+      // Update UI readouts
+      setText('imu-roll', `${imuRoll.toFixed(1)}°`);
+      setText('imu-pitch', `${imuPitch.toFixed(1)}°`);
+      setText('imu-yaw', `${imuYaw.toFixed(1)}°`);
+
+      setHTML('imu-ax', `${ax.toFixed(2)} <small>g</small>`);
+      setHTML('imu-ay', `${ay.toFixed(2)} <small>g</small>`);
+      setHTML('imu-az', `${az.toFixed(2)} <small>g</small>`);
+
+      setHTML('imu-gx', `${gx.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gy', `${gy.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gz', `${gz.toFixed(1)} <small>°/s</small>`);
+
+      // Update window.roverState for Diagnostics page
+      if (window.roverState && window.roverState.imu) {
+        window.roverState.imu.roll = imuRoll;
+        window.roverState.imu.pitch = imuPitch;
+        window.roverState.imu.yaw = imuYaw;
+        window.roverState.imu.accel = [msg.accel.x, msg.accel.y, msg.accel.z];
+        window.roverState.imu.gyro = [gx, gy, gz];
+        window.roverState.imu.seq = msg.sequence;
+        window.roverState.imu.gaps = msg.sequenceGaps;
+        window.roverState.imu.resets = msg.resetCount;
+        window.roverState.imu.calibStatus = msg.calibrationStatus;
+        window.roverState.imu.inResetRecovery = msg.inResetRecovery;
+      }
+
+      // Update 3D Model rotation
+      update3DModelRotation(imuPitch, imuRoll, imuYaw);
+      break;
+    }
+
     case 'imu':
+      if (Date.now() - lastBno3ATimeMs < 2000) break; // Skip legacy if 0x3A is active
       realIMUActive = true;
       imuYaw = msg.yaw;
       imuPitch = msg.pitch;
@@ -2332,16 +2398,49 @@ function renderSensorsV2Summary() {
   if (elLidarAge) elLidarAge.textContent = `${st.lidar.ageMs} ms`;
 
   // IMU HUD items in sensors-imu
+  const elImuBadge = document.getElementById('v2-imu-badge');
+  const elImuSummary = document.getElementById('v2-sensor-val-imu');
+  const now = Date.now();
+  const imuAgeMs = st.imu.lastTime ? (now - st.imu.lastTime) : 99999;
+  const isImuFresh = realIMUActive && (imuAgeMs <= 500);
+
+  if (!isImuFresh) {
+    if (elImuBadge) {
+      elImuBadge.className = 'badge badge-warning';
+      elImuBadge.textContent = 'STALE / NOT AVAILABLE';
+    }
+    if (elImuSummary) elImuSummary.textContent = 'Stale / Offline';
+  } else {
+    if (elImuBadge) {
+      elImuBadge.className = 'badge badge-success';
+      elImuBadge.textContent = 'HEALTHY (50 Hz)';
+    }
+    if (elImuSummary) elImuSummary.textContent = 'Healthy (50 Hz)';
+  }
+
   const elRoll = document.getElementById('v2-imu-val-roll');
-  if (elRoll) elRoll.textContent = `${st.imu.roll.toFixed(1)}°`;
+  if (elRoll) elRoll.textContent = isImuFresh ? `${st.imu.roll.toFixed(1)}°` : '--';
+
   const elPitch = document.getElementById('v2-imu-val-pitch');
-  if (elPitch) elPitch.textContent = `${st.imu.pitch.toFixed(1)}°`;
+  if (elPitch) elPitch.textContent = isImuFresh ? `${st.imu.pitch.toFixed(1)}°` : '--';
+
   const elYaw = document.getElementById('v2-imu-val-yaw');
-  if (elYaw) elYaw.textContent = `${st.imu.yaw.toFixed(1)}°`;
+  if (elYaw) elYaw.textContent = isImuFresh ? `${st.imu.yaw.toFixed(1)}°` : '--';
+
   const elAccel = document.getElementById('v2-imu-val-accel');
-  if (elAccel) elAccel.textContent = `${st.imu.accel.map(n => n.toFixed(1)).join(', ')} m/s²`;
+  if (elAccel) elAccel.textContent = isImuFresh ? `${st.imu.accel.map(n => n.toFixed(1)).join(', ')} m/s²` : '-- m/s²';
+
   const elGyro = document.getElementById('v2-imu-val-gyro');
-  if (elGyro) elGyro.textContent = `${st.imu.gyro.map(n => n.toFixed(1)).join(', ')} °/s`;
+  if (elGyro) elGyro.textContent = isImuFresh ? `${st.imu.gyro.map(n => n.toFixed(1)).join(', ')} °/s` : '-- °/s';
+
+  const elSeq = document.getElementById('v2-imu-val-seq');
+  if (elSeq) elSeq.textContent = isImuFresh ? `#${st.imu.seq || 0} (${st.imu.gaps || 0} gaps)` : '--';
+
+  const elResets = document.getElementById('v2-imu-val-resets');
+  if (elResets) elResets.textContent = isImuFresh ? `${st.imu.resets || 0} (Rec: ${st.imu.inResetRecovery ? 'YES' : 'NO'})` : '--';
+
+  const elCalib = document.getElementById('v2-imu-val-calib');
+  if (elCalib) elCalib.textContent = isImuFresh ? `Lvl ${st.imu.calibStatus || 0} / ${imuAgeMs}ms` : '--';
 
   // Odometry HUD items in sensors-odometry
   const elOdomX = document.getElementById('v2-odom-val-x');

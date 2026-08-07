@@ -101,12 +101,19 @@ const TYPE_BATTERY  = 0x0A; // Speed/battery packet (data[6] = voltage*10)
 const TYPE_ATTITUDE = 0x0C; // IMU attitude
 const TYPE_ENCODER  = 0x0D; // Encoder counts: 4x int32 LE (M1..M4)
 const TYPE_IMU      = 0x0E; // 9-axis IMU raw packet (21 bytes total)
+const TYPE_BNO08X_IMU = 0x3A; // Production BNO08x 69-byte IMU telemetry packet
 const TYPE_CALIBRATION = 0x30; // Calibration status telemetry
 const TYPE_FIRMWARE_INFO = 0x32; // Firmware identification telemetry
 const TYPE_LOOP_TIMING = 0x33; // Control loop timing statistics telemetry
 const TYPE_FAULT_REPORT = 0x34; // Active safety fault flags telemetry
 const TYPE_MAINTENANCE = 0x35; // Maintenance status telemetry
 const TYPE_NORMAL_DRIVE_STATUS = 0x36;
+
+// In-memory production BNO08x IMU telemetry state
+let latestBnoImuState = null;
+let lastBno3ATimeMs = 0;
+let lastBnoSeq = null;
+let bnoSequenceGaps = 0;
 
 // NOTE: No COMPLEMENT constant needed – checksum = sum(packet[2..n-2]) & 0xFF
 
@@ -920,7 +927,126 @@ function parseTelemetryPacket(extType, data) {
       broadcast({ type: 'battery', voltage });
     }
 
+  } else if (extType === TYPE_BNO08X_IMU) {
+    // Production 69-byte BNO08x IMU telemetry packet (0x3A)
+    if (data.length < 69) {
+      console.warn(`[BNO08x IMU] Packet payload too short: ${data.length} bytes (expected 69)`);
+      return;
+    }
+
+    const version = data[0];
+    if (version !== 0x01) {
+      console.warn(`[BNO08x IMU] Unknown protocol version 0x${version.toString(16)}`);
+      return;
+    }
+
+    const statusFlags = data.readUInt16LE(1);
+    const sequenceNum = data.readUInt32LE(3);
+    const resetCount = data.readUInt32LE(7);
+
+    // 64-bit ESP32 timestamp in microseconds
+    const espTimestampUsBig = data.readBigUInt64LE(11);
+    const espTimestampUs = Number(espTimestampUsBig);
+
+    const rotVecAgeMs = data.readUInt16LE(19);
+    const gyroAgeMs = data.readUInt16LE(21);
+    const accelAgeMs = data.readUInt16LE(23);
+
+    // Read floats (LE)
+    let qw = data.readFloatLE(25);
+    let qx = data.readFloatLE(29);
+    let qy = data.readFloatLE(33);
+    let qz = data.readFloatLE(37);
+
+    let gx = data.readFloatLE(41);
+    let gy = data.readFloatLE(45);
+    let gz = data.readFloatLE(49);
+
+    let ax = data.readFloatLE(53); // Specific force (gravity included, REP-145)
+    let ay = data.readFloatLE(57);
+    let az = data.readFloatLE(61);
+
+    let quatAccuracyRad = data.readFloatLE(65);
+
+    // Sanitize non-finite values
+    if (!Number.isFinite(qw) || !Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) {
+      qw = 1.0; qx = 0.0; qy = 0.0; qz = 0.0;
+    }
+    if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(gz)) {
+      gx = 0.0; gy = 0.0; gz = 0.0;
+    }
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(az)) {
+      ax = 0.0; ay = 0.0; az = 0.0;
+    }
+    if (!Number.isFinite(quatAccuracyRad)) {
+      quatAccuracyRad = 0.0;
+    }
+
+    // Sequence gap detection
+    if (lastBnoSeq !== null) {
+      const expectedSeq = (lastBnoSeq + 1) >>> 0;
+      if (sequenceNum !== expectedSeq) {
+        const gap = (sequenceNum - expectedSeq) >>> 0;
+        bnoSequenceGaps += gap;
+      }
+    }
+    lastBnoSeq = sequenceNum;
+
+    // Status bit decoding
+    const hardwareInitialized = (statusFlags & (1 << 0)) !== 0;
+    const inResetRecovery     = (statusFlags & (1 << 1)) !== 0;
+    const rotVecValid        = (statusFlags & (1 << 2)) !== 0;
+    const gyroValid          = (statusFlags & (1 << 3)) !== 0;
+    const accelValid         = (statusFlags & (1 << 4)) !== 0;
+    const calibrationStatus  = (statusFlags >> 6) & 0x03;
+
+    const now = Date.now();
+    lastBno3ATimeMs = now;
+
+    latestBnoImuState = {
+      ok: true,
+      timestamp: now,
+      espTimestampUs,
+      sequence: sequenceNum,
+      sequenceGaps: bnoSequenceGaps,
+      resetCount,
+      flags: statusFlags,
+      hardwareInitialized,
+      inResetRecovery,
+      rotVecValid,
+      gyroValid,
+      accelValid,
+      calibrationStatus,
+      rotVecAgeMs,
+      gyroAgeMs,
+      accelAgeMs,
+      orientation: { w: qw, x: qx, y: qy, z: qz },
+      gyro: { x: gx, y: gy, z: gz },
+      accel: { x: ax, y: ay, z: az },
+      quatAccuracyRad
+    };
+
+    // Broadcast to WebSocket clients with explicit backpressure safety check
+    const imuWsMsg = JSON.stringify({
+      type: 'bno08x_imu',
+      ...latestBnoImuState
+    });
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        // Backpressure check: skip sending if client queue exceeds 4096 bytes
+        if (client.bufferedAmount !== undefined && client.bufferedAmount > 4096) {
+          return;
+        }
+        client.send(imuWsMsg);
+      }
+    });
+
   } else if (extType === TYPE_IMU) {
+    // If production 0x3A telemetry is active, ignore legacy placeholder packet
+    if (Date.now() - lastBno3ATimeMs < 2000) {
+      return;
+    }
     // Observed packet: ff fb 15 0e GX GX GY GY GZ GZ AX AX AY AY AZ AZ MX MX MY MY MZ MZ CS
     // Total=21 bytes → extLen=0x15=21 → data = extLen-2 = 19 bytes
     // Layout (little-endian int16):
@@ -3771,6 +3897,29 @@ app.get('/api/encoders', (req, res) => {
       m3: currentTicks[2],
       m4: currentTicks[3]
     }
+  });
+});
+
+app.get('/api/imu', (req, res) => {
+  const serialConnected = (serialPort && serialPort.isOpen) === true;
+  const now = Date.now();
+  const ageMs = lastBno3ATimeMs ? (now - lastBno3ATimeMs) : null;
+  const isStale = (ageMs === null || ageMs > 200);
+
+  if (!latestBnoImuState) {
+    return res.json({
+      ok: false,
+      stale: true,
+      serialConnected,
+      message: 'No production 0x3A BNO08x IMU telemetry received yet'
+    });
+  }
+
+  res.json({
+    ...latestBnoImuState,
+    serialConnected,
+    dataAgeMs: ageMs,
+    stale: isStale
   });
 });
 

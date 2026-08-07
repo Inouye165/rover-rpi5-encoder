@@ -40,6 +40,12 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
+            package='rover_bringup',
+            executable='rover_imu_bridge',
+            name='rover_imu_bridge',
+            output='screen',
+        ),
+        Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_link_to_laser_frame_publisher',

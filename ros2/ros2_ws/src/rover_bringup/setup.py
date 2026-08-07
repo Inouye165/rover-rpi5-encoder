@@ -31,6 +31,7 @@ setup(
             'rover_lidar_bridge = rover_bringup.rover_lidar_bridge:main',
             'rover_encoder_odometry = rover_bringup.rover_encoder_odometry:main',
             'rover_cmd_vel_bridge = rover_bringup.rover_cmd_vel_bridge:main',
+            'rover_imu_bridge = rover_bringup.rover_imu_bridge:main',
             'record_odom_calibration = rover_bringup.record_odom_calibration:main',
         ],
     },

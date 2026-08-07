@@ -417,15 +417,18 @@
           </div>
           <div class="v2-card" id="sensors-imu">
             <div class="v2-card-header">
-              <h3>🧭 3D Chassis Attitude & 6-Axis Telemetry</h3>
-              <span id="v2-imu-badge" class="badge badge-success">HEALTHY</span>
+              <h3>🧭 BNO08x 9-DOF IMU & Chassis Attitude</h3>
+              <span id="v2-imu-badge" class="badge badge-warning">STALE / NOT AVAILABLE</span>
             </div>
             <div class="v2-status-grid" style="margin-bottom: 10px;">
-              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">0.0, 0.0, 9.8 m/s²</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">0.0, 0.0, 0.0 °/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">-- m/s²</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">-- °/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Sequence (Gaps):</span> <span id="v2-imu-val-seq" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Resets / Recovery:</span> <span id="v2-imu-val-resets" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Calib / Data Age:</span> <span id="v2-imu-val-calib" class="status-val">--</span></div>
             </div>
             <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
               <canvas id="v2-imu-model-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
