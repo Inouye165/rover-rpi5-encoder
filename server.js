@@ -3416,7 +3416,9 @@ app.get('/api/firmware', (req, res) => {
 
 function requireOperatorAuth(req, res, next) {
   const tokenHeader = req.headers['x-rover-operator-token'] || req.query.operator_token;
-  const clientIp = req.socket ? (req.socket.remoteAddress || '') : '';
+  const forwardedIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : '';
+  const rawIp = req.socket ? (req.socket.remoteAddress || '') : '';
+  const clientIp = forwardedIp || rawIp;
   const isLoopback = (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1');
 
   if (isLoopback && !tokenHeader) {
@@ -3424,13 +3426,13 @@ function requireOperatorAuth(req, res, next) {
   }
 
   if (!tokenHeader) {
-    return res.status(401).json({ ok: false, error: 'Unauthorized: Missing X-Rover-Operator-Token header' });
+    return res.status(401).json({ ok: false, error: 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.' });
   }
 
   const reqBuf = Buffer.from(String(tokenHeader));
   const expBuf = Buffer.from(String(ROVER_OPERATOR_TOKEN));
   if (reqBuf.length !== expBuf.length || !crypto.timingSafeEqual(reqBuf, expBuf)) {
-    return res.status(403).json({ ok: false, error: 'Forbidden: Invalid operator token' });
+    return res.status(403).json({ ok: false, error: 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.' });
   }
 
   next();

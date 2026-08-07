@@ -45,10 +45,11 @@ function showAuthErrorMessage(msg) {
   if (typeof logSystem === 'function') {
     logSystem(`[AUTH ERROR] ${displayMsg}`);
   }
+  const bannerArm = document.getElementById('arm-auth-error-banner');
   const banner1 = document.getElementById('v2-autonomy-error-banner');
   const banner2 = document.getElementById('v2-calib-error-banner');
   const banner3 = document.getElementById('maint-test-error-banner');
-  const errBanner = banner1 || banner2 || banner3;
+  const errBanner = bannerArm || banner1 || banner2 || banner3;
   if (errBanner) {
     errBanner.textContent = displayMsg;
     errBanner.style.display = 'block';
@@ -56,7 +57,7 @@ function showAuthErrorMessage(msg) {
       if (errBanner.textContent === displayMsg) {
         errBanner.style.display = 'none';
       }
-    }, 5000);
+    }, 7000);
   } else {
     alert(displayMsg);
   }
@@ -85,7 +86,9 @@ async function authenticatedFetch(url, options = {}) {
     const res = await fetch(url, { ...options, headers });
 
     if (res.status === 401 || res.status === 403) {
-      let errText = (res.status === 401) ? 'Operator token missing.' : 'Operator token invalid.';
+      let errText = (res.status === 401)
+        ? 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.'
+        : 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.';
       showAuthErrorMessage(errText);
       return { ok: false, status: res.status, res, json: { ok: false, error: errText } };
     }
@@ -1896,16 +1899,38 @@ function fetchDriveStatus() {
 
 async function armNormalDrive() {
   logSystem('Sending arm normal drive request...');
+
+  // Pre-check operator token presence before issuing network call
+  const token = getOrSyncOperatorToken();
+  if (!token) {
+    const msg = 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.';
+    logSystem(`⚠️ ${msg}`);
+    showAuthErrorMessage(msg);
+    await fetchDriveStatus();
+    return;
+  }
+
   try {
     const result = await authenticatedFetch('/api/drive/arm', { method: 'POST' });
     const data = result.json || {};
     if (result.ok && data.ok) {
       logSystem(data.message || 'Arm request processed.');
-    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
-      logSystem(`⚠️ Arm request rejected: ${data.error || 'Unknown error'}`);
+    } else {
+      let errorMsg = data.error;
+      if (result.status === 401) {
+        errorMsg = 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.';
+      } else if (result.status === 403) {
+        errorMsg = 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.';
+      } else if (!errorMsg) {
+        errorMsg = 'Cannot arm rover: Re-authentication is required.';
+      }
+      logSystem(`⚠️ ${errorMsg}`);
+      showAuthErrorMessage(errorMsg);
     }
   } catch (err) {
-    logSystem(`⚠️ Error arming normal drive: ${err.message}`);
+    const errorMsg = 'Cannot arm rover: Re-authentication is required.';
+    logSystem(`⚠️ ${errorMsg}`);
+    showAuthErrorMessage(errorMsg);
   }
 
   // Immediate status refresh & brief 150ms retry for ESP32 telemetry packet propagation
