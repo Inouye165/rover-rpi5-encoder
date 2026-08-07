@@ -553,7 +553,9 @@ function writePacket(packet, funcId, label = '') {
     } else {
       const hex = Array.from(packet).map(b => b.toString(16).padStart(2,'0')).join(' ');
       const prefix = label ? `${label} ` : '';
-      console.log(`[Binary Out] ${prefix}${hex}`);
+      if (process.env.VERBOSE_LOGGING === 'true') {
+        console.log(`[Binary Out] ${prefix}${hex}`);
+      }
       broadcast({ type: 'raw_serial_out', data: `${prefix}[0x${funcId.toString(16).padStart(2,'0')}] ${hex}` });
     }
   });
@@ -895,14 +897,26 @@ function processRxBuffer() {
 // ────────────────────────────────────────────────────────────
 // Telemetry Packet Interpreter
 // ────────────────────────────────────────────────────────────
+let lastBatteryLogTime = 0;
+let lastLoggedVoltage = null;
+
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
+
   if (extType === TYPE_BATTERY) {
     // Observed packet: ff fb 0a 0a 00 00 00 00 00 00 VV CS
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
-      console.log(`[Battery] ${voltage.toFixed(1)} V`);
+      const now = Date.now();
+      // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
+      if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
+        lastBatteryLogTime = now;
+        lastLoggedVoltage = voltage;
+        if (process.env.VERBOSE_LOGGING === 'true') {
+          console.log(`[Battery] ${voltage.toFixed(1)} V`);
+        }
+      }
       broadcast({ type: 'battery', voltage });
     }
 
@@ -2585,6 +2599,7 @@ let autoCalibState = {
 };
 
 let autoCalibTimer = null;
+let lastAutoCalibLogTime = 0;
 let odomFetchPromise = null;
 let lastOdomSuccessTime = 0;
 let odomConsecutiveErrors = 0;
@@ -3729,7 +3744,9 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   startDriveKeepaliveLoop();
 
   const diag = computeCmdVelDiagnostics(rawLin, rawAng, clampedLin, clampedAng);
-  console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
+  if (process.env.VERBOSE_LOGGING === 'true') {
+    console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
+  }
 
   res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
 });
@@ -4370,9 +4387,10 @@ function updatePathController() {
     totalPasses: AUTO_CALIB_SPEEDS.length * AUTO_CALIB_PASSES_PER_TIER
   });
 
-  // 6. 1Hz rate console logging for calibration diagnostics
+  // 6. 1Hz rate console logging for calibration diagnostics (when VERBOSE_LOGGING is set)
   const elapsed = Date.now() - calibLegStartTime;
-  if (elapsed % 1000 < 100) { 
+  if (process.env.VERBOSE_LOGGING === 'true' && elapsed - lastAutoCalibLogTime >= 1000) { 
+    lastAutoCalibLogTime = elapsed;
     console.log(`[Auto Calib Debug] State: ${lidarTestState} | X: ${lidarPose.x.toFixed(3)}m, Y: ${lidarPose.y.toFixed(4)}m, Yaw: ${lidarPose.yaw.toFixed(4)}rad | Cmd: V_lin=${targetLinear.toFixed(3)}m/s, W_ang=${targetAngular.toFixed(3)}rad/s | Boost: ${calibSpeedBoost.toFixed(3)}m/s | Integrator: ${lateralErrorSum.toFixed(4)}`);
   }
 }
