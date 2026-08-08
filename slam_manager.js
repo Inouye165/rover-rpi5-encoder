@@ -193,7 +193,7 @@ class SlamManager {
     this.state = 'STOPPING';
 
     // Run targeted pkill inside container targeting ONLY SLAM processes
-    const killCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
+    const killCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
     await this.runCommand(killCmd, 5000);
 
     // Poll for verification up to 10 seconds
