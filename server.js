@@ -5,6 +5,7 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const slamManager = require('./slam_manager');
 
 
 // Load environment variables manually from .env if present
@@ -3676,6 +3677,37 @@ app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
 
 app.get('/api/autonomy/status', (req, res) => {
   res.json(getAutonomyStatusObject());
+});
+
+// SLAM lifecycle & status endpoints
+app.get('/api/slam/status', async (req, res) => {
+  try {
+    const status = await slamManager.getStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
+});
+
+app.post('/api/slam/start', async (req, res) => {
+  try {
+    const result = await slamManager.startSlam();
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
+});
+
+app.post('/api/slam/stop', async (req, res) => {
+  try {
+    const result = await slamManager.stopSlam();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
 });
 
 // ────────────────────────────────────────────────────────────

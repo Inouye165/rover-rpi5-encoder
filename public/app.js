@@ -923,8 +923,11 @@ function handleServerMessage(msg) {
         window.roverState.imu.inResetRecovery = msg.inResetRecovery;
       }
 
-      // Update 3D Model rotation
+      // Update 3D Model rotation and Drive Control Room IMU orientation panel
       update3DModelRotation(imuPitch, imuRoll, imuYaw);
+      if (typeof updateDriveControlRoomImuUI === 'function') {
+        updateDriveControlRoomImuUI(msg, imuPitch, imuRoll, imuYaw);
+      }
       break;
     }
 
@@ -3775,7 +3778,6 @@ function updateTrackInterference(scan) {
 }
 
 function updateTrackInterferenceUI(dFront, dLeft, dRight) {
-  const elBadge = document.getElementById('interference-warning-badge');
   const elFront = document.getElementById('val-interfere-front');
   const elLeft = document.getElementById('val-interfere-left');
   const elRight = document.getElementById('val-interfere-right');
@@ -3813,23 +3815,21 @@ function updateTrackInterferenceUI(dFront, dLeft, dRight) {
   formatValAndStyle(elLeft, boxLeft, dLeft);
   formatValAndStyle(elRight, boxRight, dRight);
   
-  if (elBadge) {
-    if (dFront < 0 || dLeft < 0 || dRight < 0) {
-      if (elBadge) elBadge.textContent = '⚠️ Interference';
-      if (elBadge) elBadge.style.background = 'rgba(255, 0, 85, 0.15)';
-      if (elBadge) elBadge.style.color = '#ff0055';
-      if (elBadge) elBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
-    } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
-      if (elBadge) elBadge.textContent = '⚠️ Caution';
-      if (elBadge) elBadge.style.background = 'rgba(245, 158, 11, 0.15)';
-      if (elBadge) elBadge.style.color = '#f59e0b';
-      if (elBadge) elBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
-    } else {
-      if (elBadge) elBadge.textContent = '✓ Clear';
-      if (elBadge) elBadge.style.background = 'rgba(16, 185, 129, 0.15)';
-      if (elBadge) elBadge.style.color = '#10b981';
-      if (elBadge) elBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-    }
+  if (dFront < 0 || dLeft < 0 || dRight < 0) {
+    setText('interference-warning-badge', '⚠️ Interference');
+    setStyle('interference-warning-badge', 'background', 'rgba(255, 0, 85, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#ff0055');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(255, 0, 85, 0.4)');
+  } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
+    setText('interference-warning-badge', '⚠️ Caution');
+    setStyle('interference-warning-badge', 'background', 'rgba(245, 158, 11, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#f59e0b');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(245, 158, 11, 0.4)');
+  } else {
+    setText('interference-warning-badge', '✓ Clear');
+    setStyle('interference-warning-badge', 'background', 'rgba(16, 185, 129, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#10b981');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(16, 185, 129, 0.4)');
   }
 }
 
@@ -6419,3 +6419,173 @@ window.addEventListener('gamepaddisconnected', () => {
   sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
   lastSentJoystick = { x: 0, y: 0, deadman: false };
 });
+
+// --- Drive Control Room Live IMU Panel & Watchdog ---
+let lastDriveImuRxMs = 0;
+
+function updateDriveControlRoomImuUI(msg, pitch, roll, yaw) {
+  lastDriveImuRxMs = Date.now();
+  const gzRad = (msg && msg.gyro && typeof msg.gyro.z === 'number') ? msg.gyro.z : 0.0;
+  const cal = (msg && msg.calibrationStatus !== undefined) ? msg.calibrationStatus : '--';
+  const dataAge = (msg && msg.rotVecAgeMs !== undefined && msg.rotVecAgeMs !== null) ? msg.rotVecAgeMs : 0;
+
+  setText('v2-drive-imu-roll', `${roll.toFixed(1)}°`);
+  setText('v2-drive-imu-pitch', `${pitch.toFixed(1)}°`);
+  setText('v2-drive-imu-yaw', `${yaw.toFixed(1)}°`);
+  setText('v2-drive-imu-gyroz', `${gzRad.toFixed(3)} rad/s`);
+  setText('v2-drive-imu-cal', `${cal}/3`);
+  setText('v2-drive-imu-age', `${dataAge} ms`);
+
+  const badge = document.getElementById('v2-drive-imu-badge');
+  if (badge) {
+    badge.className = 'badge badge-success';
+    badge.textContent = 'HEALTHY';
+  }
+
+  const overlay = document.getElementById('drive-imu-stale-overlay');
+  if (overlay) overlay.style.display = 'none';
+
+  const model3d = document.getElementById('drive-imu-3d-model');
+  if (model3d) {
+    model3d.style.transform = `rotateX(${-20 + pitch}deg) rotateY(${-30 + roll}deg) rotateZ(${-yaw}deg)`;
+  }
+}
+
+function checkDriveImuStaleWatchdog() {
+  const now = Date.now();
+  const isStale = (lastDriveImuRxMs === 0 || (now - lastDriveImuRxMs) > 600);
+
+  if (isStale) {
+    const badge = document.getElementById('v2-drive-imu-badge');
+    if (badge) {
+      badge.className = 'badge badge-warning';
+      badge.textContent = 'STALE';
+    }
+    const overlay = document.getElementById('drive-imu-stale-overlay');
+    if (overlay) {
+      overlay.style.display = 'flex';
+    }
+    if (lastDriveImuRxMs > 0) {
+      setText('v2-drive-imu-age', `${now - lastDriveImuRxMs} ms (STALE)`);
+    }
+  }
+}
+setInterval(checkDriveImuStaleWatchdog, 500);
+
+// --- SLAM Control & Status Handler ---
+let currentSlamState = 'STOPPED';
+
+function updateSlamUI(slamData) {
+  if (!slamData) return;
+  const state = slamData.state || 'STOPPED';
+  currentSlamState = state;
+
+  const btnToggle = document.getElementById('btn-toggle-slam');
+  const dot = document.getElementById('slam-status-dot');
+  const text = document.getElementById('slam-status-text');
+  const errBanner = document.getElementById('slam-error-banner');
+
+  if (errBanner) {
+    if (slamData.error) {
+      errBanner.textContent = `SLAM Error: ${slamData.error}`;
+      errBanner.style.display = 'block';
+    } else {
+      errBanner.style.display = 'none';
+    }
+  }
+
+  if (dot) {
+    if (state === 'RUNNING') {
+      dot.className = 'status-indicator on';
+      dot.style.background = '#10b981';
+      dot.style.boxShadow = '0 0 8px rgba(16, 185, 129, 0.8)';
+    } else if (state === 'STARTING' || state === 'STOPPING') {
+      dot.className = 'status-indicator warning';
+      dot.style.background = '#f59e0b';
+      dot.style.boxShadow = '0 0 8px rgba(245, 158, 11, 0.8)';
+    } else if (state === 'ERROR') {
+      dot.className = 'status-indicator off';
+      dot.style.background = '#ef4444';
+      dot.style.boxShadow = '0 0 8px rgba(239, 68, 68, 0.8)';
+    } else {
+      dot.className = 'status-indicator off';
+      dot.style.background = '#6b7280';
+      dot.style.boxShadow = '0 0 6px rgba(107, 114, 128, 0.5)';
+    }
+  }
+
+  if (text) {
+    text.textContent = state;
+    if (state === 'RUNNING') text.style.color = '#10b981';
+    else if (state === 'STARTING' || state === 'STOPPING') text.style.color = '#f59e0b';
+    else if (state === 'ERROR') text.style.color = '#fca5a5';
+    else text.style.color = '#9ca3af';
+  }
+
+  if (btnToggle) {
+    if (state === 'STARTING') {
+      btnToggle.disabled = true;
+      btnToggle.textContent = 'Starting SLAM...';
+      btnToggle.className = 'btn btn-secondary';
+    } else if (state === 'STOPPING') {
+      btnToggle.disabled = true;
+      btnToggle.textContent = 'Stopping SLAM...';
+      btnToggle.className = 'btn btn-secondary';
+    } else if (state === 'RUNNING') {
+      btnToggle.disabled = false;
+      btnToggle.textContent = 'Stop SLAM';
+      btnToggle.className = 'btn btn-danger';
+    } else {
+      btnToggle.disabled = false;
+      btnToggle.textContent = 'Start SLAM';
+      btnToggle.className = 'btn btn-primary';
+    }
+  }
+}
+
+function pollSlamStatus() {
+  fetch('/api/slam/status')
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.ok) updateSlamUI(data);
+    })
+    .catch(() => {});
+}
+
+function initSlamControls() {
+  const btnToggle = document.getElementById('btn-toggle-slam');
+  if (btnToggle) {
+    btnToggle.addEventListener('click', () => {
+      if (btnToggle.disabled) return;
+      btnToggle.disabled = true;
+
+      const isRunning = (currentSlamState === 'RUNNING');
+      const targetEndpoint = isRunning ? '/api/slam/stop' : '/api/slam/start';
+      const transitionState = isRunning ? 'STOPPING' : 'STARTING';
+
+      updateSlamUI({ state: transitionState, error: null });
+
+      fetch(targetEndpoint, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (!data || !data.ok) {
+            updateSlamUI({ state: (data && data.state) || 'ERROR', error: (data && data.error) || 'SLAM action failed' });
+          } else {
+            updateSlamUI(data);
+          }
+        })
+        .catch(err => {
+          updateSlamUI({ state: 'ERROR', error: err.message || 'Network request failed' });
+        });
+    });
+  }
+
+  pollSlamStatus();
+  setInterval(pollSlamStatus, 3000);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initSlamControls);
+} else {
+  initSlamControls();
+}
