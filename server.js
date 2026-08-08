@@ -1531,7 +1531,21 @@ function parseTelemetryPacket(extType, data) {
       const maxDurationUs = data.readUInt32LE(12);
       const missedDeadlines = data.readUInt32LE(16);
       const totalIterations = data.readUInt32LE(20);
-      
+
+      const schedulingMetricsAvailable = (data.length >= 40);
+
+      let lastStartLatenessUs = 0;
+      let maxStartLatenessUs = 0;
+      let missedControlPeriods = 0;
+      let maxConsecutiveMissedPeriods = 0;
+
+      if (schedulingMetricsAvailable) {
+        lastStartLatenessUs = data.readUInt32LE(24);
+        maxStartLatenessUs = data.readUInt32LE(28);
+        missedControlPeriods = data.readUInt32LE(32);
+        maxConsecutiveMissedPeriods = data.readUInt32LE(36);
+      }
+
       latestLoopTiming = {
         lastDurationUs,
         minDurationUs,
@@ -1539,18 +1553,17 @@ function parseTelemetryPacket(extType, data) {
         maxDurationUs,
         missedDeadlines,
         totalIterations,
+        schedulingMetricsAvailable,
+        lastStartLatenessUs,
+        maxStartLatenessUs,
+        missedControlPeriods,
+        maxConsecutiveMissedPeriods,
         updatedAt: Date.now()
       };
 
       broadcast({
         type: 'loop_timing',
-        lastDurationUs,
-        minDurationUs,
-        avgDurationUs,
-        maxDurationUs,
-        missedDeadlines,
-        totalIterations,
-        updatedAt: latestLoopTiming.updatedAt
+        ...latestLoopTiming
       });
     }
 

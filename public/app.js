@@ -1134,6 +1134,11 @@ function handleServerMessage(msg) {
         maxDurationUs: msg.maxDurationUs,
         missedDeadlines: msg.missedDeadlines,
         totalIterations: msg.totalIterations,
+        schedulingMetricsAvailable: (msg.schedulingMetricsAvailable === true),
+        lastStartLatenessUs: msg.lastStartLatenessUs || 0,
+        maxStartLatenessUs: msg.maxStartLatenessUs || 0,
+        missedControlPeriods: msg.missedControlPeriods || 0,
+        maxConsecutiveMissedPeriods: msg.maxConsecutiveMissedPeriods || 0,
         updatedAt: Date.now()
       };
 
@@ -1142,30 +1147,62 @@ function handleServerMessage(msg) {
       const elMissed = document.getElementById('v2-diag-val-loop-missed');
       const elLast = document.getElementById('v2-diag-val-loop-last');
       const elAvg = document.getElementById('v2-diag-val-loop-avg');
-      const elMin = document.getElementById('v2-diag-val-loop-min');
-      const elMax = document.getElementById('v2-diag-val-loop-max');
+      const elMinMax = document.getElementById('v2-diag-val-loop-minmax');
       const elTotal = document.getElementById('v2-diag-val-loop-total');
       const elAge = document.getElementById('v2-diag-val-loop-age');
+
+      const elLatenessLast = document.getElementById('v2-diag-val-loop-lateness-last');
+      const elLatenessMax = document.getElementById('v2-diag-val-loop-lateness-max');
+      const elPeriodsMissed = document.getElementById('v2-diag-val-loop-periods-missed');
+      const elPeriodsConsec = document.getElementById('v2-diag-val-loop-periods-consec');
 
       if (elMissed) elMissed.innerText = msg.missedDeadlines;
       if (elLast) elLast.innerText = `${msg.lastDurationUs} us (${(msg.lastDurationUs / 1000.0).toFixed(2)} ms)`;
       if (elAvg) elAvg.innerText = `${msg.avgDurationUs} us (${(msg.avgDurationUs / 1000.0).toFixed(2)} ms)`;
-      if (elMin) elMin.innerText = `${msg.minDurationUs} us (${(msg.minDurationUs / 1000.0).toFixed(2)} ms)`;
-      if (elMax) elMax.innerText = `${msg.maxDurationUs} us (${(msg.maxDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elMinMax) elMinMax.innerText = `${msg.minDurationUs} us / ${msg.maxDurationUs} us`;
       if (elTotal) elTotal.innerText = msg.totalIterations;
       if (elAge) elAge.innerText = '0 ms';
 
+      const isSchedAvailable = (msg.schedulingMetricsAvailable === true);
+
+      if (!isSchedAvailable) {
+        if (elLatenessLast) elLatenessLast.innerText = 'NOT AVAILABLE (24B Firmware)';
+        if (elLatenessMax) elLatenessMax.innerText = 'NOT AVAILABLE (24B Firmware)';
+        if (elPeriodsMissed) elPeriodsMissed.innerText = 'NOT AVAILABLE';
+        if (elPeriodsConsec) elPeriodsConsec.innerText = 'NOT AVAILABLE';
+      } else {
+        const lastLateMs = ((msg.lastStartLatenessUs || 0) / 1000.0).toFixed(2);
+        const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+
+        if (elLatenessLast) elLatenessLast.innerText = `${msg.lastStartLatenessUs || 0} us (${lastLateMs} ms)`;
+        if (elLatenessMax) elLatenessMax.innerText = `${msg.maxStartLatenessUs || 0} us (${maxLateMs} ms)`;
+        if (elPeriodsMissed) elPeriodsMissed.innerText = msg.missedControlPeriods || 0;
+        if (elPeriodsConsec) elPeriodsConsec.innerText = msg.maxConsecutiveMissedPeriods || 0;
+      }
+
       const isDeadlineViolated = msg.maxDurationUs >= 10000;
       const hasMissedDeadlines = msg.missedDeadlines > 0;
+      const missedPeriods = isSchedAvailable ? (msg.missedControlPeriods || 0) : 0;
+      const maxLatenessUs = isSchedAvailable ? (msg.maxStartLatenessUs || 0) : 0;
 
-      if (hasMissedDeadlines || isDeadlineViolated) {
+      if (isSchedAvailable && (missedPeriods > 0 || maxLatenessUs >= 10000)) {
         if (elBadge) {
           elBadge.className = 'badge badge-danger';
-          elBadge.innerText = 'DEADLINE VIOLATION';
+          elBadge.innerText = 'SCHEDULING DELAY';
         }
         if (elStatus) {
           elStatus.className = 'status-val badge-danger';
-          elStatus.innerText = `VIOLATION: ${msg.missedDeadlines} missed deadlines (Max: ${msg.maxDurationUs} us)`;
+          const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+          elStatus.innerText = `SCHEDULING LATE: ${missedPeriods} missed periods (Peak Lateness: ${maxLateMs} ms)`;
+        }
+      } else if (hasMissedDeadlines || isDeadlineViolated) {
+        if (elBadge) {
+          elBadge.className = 'badge badge-danger';
+          elBadge.innerText = 'EXECUTION OVERRUN';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-danger';
+          elStatus.innerText = `EXECUTION OVERRUN: ${msg.missedDeadlines} overruns (Max Exec: ${msg.maxDurationUs} us)`;
         }
       } else {
         if (elBadge) {
@@ -1174,7 +1211,12 @@ function handleServerMessage(msg) {
         }
         if (elStatus) {
           elStatus.className = 'status-val badge-healthy';
-          elStatus.innerText = 'HEALTHY: 0 missed deadlines (10ms budget met)';
+          if (isSchedAvailable) {
+            const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+            elStatus.innerText = `HEALTHY: On-time scheduling & execution (Avg Exec: ${msg.avgDurationUs} us, Peak Lateness: ${maxLateMs} ms)`;
+          } else {
+            elStatus.innerText = `EXECUTION HEALTHY: Avg Exec: ${msg.avgDurationUs} us (Scheduling telemetry requiring 40B firmware update)`;
+          }
         }
       }
 
