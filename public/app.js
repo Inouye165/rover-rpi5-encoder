@@ -6447,7 +6447,42 @@ function updateDriveControlRoomImuUI(msg, pitch, roll, yaw) {
 
   const model3d = document.getElementById('drive-imu-3d-model');
   if (model3d) {
-    model3d.style.transform = `rotateX(${-20 + pitch}deg) rotateY(${-30 + roll}deg) rotateZ(${-yaw}deg)`;
+    if (msg && msg.orientation) {
+      const qw = typeof msg.orientation.w === 'number' ? msg.orientation.w : 1.0;
+      const qx = typeof msg.orientation.x === 'number' ? msg.orientation.x : 0.0;
+      const qy = typeof msg.orientation.y === 'number' ? msg.orientation.y : 0.0;
+      const qz = typeof msg.orientation.z === 'number' ? msg.orientation.z : 0.0;
+
+      const norm = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+      const w = norm > 0 ? qw / norm : 1.0;
+      const x = norm > 0 ? qx / norm : 0.0;
+      const y = norm > 0 ? qy / norm : 0.0;
+      const z = norm > 0 ? qz / norm : 0.0;
+
+      const r11 = 1 - 2 * (y * y + z * z);
+      const r12 = 2 * (x * y - w * z);
+      const r13 = 2 * (x * z + w * y);
+
+      const r21 = 2 * (x * y + w * z);
+      const r22 = 1 - 2 * (x * x + z * z);
+      const r23 = 2 * (y * z - w * x);
+
+      const r31 = 2 * (x * z - w * y);
+      const r32 = 2 * (y * z + w * x);
+      const r33 = 1 - 2 * (x * x + y * y);
+
+      // Box matrix R_box = M_basis * R(Q) * M_basis^T
+      // Column-major CSS matrix3d arguments:
+      // Col 1:  r22,  r32, -r12, 0
+      // Col 2:  r23,  r33, -r13, 0
+      // Col 3: -r21, -r31,  r11, 0
+      // Col 4: 0, 0, 0, 1
+      const m3d = `matrix3d(${r22.toFixed(6)}, ${r32.toFixed(6)}, ${(-r12).toFixed(6)}, 0, ${r23.toFixed(6)}, ${r33.toFixed(6)}, ${(-r13).toFixed(6)}, 0, ${(-r21).toFixed(6)}, ${(-r31).toFixed(6)}, ${r11.toFixed(6)}, 0, 0, 0, 0, 1)`;
+
+      model3d.style.transform = `rotateX(-20deg) rotateY(-30deg) ${m3d}`;
+    } else {
+      model3d.style.transform = `rotateX(${-20 + pitch}deg) rotateY(${-30 + roll}deg) rotateZ(${-yaw}deg)`;
+    }
   }
 }
 
