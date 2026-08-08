@@ -145,27 +145,8 @@ class SlamManager {
     this.state = 'STARTING';
     this.lastError = null;
 
-    const launchCmd = 'docker exec -i -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py"';
-
-    try {
-      this.managedProcess = spawn('bash', ['-c', launchCmd], { detached: true });
-    } catch (e) {
-      // Windows / direct shell fallback
-      this.managedProcess = spawn('cmd.exe', ['/c', launchCmd], { detached: true });
-    }
-
-    if (this.managedProcess) {
-      this.managedProcess.on('error', (err) => {
-        console.error('[SLAM Manager] Managed process launch error:', err);
-      });
-      this.managedProcess.on('exit', (code, signal) => {
-        console.log(`[SLAM Manager] Launch process exited code=${code} signal=${signal}`);
-        if (this.state === 'STARTING') {
-          this.state = 'ERROR';
-          this.lastError = `SLAM launch process exited prematurely with code ${code}`;
-        }
-      });
-    }
+    const launchCmd = 'docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py" || sudo -n docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py"';
+    await this.runCommand(launchCmd, 8000);
 
     // Poll for verification up to 15 seconds
     const maxPollMs = 15000;
@@ -211,15 +192,8 @@ class SlamManager {
 
     this.state = 'STOPPING';
 
-    if (this.managedProcess) {
-      try {
-        this.managedProcess.kill('SIGINT');
-      } catch (e) {}
-      this.managedProcess = null;
-    }
-
     // Run targeted pkill inside container targeting ONLY SLAM processes
-    const killCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|lifecycle_manager_slam' || true" 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|lifecycle_manager_slam' || true" 2>/dev/null`;
+    const killCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
     await this.runCommand(killCmd, 5000);
 
     // Poll for verification up to 10 seconds
@@ -242,7 +216,7 @@ class SlamManager {
     }
 
     // Force kill if still stopping
-    const forceKillCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|lifecycle_manager_slam' || true" 2>/dev/null`;
+    const forceKillCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
     await this.runCommand(forceKillCmd, 5000);
 
     this.state = 'STOPPED';
