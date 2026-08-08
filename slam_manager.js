@@ -63,10 +63,17 @@ class SlamManager {
         lifecycle: 'active',
         error: null
       };
+    } else if (this.state === 'STOPPING') {
+      return {
+        state: 'STOPPING',
+        nodes: nodeLines.filter(n => n.includes('slam')),
+        lifecycle: lcOutput.trim() || 'unconfigured/inactive',
+        error: null
+      };
     } else {
       return {
         state: 'STARTING',
-        nodes: ['/slam_toolbox', '/lifecycle_manager_slam'],
+        nodes: nodeLines.filter(n => n.includes('slam')),
         lifecycle: lcOutput.trim() || 'unconfigured/inactive',
         error: null
       };
