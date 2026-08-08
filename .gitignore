@@ -75,6 +75,8 @@ yahboom_i2c.py
 configure_imx*.js
 deploy_via_ssh*.js
 run_deploy_transcript.ps1
+*.before_*
+ros2/ros2_ws/core
 
 
 
