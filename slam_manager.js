@@ -148,8 +148,8 @@ class SlamManager {
     const launchCmd = 'docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py" || sudo -n docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py"';
     await this.runCommand(launchCmd, 8000);
 
-    // Poll for verification up to 15 seconds
-    const maxPollMs = 15000;
+    // Poll for verification up to 30 seconds (Ceres solver initialization on Pi takes 15-22 seconds)
+    const maxPollMs = 30000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxPollMs) {
@@ -171,7 +171,7 @@ class SlamManager {
 
     // Timeout reached without active RUNNING state
     this.state = 'ERROR';
-    this.lastError = 'SLAM start timed out: slam_toolbox lifecycle node did not reach active state within 15 seconds.';
+    this.lastError = 'SLAM start timed out: slam_toolbox lifecycle node did not reach active state within 30 seconds.';
     return {
       ok: false,
       error: this.lastError,
