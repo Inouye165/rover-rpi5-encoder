@@ -345,6 +345,7 @@ def main():
 
     print("\n=== 5. Recreating ROS 2 Container & Restarting Cockpit Services ===")
     exec_remote(client, "sudo cp /home/ron/yahboom-encoder/rover-health.service /etc/systemd/system/rover-health.service && sudo systemctl daemon-reload && sudo systemctl enable --now rover-health.service && sudo systemctl restart rover-health.service", password)
+    exec_remote(client, "sudo systemctl restart rover-lidar.service", password)
     exec_remote(client, "sudo systemctl restart rover-server.service", password)
     recreate_cmd = "cd /home/ron/yahboom-encoder/ros2 && sudo docker compose up -d --force-recreate"
     exit_code, out, err = exec_remote(client, recreate_cmd, password)
