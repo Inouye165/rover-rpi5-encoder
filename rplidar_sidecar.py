@@ -776,7 +776,7 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
                     self._send(503, {"error": "No scan data available", "connected": status_data["connected"], "state": status_data["state"]})
                     return
                 status_data["lastScanAgeMs"] = int(status_data["lastScanAgeMs"])
-                raw_bytes = latest_scan_bytes
+                raw_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
             self._send_bytes(200, raw_bytes)
 
         elif path in ("/test/start", "/test/start/"):
