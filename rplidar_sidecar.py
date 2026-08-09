@@ -545,8 +545,8 @@ async def async_scan_loop(device_path):
             print(f"[LiDAR Sidecar] Connecting to RPLIDAR C1 on {device_path}...")
             lidar = RPLidar(device_path, 460800)
             
-            # Start simple_scan task in the background
-            scan_task = asyncio.create_task(lidar.simple_scan(make_return_dict=True))
+            # Start simple_scan task in the background (output_dict=False to prevent float key accumulation)
+            scan_task = asyncio.create_task(lidar.simple_scan(make_return_dict=False))
             
             with state_lock:
                 status_data.update({
@@ -571,8 +571,15 @@ async def async_scan_loop(device_path):
                         raise exc
                     break
                 
-                data = lidar.output_dict
-                if not data:
+                # Drain output_queue to prevent memory accumulation in rplidarc1 library queue
+                raw_items = []
+                while not lidar.output_queue.empty():
+                    try:
+                        raw_items.append(lidar.output_queue.get_nowait())
+                    except Exception:
+                        break
+                
+                if not raw_items:
                     continue
                 
                 now = time.time()
@@ -580,11 +587,11 @@ async def async_scan_loop(device_path):
                 last_time = now
                 seq += 1
                 
-                # Make a thread-safe copy of output_dict
-                snapshot = dict(data)
-                
                 processed = []
-                for ang, dist in snapshot.items():
+                for pt in raw_items:
+                    ang = pt.get("a_deg")
+                    dist = pt.get("d_mm")
+                    q = pt.get("q", 31)
                     if dist is None or dist <= 0 or not math.isfinite(dist) or not math.isfinite(ang):
                         continue
                     norm_ang = ang % 360.0
@@ -593,7 +600,7 @@ async def async_scan_loop(device_path):
                     processed.append({
                         "angleDeg": round(norm_ang, 2),
                         "distanceMm": round(dist),
-                        "quality": 31 # Static nominal quality
+                        "quality": int(q)
                     })
                 
                 processed.sort(key=lambda p: p["angleDeg"])
