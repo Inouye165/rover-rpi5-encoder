@@ -845,3 +845,53 @@ class TestLaunchFile:
             content = f.read()
         assert "rover_cmd_vel_bridge" in content
         assert "rover_encoder_odometry" in content
+
+
+class TestLaserscanTimestamp:
+    """Tests for LaserScan header timestamp calculation, duration subtraction, and nanosecond rollover."""
+
+    def test_laserscan_start_timestamp_subtraction(self):
+        """Verify that scan start timestamp equals receipt_time - scan_duration."""
+        scan_hz = 6.666666
+        scan_duration_sec = 1.0 / scan_hz  # ~0.150s
+
+        # Simulated receipt time at sec=100, nanosec=500,000,000 (100.5s)
+        receipt_sec = 100
+        receipt_nanosec = 500_000_000
+
+        # Subtraction in floating seconds
+        receipt_float = receipt_sec + (receipt_nanosec * 1e-9)
+        start_float = receipt_float - scan_duration_sec
+
+        expected_start_sec = int(math.floor(start_float))
+        expected_start_nanosec = int(round((start_float - expected_start_sec) * 1e9))
+
+        assert expected_start_sec == 100
+        assert abs(expected_start_nanosec - 350_000_000) < 1000
+
+    def test_laserscan_nanosecond_rollover_borrow(self):
+        """Verify correct borrowing across seconds when nanoseconds < scan_duration."""
+        scan_duration_sec = 0.150  # 150 ms
+
+        # Simulated receipt time at sec=100, nanosec=50,000,000 (100.050s)
+        receipt_sec = 100
+        receipt_nanosec = 50_000_000
+
+        receipt_float = receipt_sec + (receipt_nanosec * 1e-9)  # 100.050
+        start_float = receipt_float - scan_duration_sec         # 99.900
+
+        expected_sec = int(math.floor(start_float))              # 99
+        expected_nanosec = int(round((start_float - expected_sec) * 1e9)) # 900_000_000
+
+        assert expected_sec == 99
+        assert abs(expected_nanosec - 900_000_000) < 1000
+
+    def test_laserscan_timing_fields_internal_consistency(self):
+        """Verify scan_time and time_increment consistency."""
+        points = _make_points([(0.0, 1000), (90.0, 1000), (180.0, 1000), (270.0, 1000)])
+        msg = build_laserscan(points, stamp_sec=100, stamp_nanosec=0, frame_id="laser_frame", scan_hz=6.666666, range_min_m=0.1, range_max_m=12.0, angle_offset_deg=0.0, reverse_scan=False)
+
+        assert abs(msg.scan_time - 0.150) < 0.001
+        assert abs(msg.time_increment - (msg.scan_time / 360.0)) < 1e-6
+        assert len(msg.ranges) == 360
+

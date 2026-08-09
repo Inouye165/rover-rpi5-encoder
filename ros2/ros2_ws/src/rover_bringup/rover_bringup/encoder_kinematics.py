@@ -154,9 +154,14 @@ class EncoderKinematics:
             self.w_z = 0.0
             return False, f"Stale telemetry gap ({dt:.2f}s > {self.stale_timeout_sec}s)"
 
-        # Duplicate sequence check
+        # Unchanged cached sequence check
         if sequence is not None and self.last_sequence is not None and sequence == self.last_sequence:
-            return False, f"Duplicate sequence payload ({sequence})"
+            self.last_timestamp_sec = float(timestamp_sec)
+            self.v_x = 0.0
+            self.w_z = 0.0
+            self.disagreement_warning = False
+            self.disagreement_details = ""
+            return True, "NO_NEW_SAMPLE"
 
         # Compute per-wheel tick deltas with rollover & sign normalization
         dm1 = compute_ticks_delta(current_ticks[0], self.last_ticks[0], self.reset_threshold_ticks) * self.m_signs[0]

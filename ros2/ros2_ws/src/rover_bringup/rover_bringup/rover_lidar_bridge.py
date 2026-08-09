@@ -287,10 +287,16 @@ class RoverLidarBridgeNode(Node):
         timestamp_str = data.get("timestamp")
         scan_hz = float(data.get("scanHz", 0.0))
 
-        # Compute header stamp using ROS node clock for nanosecond resolution and TF sync
-        now_msg = self.get_clock().now().to_msg()
-        stamp_sec = now_msg.sec
-        stamp_nanosec = now_msg.nanosec
+        # Compute measured scan duration (1 / scan_hz if scan_hz > 0 else fallback 0.150s)
+        scan_duration_sec = (1.0 / scan_hz) if (scan_hz > 0.0) else 0.150
+
+        # ROS LaserScan header.stamp represents acquisition time of the FIRST ray (scan start).
+        # Shift synthetic receipt time back by scan_duration_sec to derive scan start stamp.
+        now = self.get_clock().now()
+        scan_start_time = now - rclpy.duration.Duration(seconds=scan_duration_sec)
+        stamp_msg = scan_start_time.to_msg()
+        stamp_sec = stamp_msg.sec
+        stamp_nanosec = stamp_msg.nanosec
 
         # ---- Build and publish LaserScan ----
         msg = build_laserscan(

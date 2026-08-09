@@ -116,6 +116,65 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertEqual(len(published_msgs), 0)
         self.assertEqual(self.node.consecutive_errors, 1)
 
+    @patch('requests.Session.get')
+    def test_poll_and_publish_duplicate_cached_sequence(self, mock_get):
+        """Verify that unchanged cached sequence publishes odom/TF with zero velocity, 0 errors, and no double integration."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'ok': True,
+            'schema_version': '1.0',
+            'serialConnected': True,
+            'timestamp': 1721697600000,
+            'sequence': 50,
+            'encoders': {'m1': 1000, 'm2': 1000, 'm3': 1000, 'm4': 1000}
+        }
+        mock_get.return_value = mock_response
+
+        published_msgs = []
+        self.node.odom_pub.publish = lambda msg: published_msgs.append(msg)
+
+        # 1. Baseline initialization
+        self.node._poll_and_publish()
+        self.assertEqual(len(published_msgs), 1)
+
+        # 2. First motion step (seq 51)
+        mock_response.json.return_value['sequence'] = 51
+        mock_response.json.return_value['encoders'] = {'m1': 2000, 'm2': 2000, 'm3': 2000, 'm4': 2000}
+        self.node._poll_and_publish()
+        self.assertEqual(len(published_msgs), 2)
+        pose_x_step1 = published_msgs[-1].pose.pose.position.x
+        self.assertGreater(pose_x_step1, 0.0)
+
+        # 3. Duplicate cached sequence poll (seq 51 repeated)
+        mock_response.json.return_value['sequence'] = 51
+        mock_response.json.return_value['encoders'] = {'m1': 2000, 'm2': 2000, 'm3': 2000, 'm4': 2000}
+        self.node._poll_and_publish()
+
+        # Must still publish odom message (count=3)
+        self.assertEqual(len(published_msgs), 3)
+        msg_dup = published_msgs[-1]
+
+        # Pose must NOT move (no double integration)
+        self.assertAlmostEqual(msg_dup.pose.pose.position.x, pose_x_step1, places=6)
+
+        # Published linear & angular velocities must be 0.0
+        self.assertEqual(msg_dup.twist.twist.linear.x, 0.0)
+        self.assertEqual(msg_dup.twist.twist.angular.z, 0.0)
+
+        # Error counter must NOT increment
+        self.assertEqual(self.node.consecutive_errors, 0)
+
+        # 4. Resume with fresh sequence (seq 52)
+        mock_response.json.return_value['sequence'] = 52
+        mock_response.json.return_value['encoders'] = {'m1': 3000, 'm2': 3000, 'm3': 3000, 'm4': 3000}
+        self.node._poll_and_publish()
+        self.assertEqual(len(published_msgs), 4)
+        pose_x_step3 = published_msgs[-1].pose.pose.position.x
+
+        # Pose advances further cleanly
+        self.assertGreater(pose_x_step3, pose_x_step1)
+
     def test_node_source_has_no_serial_or_dev_access(self):
         """Safety audit: ensure node source does not open serial ports or /dev devices."""
         node_file = os.path.join(
