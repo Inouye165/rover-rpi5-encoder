@@ -43,10 +43,11 @@ test_metrics = {
 }
 
 # Test configuration (sent on /test/start)
+# Measured current rover LiDAR position relative to base_link (ROS TF and sidecar must remain synchronized)
 test_config = {
     "front_angle_offset": 0.0,
-    "lidar_x_offset": 0.0127,  # base_link to laser x translation in meters
-    "lidar_y_offset": 0.034925,  # base_link to laser y translation in meters
+    "lidar_x_offset": 0.03175,  # base_link to laser x translation in meters (+0.03175 m)
+    "lidar_y_offset": 0.0,      # base_link to laser y translation in meters (0.0 m)
     "lidar_yaw_offset": 0.0,
     "min_range": 0.15,
     "max_range": 4.0,
@@ -67,8 +68,8 @@ def filter_and_process_scan(points, config):
     min_range = config.get("min_range", 0.15)
     max_range = config.get("max_range", 4.0)
     chassis_margin = config.get("chassis_margin", 0.02)
-    lx = config.get("lidar_x_offset", 0.0127)
-    ly = config.get("lidar_y_offset", 0.034925)
+    lx = config.get("lidar_x_offset", 0.03175)
+    ly = config.get("lidar_y_offset", 0.0)
     lyaw = config.get("lidar_yaw_offset", 0.0)
     sector_masks = config.get("angle_sector_masks", [])
     

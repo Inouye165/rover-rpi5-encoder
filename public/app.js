@@ -3722,8 +3722,8 @@ function updateTrackInterference(scan) {
   if (!scan || !scan.points) return;
   
   const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset')?.value || 0);
-  const lx = parseFloat(document.getElementById('cfg-lidar-x')?.value || 0.0127);
-  const ly = parseFloat(document.getElementById('cfg-lidar-y')?.value || 0.034925);
+  const lx = parseFloat(document.getElementById('cfg-lidar-x')?.value || 0.03175);
+  const ly = parseFloat(document.getElementById('cfg-lidar-y')?.value || 0.0);
   const maxRangeCfg = parseFloat(document.getElementById('cfg-max-range')?.value || 4.0);
   
   const selectTrackWidth = document.getElementById('monitored-track-width');
@@ -5444,8 +5444,8 @@ function initLidarStraightLineTest() {
       calibPathHistory = []; // Clear historical paths for new run
       
       const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset').value || 0);
-      const lidarXOffset = parseFloat(document.getElementById('cfg-lidar-x').value || 0.0127);
-      const lidarYOffset = parseFloat(document.getElementById('cfg-lidar-y').value || 0.034925);
+      const lidarXOffset = parseFloat(document.getElementById('cfg-lidar-x').value || 0.03175);
+      const lidarYOffset = parseFloat(document.getElementById('cfg-lidar-y').value || 0.0);
       const maxRange = parseFloat(document.getElementById('cfg-max-range').value || 4.0);
       const minConfidence = parseFloat(document.getElementById('cfg-min-confidence').value || 0.65);
       const headingGain = parseFloat(document.getElementById('cfg-heading-gain').value || 0.80);
@@ -5812,8 +5812,8 @@ function drawLidarTestCanvas() {
       const y_lidar = - distM * Math.sin(angleRad); // Negated for right-handed mapping
       
       // LiDAR to chassis frame translation
-      const x_chassis = x_lidar + (parseFloat(document.getElementById('cfg-lidar-x')?.value) || 0.0127);
-      const y_chassis = y_lidar + (parseFloat(document.getElementById('cfg-lidar-y')?.value) || 0.034925);
+      const x_chassis = x_lidar + (parseFloat(document.getElementById('cfg-lidar-x')?.value) || 0.03175);
+      const y_chassis = y_lidar + (parseFloat(document.getElementById('cfg-lidar-y')?.value) || 0.0);
       
       // Chassis to track frame translation and rotation
       const x_track = latestPose.x + x_chassis * Math.cos(latestPose.yaw) - y_chassis * Math.sin(latestPose.yaw);

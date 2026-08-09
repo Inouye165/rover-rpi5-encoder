@@ -339,10 +339,10 @@ let calibSpeedBoost = 0.0;
 let interPassPauseStartTime = 0;
 let returnHomeWaitStartTime = 0;
 
-// Calibration & offset settings
+// Calibration & offset settings (Measured current rover LiDAR position relative to base_link)
 let fwdAngleOffset = 0.0;
-let lidarXOffset = 0.0127;
-let lidarYOffset = 0.034925;
+let lidarXOffset = 0.03175;
+let lidarYOffset = 0.0;
 let lidarYawOffset = 0.0;
 let maxCalibRange = 4.0;
 let chassisMargin = 0.02;
@@ -2028,8 +2028,8 @@ wss.on('connection', (ws, req) => {
           }
           lidarTestMode = 'correct'; // always correct+learn
           fwdAngleOffset = parseFloat(msg.frontAngleOffset || 0.0);
-          lidarXOffset = parseFloat(msg.lidarXOffset || 0.0127);
-          lidarYOffset = parseFloat(msg.lidarYOffset || 0.034925);
+          lidarXOffset = parseFloat(msg.lidarXOffset || 0.03175);
+          lidarYOffset = parseFloat(msg.lidarYOffset || 0.0);
           lidarYawOffset = parseFloat(msg.lidarYawOffset || 0.0);
           maxCalibRange = parseFloat(msg.maxRange || 4.0);
           chassisMargin = parseFloat(msg.chassisMargin || 0.02);
