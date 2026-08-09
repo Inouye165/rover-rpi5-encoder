@@ -51,9 +51,9 @@ def generate_launch_description():
             name='base_link_to_laser_frame_publisher',
             output='screen',
             arguments=[
-                '--x', '0.0127',
-                '--y', '0.034925',
-                '--z', '0.08',
+                '--x', '0.03175',
+                '--y', '0.0',
+                '--z', '0.17145',
                 '--roll', '0.0',
                 '--pitch', '0.0',
                 '--yaw', '0.0',
@@ -69,7 +69,7 @@ def generate_launch_description():
             arguments=[
                 '--x', '-0.0254',
                 '--y', '-0.0254',
-                '--z', '0.146',
+                '--z', '0.14605',
                 '--roll', '0.0',
                 '--pitch', '0.0',
                 '--yaw', '0.0',
