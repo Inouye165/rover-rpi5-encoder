@@ -18,7 +18,7 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
@@ -170,6 +170,7 @@ class RoverEncoderOdometry(Node):
 
         # Publishers & TF broadcaster
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.footprint_pub = self.create_publisher(PolygonStamped, '/footprint', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # HTTP session setup
@@ -339,6 +340,20 @@ class RoverEncoderOdometry(Node):
         t.transform.rotation.w = float(qw)
 
         self.tf_broadcaster.sendTransform(t)
+
+        # 3. Footprint Polygon Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        footprint_msg = PolygonStamped()
+        footprint_msg.header.stamp = stamp_msg
+        footprint_msg.header.frame_id = self.base_frame
+        half_l = 0.254 / 2.0   # 0.127 m
+        half_w = 0.2286 / 2.0  # 0.1143 m
+        footprint_msg.polygon.points = [
+            Point32(x=half_l, y=half_w, z=0.0),    # Front Left
+            Point32(x=half_l, y=-half_w, z=0.0),   # Front Right
+            Point32(x=-half_l, y=-half_w, z=0.0),  # Rear Right
+            Point32(x=-half_l, y=half_w, z=0.0),   # Rear Left
+        ]
+        self.footprint_pub.publish(footprint_msg)
 
 
 def main(args=None):

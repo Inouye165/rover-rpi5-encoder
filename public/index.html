@@ -431,7 +431,10 @@
               <span class="badge badge-success">PORT 8765</span>
             </div>
             <p style="font-size: 0.85rem; color: var(--text-muted);">Foxglove Studio WebSocket bridge active at <code>ws://10.0.0.246:8765</code>.</p>
-            <a href="https://studio.foxglove.dev" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="margin-top: 8px; display: inline-block;">Open Foxglove Web Studio</a>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+              <a href="https://studio.foxglove.dev/stream?ds=foxglove-websocket&ds.url=ws://10.0.0.246:8765" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="display: inline-block;">Open Foxglove Web Studio</a>
+              <a href="/foxglove_layout.json" download="foxglove_layout.json" class="btn btn-small btn-secondary" style="display: inline-block; opacity: 0.85;">📥 Download Clean Layout JSON</a>
+            </div>
           </div>
         </div>
       </div>

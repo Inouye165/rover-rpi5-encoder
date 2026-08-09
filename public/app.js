@@ -2993,6 +2993,16 @@ function update3DModelRotation(pitch, roll, yaw) {
   }
 }
 
+// --- Chassis Footprint Configuration (10 in x 9 in = 0.254m x 0.2286m) ---
+const ROVER_FOOTPRINT_CONFIG = {
+  lengthM: 0.254,   // 10 inches chassis length (X axis / front-to-back)
+  widthM: 0.2286,   // 9 inches chassis width (Y axis / side-to-side)
+  strokeColor: '#00f2fe',
+  strokeWidth: 1.5,
+  fillColor: 'rgba(0, 242, 254, 0.15)',
+  noseColor: '#ff0055',
+};
+
 // --- Canvas Trail Map Drawing ---
 function resizeCanvas() {
   const rect = pathCanvas.parentElement.getBoundingClientRect();
@@ -3066,25 +3076,46 @@ function drawPath() {
     ctx.shadowBlur = 0; // reset
   }
   
-  // Draw Rover Indicator (Triangle pointing in current heading odomTheta)
+  // Draw Rover Indicator & Footprint Overlay (centered on current robot pose)
   const rx = odomX / 1000;
   const ry = odomY / 1000;
   const screenX = centerX + rx * scale;
   const screenY = centerY - ry * scale;
   
+  const fpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2) * scale;
+  const fpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2) * scale;
+  
   ctx.save();
   ctx.translate(screenX, screenY);
   ctx.rotate(-odomTheta); // Y-axis in canvas is inverted
   
-  // Draw glowing rover triangle
+  // 1. Chassis footprint fill and thin outline (10 in x 9 in scaled)
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-fpHalfL, -fpHalfW, fpHalfL * 2, fpHalfW * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-fpHalfL, -fpHalfW, fpHalfL * 2, fpHalfW * 2);
+  
+  // 2. Clear front/nose indication (chevron arrow on front bumper)
+  const noseSize = Math.max(4, Math.min(fpHalfL * 0.5, 10));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
+  ctx.beginPath();
+  ctx.moveTo(fpHalfL, 0); // nose tip
+  ctx.lineTo(fpHalfL - noseSize, -noseSize * 0.6);
+  ctx.lineTo(fpHalfL - noseSize * 0.6, 0);
+  ctx.lineTo(fpHalfL - noseSize, noseSize * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  
+  // 3. Central pose marker triangle
   ctx.fillStyle = 'var(--red-glow)';
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.0;
   ctx.beginPath();
-  ctx.moveTo(12, 0);   // Tip
-  ctx.lineTo(-8, -8);  // Rear left
-  ctx.lineTo(-4, 0);   // Rear center indent
-  ctx.lineTo(-8, 8);   // Rear right
+  ctx.moveTo(Math.min(10, fpHalfL), 0);   // Tip
+  ctx.lineTo(-Math.min(6, fpHalfL * 0.6), -Math.min(6, fpHalfW * 0.6));  // Rear left
+  ctx.lineTo(-Math.min(3, fpHalfL * 0.3), 0);   // Rear center indent
+  ctx.lineTo(-Math.min(6, fpHalfL * 0.6), Math.min(6, fpHalfW * 0.6));   // Rear right
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
@@ -3925,6 +3956,34 @@ function drawPolarScan(scan) {
   ctx.textAlign = 'right';
   ctx.fillText('270° LEFT', centerX - radius - 8, centerY);
   
+  // Draw Top-Down Rover Chassis Footprint Overlay (10" x 9" scaled in meters)
+  const polarScaleM = scale * 1000.0;
+  const pFpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2.0) * polarScaleM;
+  const pFpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2.0) * polarScaleM;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+
+  // Chassis footprint fill and thin outline
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-pFpHalfW, -pFpHalfL, pFpHalfW * 2, pFpHalfL * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-pFpHalfW, -pFpHalfL, pFpHalfW * 2, pFpHalfL * 2);
+
+  // Front nose indicator (0° FRONT)
+  const pNoseSize = Math.max(4, Math.min(pFpHalfL * 0.5, 8));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
+  ctx.beginPath();
+  ctx.moveTo(0, -pFpHalfL); // Front nose tip
+  ctx.lineTo(-pNoseSize * 0.6, -pFpHalfL + pNoseSize);
+  ctx.lineTo(0, -pFpHalfL + pNoseSize * 0.6);
+  ctx.lineTo(pNoseSize * 0.6, -pFpHalfL + pNoseSize);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+
   // Draw the points
   if (scan.points && scan.points.length > 0) {
     let closestPt = null;
@@ -5178,16 +5237,16 @@ function startGamepadLoop() {
     const rawX = (gp.axes && gp.axes[0] !== undefined) ? gp.axes[0] : 0;
     const rawY = (gp.axes && gp.axes[1] !== undefined) ? gp.axes[1] : 0;
 
-    let throttle = -rawY;
-    let turn = rawX;
+    let throttle = -gp.axes[1];
+    let turn = gp.axes[0];
 
     // Apply deadzone (0.10) to block resting drift
     if (Math.abs(throttle) < 0.10) throttle = 0;
     if (Math.abs(turn) < 0.10) turn = 0;
 
-    // Right Trigger (buttons[7]) Deadman evaluation (analog value > 0.5 or pressed)
+    // Right Trigger (buttons[7]) / RB (buttons[5]) Deadman evaluation
     const rtVal = (gp.buttons && gp.buttons[7] && typeof gp.buttons[7].value === 'number') ? gp.buttons[7].value : 0;
-    const rtPressed = Boolean(gp.buttons && gp.buttons[7] && (gp.buttons[7].pressed || rtVal > 0.5));
+    const rtPressed = Boolean(gp.buttons && gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5));
     const rbPressed = Boolean(gp.buttons && gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5));
     const deadmanPressed = Boolean(rtPressed || rbPressed);
 
@@ -5281,6 +5340,8 @@ function startGamepadLoop() {
   }
   requestAnimationFrame(poll);
 }
+
+// Stage 4 Safety Event Handlers
 
 // ==============================================================================
 // LiDAR Straight-Line Correction & Calibration Setup
@@ -6361,16 +6422,42 @@ function drawCompactLidarScan(scan) {
     }
   }
 
-  // Draw Center Rover Icon
-  ctx.fillStyle = '#10b981';
-  ctx.fillRect(centerX - 6, centerY - 8, 12, 16);
-  ctx.fillStyle = '#ffffff';
+  // Draw Top-Down Rover Chassis Footprint Overlay (10" x 9" scaled in meters)
+  const scaleM = scale * 1000.0;
+  const fpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2.0) * scaleM;
+  const fpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2.0) * scaleM;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+
+  // 1. Chassis footprint fill and thin outline
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-fpHalfW, -fpHalfL, fpHalfW * 2, fpHalfL * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-fpHalfW, -fpHalfL, fpHalfW * 2, fpHalfL * 2);
+
+  // 2. Clear front/nose indication (Chevron arrow on top bumper pointing 0° FRONT)
+  const noseSize = Math.max(4, Math.min(fpHalfL * 0.5, 8));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
   ctx.beginPath();
-  ctx.moveTo(centerX, centerY - 12);
-  ctx.lineTo(centerX - 4, centerY - 6);
-  ctx.lineTo(centerX + 4, centerY - 6);
+  ctx.moveTo(0, -fpHalfL); // Front nose tip
+  ctx.lineTo(-noseSize * 0.6, -fpHalfL + noseSize);
+  ctx.lineTo(0, -fpHalfL + noseSize * 0.6);
+  ctx.lineTo(noseSize * 0.6, -fpHalfL + noseSize);
   ctx.closePath();
   ctx.fill();
+
+  // 3. Central pose marker arrow
+  ctx.fillStyle = '#10b981';
+  ctx.beginPath();
+  ctx.moveTo(0, -Math.min(10, fpHalfL));
+  ctx.lineTo(-Math.min(4, fpHalfW * 0.5), 0);
+  ctx.lineTo(Math.min(4, fpHalfW * 0.5), 0);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
 
   // Update Closest Obstacle Readout HUD
   const elDist = document.getElementById('v2-compact-lidar-dist');
@@ -6399,7 +6486,8 @@ function drawCompactLidarScan(scan) {
   }
 }
 
-// Stage 4 Safety Event Handlers: Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
+// Stage 4 Safety Event Handlers
+// Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
 window.addEventListener('blur', () => {
   if (typeof driveRover === 'function') driveRover('stop');
   sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
