@@ -370,6 +370,7 @@ latest_scan = {
     "pointCount": 0,
     "points": []
 }
+latest_scan_bytes = b'{"timestamp":null,"sequence":0,"scanHz":0.0,"pointCount":0,"points":[]}'
 
 status_data = {
     "connected": False,
@@ -495,6 +496,7 @@ def poll_mock(interval):
                 "pointCount": len(processed),
                 "points": processed
             })
+            latest_scan_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
             status_data.update({
                 "scanHz": scan_hz,
                 "pointsPerSecond": points_per_sec,
@@ -620,6 +622,7 @@ async def async_scan_loop(device_path):
                         "pointCount": len(processed),
                         "points": processed
                     })
+                    latest_scan_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
                     status_data.update({
                         "scanHz": scan_hz,
                         "pointsPerSecond": points_per_sec,
@@ -723,8 +726,11 @@ class StreamRateLimiter:
         return getattr(self.target_stream, name)
 
 class LiDARHTTPHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def handle(self):
         global http_disconnect_counter
+        self.close_connection = True
         try:
             super().handle()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -770,8 +776,8 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
                     self._send(503, {"error": "No scan data available", "connected": status_data["connected"], "state": status_data["state"]})
                     return
                 status_data["lastScanAgeMs"] = int(status_data["lastScanAgeMs"])
-                payload = dict(latest_scan)
-            self._send(200, payload)
+                raw_bytes = latest_scan_bytes
+            self._send_bytes(200, raw_bytes)
 
         elif path in ("/test/start", "/test/start/"):
             with test_lock:
@@ -828,21 +834,24 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
             with test_lock:
                 test_active = False
                 test_state = "IDLE"
+                test_ref_scans = []
+                test_ref_cloud = None
             self._send(200, {"ok": True, "message": "LiDAR straight-line test session stopped."})
 
         else:
             self._send(404, {"error": f"Unknown path: {self.path}"})
 
-    def _send(self, code, obj):
+    def _send_bytes(self, code, body_bytes):
         global http_disconnect_counter
+        self.close_connection = True
         try:
-            body = json.dumps(obj, separators=(',', ':')).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.send_header("Connection", "close")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(body_bytes)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             http_disconnect_counter += 1
             log_periodic_sidecar_diagnostics()
@@ -853,8 +862,13 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
             else:
                 raise
 
+    def _send(self, code, obj):
+        body = json.dumps(obj, separators=(',', ':')).encode()
+        self._send_bytes(code, body)
+
     def log_message(self, fmt, *args):
         pass
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="RPLIDAR C1 HTTP Sidecar")

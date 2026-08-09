@@ -344,6 +344,7 @@ def main():
         print("ROS 2 colcon build: PASS")
 
     print("\n=== 5. Recreating ROS 2 Container & Restarting Cockpit Services ===")
+    exec_remote(client, "sudo cp /home/ron/yahboom-encoder/rover-health.service /etc/systemd/system/rover-health.service && sudo systemctl daemon-reload && sudo systemctl enable --now rover-health.service && sudo systemctl restart rover-health.service", password)
     exec_remote(client, "sudo systemctl restart rover-server.service", password)
     recreate_cmd = "cd /home/ron/yahboom-encoder/ros2 && sudo docker compose up -d --force-recreate"
     exit_code, out, err = exec_remote(client, recreate_cmd, password)
@@ -352,6 +353,7 @@ def main():
         client.close()
         sys.exit(1)
     print(" [OK] ROS 2 container recreated via Docker Compose (--force-recreate)")
+    print(" [OK] Rover Health Recorder service deployed and active")
 
     print("\n=== 6. Post-Deployment Verification ===")
     ros_ok, attempt_history, ros_err = verify_ros_container_and_startup(client, password, max_wait_sec=60)

@@ -4,9 +4,9 @@ class SlamManager {
   constructor() {
     this.state = 'STOPPED'; // STOPPED, STARTING, RUNNING, STOPPING, ERROR
     this.lastError = null;
-    this.managedProcess = null;
     this.lastCheckTime = 0;
     this.cachedStatus = { state: 'STOPPED', nodes: [], lifecycle: null, error: null };
+    this.activeCheckPromise = null;
   }
 
   // Execute shell command asynchronously returning stdout/stderr promise
@@ -22,69 +22,82 @@ class SlamManager {
     });
   }
 
-  // Truthfully check ROS nodes and lifecycle state inside rover-ros2 Docker container
-  async checkTruthfulState() {
-    const nodeCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 node list 2>/dev/null" || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 node list 2>/dev/null"`;
-    const res = await this.runCommand(nodeCmd, 6000);
-
-    if (!res.ok) {
-      return {
-        state: 'ERROR',
-        nodes: [],
-        lifecycle: null,
-        error: `Failed to query ROS 2 nodes inside container: ${res.error}`
-      };
-    }
-
-    const nodeLines = res.stdout.split('\n').map(s => s.trim()).filter(Boolean);
-    const hasSlamToolbox = nodeLines.includes('/slam_toolbox');
-    const hasLifecycleManager = nodeLines.includes('/lifecycle_manager_slam');
-
-    if (!hasSlamToolbox || !hasLifecycleManager) {
-      return {
-        state: 'STOPPED',
-        nodes: nodeLines.filter(n => n.includes('slam')),
-        lifecycle: null,
-        error: null
-      };
-    }
-
-    // Check slam_toolbox lifecycle state
-    const lcCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 lifecycle get /slam_toolbox 2>/dev/null" || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 lifecycle get /slam_toolbox 2>/dev/null"`;
-    const lcRes = await this.runCommand(lcCmd, 6000);
-
-    const lcOutput = (lcRes.stdout || '').toLowerCase();
-    const isActive = lcOutput.includes('active') && !lcOutput.includes('inactive');
-
-    if (isActive) {
-      return {
-        state: 'RUNNING',
-        nodes: ['/slam_toolbox', '/lifecycle_manager_slam'],
-        lifecycle: 'active',
-        error: null
-      };
-    } else if (this.state === 'STOPPING') {
-      return {
-        state: 'STOPPING',
-        nodes: nodeLines.filter(n => n.includes('slam')),
-        lifecycle: lcOutput.trim() || 'unconfigured/inactive',
-        error: null
-      };
-    } else {
-      return {
-        state: 'STARTING',
-        nodes: nodeLines.filter(n => n.includes('slam')),
-        lifecycle: lcOutput.trim() || 'unconfigured/inactive',
-        error: null
-      };
-    }
+  // Fast pre-check: inspect if SLAM node process is running via pgrep (< 50ms vs > 1000ms for ROS 2 CLI)
+  async checkProcessAlive() {
+    const pgrepCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 pgrep -f async_slam_toolbox_node 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 pgrep -f async_slam_toolbox_node 2>/dev/null`;
+    const res = await this.runCommand(pgrepCmd, 3000);
+    return res.ok && res.stdout.trim().length > 0;
   }
 
-  // Get current SLAM status, checking truthful ROS state if not in fast transition
+  // Check ROS nodes and lifecycle state with single in-flight promise collapsing
+  checkTruthfulState() {
+    if (this.activeCheckPromise) {
+      return this.activeCheckPromise;
+    }
+
+    this.activeCheckPromise = (async () => {
+      try {
+        const isProcessAlive = await this.checkProcessAlive();
+
+        if (!isProcessAlive) {
+          return {
+            state: 'STOPPED',
+            nodes: [],
+            lifecycle: null,
+            error: null
+          };
+        }
+
+        // SLAM process exists, check detailed node & lifecycle status
+        const lcCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 lifecycle get /slam_toolbox 2>/dev/null" || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 lifecycle get /slam_toolbox 2>/dev/null"`;
+        const lcRes = await this.runCommand(lcCmd, 5000);
+
+        const lcOutput = (lcRes.stdout || '').toLowerCase();
+        const isActive = lcOutput.includes('active') && !lcOutput.includes('inactive');
+
+        if (isActive) {
+          return {
+            state: 'RUNNING',
+            nodes: ['/slam_toolbox', '/lifecycle_manager_slam'],
+            lifecycle: 'active',
+            error: null
+          };
+        } else if (this.state === 'STOPPING') {
+          return {
+            state: 'STOPPING',
+            nodes: ['/slam_toolbox'],
+            lifecycle: lcOutput.trim() || 'unconfigured/inactive',
+            error: null
+          };
+        } else {
+          return {
+            state: 'STARTING',
+            nodes: ['/slam_toolbox'],
+            lifecycle: lcOutput.trim() || 'unconfigured/inactive',
+            error: null
+          };
+        }
+      } catch (err) {
+        return {
+          state: 'ERROR',
+          nodes: [],
+          lifecycle: null,
+          error: `Error checking SLAM state: ${err.message}`
+        };
+      } finally {
+        this.activeCheckPromise = null;
+      }
+    })();
+
+    return this.activeCheckPromise;
+  }
+
+  // Get current SLAM status with brief caching and promise deduplication
   async getStatus() {
     const now = Date.now();
-    // Cache for 2 seconds unless currently in STARTING or STOPPING state
-    if (now - this.lastCheckTime < 2000 && this.state !== 'STARTING' && this.state !== 'STOPPING') {
+    const cacheTtlMs = 3000;
+
+    if (now - this.lastCheckTime < cacheTtlMs && this.state !== 'STARTING' && this.state !== 'STOPPING') {
       return {
         ok: true,
         state: this.state,
@@ -94,7 +107,6 @@ class SlamManager {
       };
     }
 
-    // Don't override transient STARTING/STOPPING states during quick polling
     if (this.state === 'STARTING' || this.state === 'STOPPING') {
       return {
         ok: true,
@@ -110,7 +122,6 @@ class SlamManager {
     this.cachedStatus = verified;
 
     if (verified.state === 'ERROR' && this.state !== 'ERROR') {
-      // Container/ROS error
       this.lastError = verified.error;
     } else if (verified.state !== 'ERROR') {
       this.state = verified.state;
@@ -128,7 +139,7 @@ class SlamManager {
     };
   }
 
-  // Start SLAM launch inside rover-ros2 container
+  // Start SLAM launch inside rover-ros2 container with state locking and lightweight polling
   async startSlam() {
     if (this.state === 'STARTING' || this.state === 'RUNNING') {
       return {
@@ -137,6 +148,9 @@ class SlamManager {
         state: this.state
       };
     }
+
+    this.state = 'STARTING';
+    this.lastError = null;
 
     // Verify actual ROS state first
     const truthful = await this.checkTruthfulState();
@@ -149,18 +163,15 @@ class SlamManager {
       };
     }
 
-    this.state = 'STARTING';
-    this.lastError = null;
-
     const launchCmd = 'docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py" || sudo -n docker exec -d -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 launch rover_bringup slam.launch.py"';
     await this.runCommand(launchCmd, 8000);
 
-    // Poll for verification up to 30 seconds (Ceres solver initialization on Pi takes 15-22 seconds)
+    // Poll for verification up to 30 seconds using 2s lightweight pgrep polling
     const maxPollMs = 30000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxPollMs) {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 2000));
       const check = await this.checkTruthfulState();
       this.cachedStatus = check;
 
@@ -186,10 +197,9 @@ class SlamManager {
     };
   }
 
-  // Stop SLAM processes inside rover-ros2 container without stopping container or foundation nodes
+  // Stop SLAM processes inside rover-ros2 container
   async stopSlam() {
     if (this.state === 'STOPPING' || this.state === 'STOPPED') {
-      // Double check truthful state
       const check = await this.checkTruthfulState();
       if (check.state === 'STOPPED') {
         this.state = 'STOPPED';
@@ -199,16 +209,14 @@ class SlamManager {
 
     this.state = 'STOPPING';
 
-    // Run targeted pkill inside container targeting ONLY SLAM processes
     const killCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null || sudo -n docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
     await this.runCommand(killCmd, 5000);
 
-    // Poll for verification up to 10 seconds
     const maxPollMs = 10000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxPollMs) {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1500));
       const check = await this.checkTruthfulState();
       this.cachedStatus = check;
 
@@ -222,7 +230,6 @@ class SlamManager {
       }
     }
 
-    // Force kill if still stopping
     const forceKillCmd = `docker exec -e ROS_DOMAIN_ID=42 rover-ros2 bash -c "pkill -9 -f 'slam.launch.py|async_slam_toolbox_node|nav2_lifecycle_manager' || true" 2>/dev/null`;
     await this.runCommand(forceKillCmd, 5000);
 
