@@ -827,7 +827,21 @@ async function runMotorProofSequence() {
 // checksum = (sum of all bytes from extLen through last data byte) & 0xFF
 // data payload = extLen - 2 bytes (excl. extType and checksum)
 // ────────────────────────────────────────────────────────────
+// Telemetry Parser Instrumentation Counters
+const telemetryParserStats = {
+  bytesReceived: 0,
+  validFramesParsed: 0,
+  malformedLengthCount: 0,
+  checksumErrors: 0,
+  resyncCount: 0,
+  encoderPacketCount: 0,
+  imuPacketCount: 0
+};
+
 let rxBuf = Buffer.alloc(0);
+
+const MIN_VALID_EXT_LEN = 4;
+const MAX_VALID_EXT_LEN = 120;
 
 function processRxBuffer() {
   // Extract and print any ASCII debug lines from the serial stream
@@ -865,17 +879,26 @@ function processRxBuffer() {
     // We have the start of a potential packet at h1
     if (rxBuf.length < h1 + 3) break; // Need at least header + extLen
 
-    const extLen  = rxBuf[h1 + 2];
+    const extLen = rxBuf[h1 + 2];
+
+    // HARDENED LENGTH VALIDATION: Immediately reject invalid extLen
+    if (extLen < MIN_VALID_EXT_LEN || extLen > MAX_VALID_EXT_LEN) {
+      telemetryParserStats.malformedLengthCount++;
+      telemetryParserStats.resyncCount++;
+      rxBuf = rxBuf.subarray(h1 + 1);
+      continue;
+    }
+
     const totalLen = h1 + 2 + extLen; // header(2) + length byte(1) + extLen more bytes
 
-    if (rxBuf.length < totalLen) break; // Wait for more data
+    if (rxBuf.length < totalLen) break; // Wait for more data of a VALID length frame
 
     // Extract packet bytes
     const extType = rxBuf[h1 + 3];
-    // Data payload = bytes after extType, before checksum = extLen - 2 bytes
-    const dataLen = extLen - 2;
+    // Data payload = bytes after extType, before checksum = extLen - 3 bytes
+    const dataLen = extLen - 3;
     if (dataLen < 0) {
-      // Malformed – discard and advance
+      telemetryParserStats.resyncCount++;
       rxBuf = rxBuf.subarray(h1 + 1);
       continue;
     }
@@ -891,8 +914,13 @@ function processRxBuffer() {
     checksum = checksum & 0xFF;
 
     if (checksum === rxChecksum) {
+      telemetryParserStats.validFramesParsed++;
+      if (extType === TYPE_ENCODER) telemetryParserStats.encoderPacketCount++;
+      if (extType === TYPE_BNO08X_IMU) telemetryParserStats.imuPacketCount++;
       parseTelemetryPacket(extType, dataBytes);
     } else {
+      telemetryParserStats.checksumErrors++;
+      telemetryParserStats.resyncCount++;
       console.warn(`[Binary In] Checksum error! extType=0x${extType.toString(16)} calc=0x${checksum.toString(16)} recv=0x${rxChecksum.toString(16)}`);
       broadcast({ type: 'message', data: `[Checksum Error] type=0x${extType.toString(16)}` });
     }
@@ -1770,6 +1798,7 @@ function initSerial(portName = COM_PORT) {
 
   let rawLogCounter = 0;
   serialPort.on('data', (chunk) => {
+    telemetryParserStats.bytesReceived += chunk.length;
     rxBuf = Buffer.concat([rxBuf, chunk]);
     // Only log raw bytes occasionally to avoid flooding the UI
     rawLogCounter++;
@@ -3936,6 +3965,7 @@ app.get('/api/encoders', (req, res) => {
     timestamp: lastTelemetryReceivedTime || null,
     lastPacketAgeMs,
     sequence: encoderPacketCount,
+    parserStats: telemetryParserStats,
     encoders: {
       m1: currentTicks[0],
       m2: currentTicks[1],
@@ -3956,6 +3986,7 @@ app.get('/api/imu', (req, res) => {
       ok: false,
       stale: true,
       serialConnected,
+      parserStats: telemetryParserStats,
       message: 'No production 0x3A BNO08x IMU telemetry received yet'
     });
   }
@@ -3964,7 +3995,8 @@ app.get('/api/imu', (req, res) => {
     ...latestBnoImuState,
     serialConnected,
     dataAgeMs: ageMs,
-    stale: isStale
+    stale: isStale,
+    parserStats: telemetryParserStats
   });
 });
 
