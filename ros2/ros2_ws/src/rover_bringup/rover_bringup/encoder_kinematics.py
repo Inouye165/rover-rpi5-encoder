@@ -29,6 +29,19 @@ def normalize_angle(angle_rad: float) -> float:
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
 
+def signed_min_magnitude(a: float, b: float) -> float:
+    """
+    Return signed value with smaller absolute magnitude.
+    If signs differ (turning in place), return 0.0.
+    """
+    if a * b < 0.0:
+        return 0.0
+    if abs(a) < abs(b):
+        return a
+    else:
+        return b
+
+
 def compute_ticks_delta(current: int, previous: Optional[int], reset_threshold: int = 100000) -> int:
     """
     Compute delta between two 32-bit signed integer encoder counts.
@@ -102,10 +115,18 @@ class EncoderKinematics:
         self.last_timestamp_sec: Optional[float] = None
         self.last_fresh_timestamp_sec: Optional[float] = None
 
-        # Diagnostics flags
+        # Diagnostics & slip telemetry flags
         self.last_sequence: Optional[int] = None
         self.disagreement_warning: bool = False
         self.disagreement_details: str = ""
+
+        self.slip_gate_active: bool = False
+        self.slip_event_count: int = 0
+        self.last_raw_d_left_m: float = 0.0
+        self.last_raw_d_right_m: float = 0.0
+        self.last_ungated_d_center_m: float = 0.0
+        self.last_gated_d_center_m: float = 0.0
+        self.last_slip_reason: str = ""
 
     def reset_pose(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> None:
         """Reset pose integration back to (x, y, yaw)."""
@@ -119,6 +140,13 @@ class EncoderKinematics:
         self.last_ticks = None
         self.last_timestamp_sec = None
         self.last_fresh_timestamp_sec = None
+        self.slip_gate_active = False
+        self.slip_event_count = 0
+        self.last_raw_d_left_m = 0.0
+        self.last_raw_d_right_m = 0.0
+        self.last_ungated_d_center_m = 0.0
+        self.last_gated_d_center_m = 0.0
+        self.last_slip_reason = ""
 
     def update(
         self,
@@ -216,11 +244,50 @@ class EncoderKinematics:
         self.accum_left_dist_m += d_left_m
         self.accum_right_dist_m += d_right_m
 
-        d_center_m = (d_left_m + d_right_m) / 2.0
-        d_yaw = (d_right_m - d_left_m) / self.track_width_m
+        # Raw ungated center translation and wheel-based yaw
+        ungated_d_center_m = (d_left_m + d_right_m) / 2.0
+        d_yaw_wheel = (d_right_m - d_left_m) / self.track_width_m
 
-        # Use external (e.g. gyro-assisted) yaw delta if provided
-        effective_d_yaw = float(external_d_yaw) if external_d_yaw is not None else d_yaw
+        # Effective yaw delta (prefer external gyro IMU yaw if provided)
+        effective_d_yaw = float(external_d_yaw) if external_d_yaw is not None else d_yaw_wheel
+
+        # Slip detection rule:
+        # 1. Severe wheel speed disparity: >0.03m per tick (~0.6 m/s speed diff)
+        # 2. Kinematics vs IMU rotation disagreement: |d_yaw_wheel - external_d_yaw| > 0.05 rad (~2.9 deg)
+        wheel_disparity_m = abs(d_left_m - d_right_m)
+        yaw_disagreement_rad = abs(d_yaw_wheel - effective_d_yaw)
+
+        is_severe_disparity = wheel_disparity_m > 0.03
+        is_yaw_disagree = yaw_disagreement_rad > 0.05 if external_d_yaw is not None else (
+            (max(abs(d_left_m), abs(d_right_m)) / (min(abs(d_left_m), abs(d_right_m)) + 1e-6)) > 4.0
+        )
+
+        prev_slip_active = self.slip_gate_active
+        self.slip_gate_active = is_severe_disparity and is_yaw_disagree
+
+        if self.slip_gate_active:
+            if not prev_slip_active:
+                self.slip_event_count += 1
+            self.last_slip_reason = (
+                f"Wheel slip detected: left={d_left_m*1000:.1f}mm, right={d_right_m*1000:.1f}mm, "
+                f"yaw_err={math.degrees(yaw_disagreement_rad):.1f}deg"
+            )
+            d_center_m = signed_min_magnitude(d_left_m, d_right_m)
+        else:
+            self.last_slip_reason = ""
+            d_center_m = ungated_d_center_m
+
+        # Per-update sanity cap: 0.15m max translation step per 50ms sample (equivalent to 3.0 m/s max speed)
+        # Derived from max_plausible_wheel_speed_mps (2.5 m/s) * dt (0.05s) * 1.2 safety margin = 0.15m
+        max_step_m = self.max_plausible_wheel_speed_mps * dt * 1.2
+        if abs(d_center_m) > max_step_m:
+            d_center_m = math.copysign(max_step_m, d_center_m)
+
+        # Update telemetry attributes
+        self.last_raw_d_left_m = d_left_m
+        self.last_raw_d_right_m = d_right_m
+        self.last_ungated_d_center_m = ungated_d_center_m
+        self.last_gated_d_center_m = d_center_m
 
         # Integrate pose using midpoint arc approximation
         yaw_mid = self.yaw + effective_d_yaw / 2.0

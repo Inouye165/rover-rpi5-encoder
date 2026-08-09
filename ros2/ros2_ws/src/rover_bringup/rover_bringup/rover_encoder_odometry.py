@@ -71,6 +71,13 @@ class OdomAPIHandler(BaseHTTPRequestHandler):
                     "odometry_age_ms": odom_age_ms,
                     "node_health": health,
                     "consecutive_errors": consec_errs,
+                    "slip_gate_active": bool(getattr(node.kinematics, 'slip_gate_active', False)),
+                    "slip_event_count": int(getattr(node.kinematics, 'slip_event_count', 0)),
+                    "raw_d_left_m": float(getattr(node.kinematics, 'last_raw_d_left_m', 0.0)),
+                    "raw_d_right_m": float(getattr(node.kinematics, 'last_raw_d_right_m', 0.0)),
+                    "ungated_d_center_m": float(getattr(node.kinematics, 'last_ungated_d_center_m', 0.0)),
+                    "gated_d_center_m": float(getattr(node.kinematics, 'last_gated_d_center_m', 0.0)),
+                    "slip_reason": str(getattr(node.kinematics, 'last_slip_reason', '')),
                 }
                 body = json.dumps(data).encode('utf-8')
                 self.send_response(200)
@@ -251,7 +258,14 @@ class RoverEncoderOdometry(Node):
 
             # Check wheel disagreement warning
             if self.kinematics.disagreement_warning:
-                self.get_logger().warn(f"Wheel encoder disagreement: {self.kinematics.disagreement_details}")
+                self.get_logger().warn(f"Wheel encoder disagreement: {self.kinematics.disagreement_details}", throttle_duration_sec=1.0)
+
+            # Check slip gate active warning
+            if self.kinematics.slip_gate_active:
+                self.get_logger().warn(
+                    f"TRANSLATION SLIP GATE ACTIVE (Event #{self.kinematics.slip_event_count}): {self.kinematics.last_slip_reason}",
+                    throttle_duration_sec=1.0
+                )
 
             self.consecutive_errors = 0
 
