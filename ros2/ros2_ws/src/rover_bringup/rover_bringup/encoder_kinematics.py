@@ -100,6 +100,7 @@ class EncoderKinematics:
         # History tracking
         self.last_ticks: Optional[List[int]] = None
         self.last_timestamp_sec: Optional[float] = None
+        self.last_fresh_timestamp_sec: Optional[float] = None
 
         # Diagnostics flags
         self.last_sequence: Optional[int] = None
@@ -115,12 +116,16 @@ class EncoderKinematics:
         self.w_z = 0.0
         self.accum_left_dist_m = 0.0
         self.accum_right_dist_m = 0.0
+        self.last_ticks = None
+        self.last_timestamp_sec = None
+        self.last_fresh_timestamp_sec = None
 
     def update(
         self,
         ticks: List[int],
         timestamp_sec: float,
         sequence: Optional[int] = None,
+        external_d_yaw: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
         Process a new telemetry frame [m1, m2, m3, m4] at timestamp_sec.
@@ -133,35 +138,41 @@ class EncoderKinematics:
         current_ticks = [int(ticks[0]), int(ticks[1]), int(ticks[2]), int(ticks[3])]
 
         # Initial sample baseline
-        if self.last_ticks is None or self.last_timestamp_sec is None:
+        if self.last_ticks is None or self.last_timestamp_sec is None or self.last_fresh_timestamp_sec is None:
             self.last_ticks = current_ticks
             self.last_timestamp_sec = float(timestamp_sec)
+            self.last_fresh_timestamp_sec = float(timestamp_sec)
             self.last_sequence = sequence
             return True, "Baseline initialized"
 
-        dt = float(timestamp_sec) - self.last_timestamp_sec
+        dt_total = float(timestamp_sec) - self.last_timestamp_sec
 
         # Duplicate sample or zero/negative time delta check
-        if dt <= 0.0:
-            return False, f"Non-positive time delta (dt={dt:.4f}s)"
+        if dt_total <= 0.0:
+            return False, f"Non-positive time delta (dt={dt_total:.4f}s)"
 
         # Stale timestamp check
-        if dt > self.stale_timeout_sec:
+        if dt_total > self.stale_timeout_sec:
             self.last_ticks = current_ticks
             self.last_timestamp_sec = float(timestamp_sec)
+            self.last_fresh_timestamp_sec = float(timestamp_sec)
             self.last_sequence = sequence
             self.v_x = 0.0
             self.w_z = 0.0
-            return False, f"Stale telemetry gap ({dt:.2f}s > {self.stale_timeout_sec}s)"
+            return False, f"Stale telemetry gap ({dt_total:.2f}s > {self.stale_timeout_sec}s)"
 
         # Unchanged cached sequence check
         if sequence is not None and self.last_sequence is not None and sequence == self.last_sequence:
             self.last_timestamp_sec = float(timestamp_sec)
-            self.v_x = 0.0
-            self.w_z = 0.0
             self.disagreement_warning = False
             self.disagreement_details = ""
+            # Retain current pose and velocity (no pose motion, no double integration, no 20Hz flicker)
             return True, "NO_NEW_SAMPLE"
+
+        # Fresh sample: compute dt relative to the last accepted FRESH sample
+        dt = float(timestamp_sec) - self.last_fresh_timestamp_sec
+        if dt <= 0.0:
+            dt = dt_total  # fallback safeguard if timestamps coincide
 
         # Compute per-wheel tick deltas with rollover & sign normalization
         dm1 = compute_ticks_delta(current_ticks[0], self.last_ticks[0], self.reset_threshold_ticks) * self.m_signs[0]
@@ -179,6 +190,7 @@ class EncoderKinematics:
                 # Reject sample due to impossible jump
                 self.last_ticks = current_ticks
                 self.last_timestamp_sec = float(timestamp_sec)
+                self.last_fresh_timestamp_sec = float(timestamp_sec)
                 self.last_sequence = sequence
                 return False, f"Impossible count jump on {name}: {abs(dm)} ticks in {dt:.3f}s"
 
@@ -207,19 +219,23 @@ class EncoderKinematics:
         d_center_m = (d_left_m + d_right_m) / 2.0
         d_yaw = (d_right_m - d_left_m) / self.track_width_m
 
+        # Use external (e.g. gyro-assisted) yaw delta if provided
+        effective_d_yaw = float(external_d_yaw) if external_d_yaw is not None else d_yaw
+
         # Integrate pose using midpoint arc approximation
-        yaw_mid = self.yaw + d_yaw / 2.0
+        yaw_mid = self.yaw + effective_d_yaw / 2.0
         self.x += d_center_m * math.cos(yaw_mid)
         self.y += d_center_m * math.sin(yaw_mid)
-        self.yaw = normalize_angle(self.yaw + d_yaw)
+        self.yaw = normalize_angle(self.yaw + effective_d_yaw)
 
         # Compute body velocities
         self.v_x = d_center_m / dt
-        self.w_z = d_yaw / dt
+        self.w_z = effective_d_yaw / dt
 
         # Update history
         self.last_ticks = current_ticks
         self.last_timestamp_sec = float(timestamp_sec)
+        self.last_fresh_timestamp_sec = float(timestamp_sec)
         self.last_sequence = sequence
 
         return True, "Success"

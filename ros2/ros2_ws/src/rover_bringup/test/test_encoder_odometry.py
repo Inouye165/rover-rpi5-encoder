@@ -175,6 +175,78 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         # Pose advances further cleanly
         self.assertGreater(pose_x_step3, pose_x_step1)
 
+    def test_fresh_sample_dt_not_shortened_by_cached_polls(self):
+        """Verify that velocity dt on a fresh sample is calculated from the PREVIOUS FRESH sample, not intermediate cached polls."""
+        kin = self.node.kinematics
+        kin.reset_pose()
+
+        # 1. Fresh baseline at T=0.000
+        ok, msg = kin.update([1000, 1000, 1000, 1000], timestamp_sec=0.000, sequence=10)
+        self.assertTrue(ok)
+
+        # 2. Intermediate cached poll at T=0.050 (seq 10 repeated)
+        ok, msg = kin.update([1000, 1000, 1000, 1000], timestamp_sec=0.050, sequence=10)
+        self.assertTrue(ok)
+        self.assertEqual(msg, "NO_NEW_SAMPLE")
+
+        # 3. Fresh sample at T=0.100 (seq 11) with +974 ticks (~0.102m)
+        ok, msg = kin.update([1974, 1974, 1974, 1974], timestamp_sec=0.100, sequence=11)
+        self.assertTrue(ok)
+
+        # Distance ~0.102m over 0.100s -> v_x ~ 1.02 m/s. (If dt incorrectly used 0.050s, v_x would be ~2.04 m/s)
+        self.assertAlmostEqual(kin.v_x, 1.02206, places=2)
+
+    def test_velocity_retained_during_cached_polls_prevents_flicker(self):
+        """Verify that velocity is retained during duplicate cached polls to eliminate 20 Hz flicker."""
+        kin = self.node.kinematics
+        kin.reset_pose()
+
+        # Baseline
+        kin.update([1000, 1000, 1000, 1000], timestamp_sec=0.000, sequence=10)
+
+        # Fresh motion step -> v_x = 1.02 m/s
+        kin.update([1974, 1974, 1974, 1974], timestamp_sec=0.100, sequence=11)
+        v_fresh = kin.v_x
+        self.assertGreater(v_fresh, 0.5)
+
+        # Cached duplicate poll -> velocity must retain v_fresh (no flicker to 0.0)
+        kin.update([1974, 1974, 1974, 1974], timestamp_sec=0.150, sequence=11)
+        self.assertEqual(kin.v_x, v_fresh)
+
+    def test_external_imu_accumulator_preserved_across_cached_polls(self):
+        """Verify that external IMU yaw accumulator accumulates across cached polls and applies to next fresh sample."""
+        kin = self.node.kinematics
+        kin.reset_pose()
+
+        # Baseline fresh sample at T=0.000
+        kin.update([1000, 1000, 1000, 1000], timestamp_sec=0.000, sequence=10)
+
+        # Simulate external IMU accumulator
+        accumulated_gyro_yaw = 0.0
+
+        # Sub-interval 1: Gyro accumulates +0.035 rad (+2 deg)
+        accumulated_gyro_yaw += 0.035
+
+        # Cached duplicate poll at T=0.050 -> NO_NEW_SAMPLE. Accumulator is NOT reset!
+        ok, msg = kin.update([1000, 1000, 1000, 1000], timestamp_sec=0.050, sequence=10)
+        self.assertEqual(msg, "NO_NEW_SAMPLE")
+        self.assertAlmostEqual(accumulated_gyro_yaw, 0.035, places=6)
+
+        # Sub-interval 2: Gyro accumulates another +0.035 rad (+2 deg)
+        accumulated_gyro_yaw += 0.035
+        self.assertAlmostEqual(accumulated_gyro_yaw, 0.070, places=6)
+
+        # Fresh sample N+1 at T=0.100: pass full accumulated external_d_yaw (+0.070 rad)
+        ok, msg = kin.update([1050, 1050, 1050, 1050], timestamp_sec=0.100, sequence=11, external_d_yaw=accumulated_gyro_yaw)
+        self.assertTrue(ok)
+
+        # Confirm full accumulated gyro yaw (+0.070 rad) was applied exactly once to pose yaw
+        self.assertAlmostEqual(kin.yaw, 0.070, places=5)
+
+        # Reset external accumulator after fresh sample consume
+        accumulated_gyro_yaw = 0.0
+        self.assertEqual(accumulated_gyro_yaw, 0.0)
+
     def test_node_source_has_no_serial_or_dev_access(self):
         """Safety audit: ensure node source does not open serial ports or /dev devices."""
         node_file = os.path.join(
