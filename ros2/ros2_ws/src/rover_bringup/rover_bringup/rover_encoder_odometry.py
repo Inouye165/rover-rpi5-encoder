@@ -18,8 +18,9 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32
+from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point
 from nav_msgs.msg import Odometry
+from visualization_msgs.msg import Marker, MarkerArray
 import rclpy
 from rclpy.node import Node
 import requests
@@ -171,6 +172,8 @@ class RoverEncoderOdometry(Node):
         # Publishers & TF broadcaster
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.footprint_pub = self.create_publisher(PolygonStamped, '/footprint', 10)
+        self.marker_pub = self.create_publisher(MarkerArray, '/rover_footprint_marker', 10)
+        self.vis_marker_pub = self.create_publisher(MarkerArray, '/visualization_marker', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # HTTP session setup
@@ -354,6 +357,76 @@ class RoverEncoderOdometry(Node):
             Point32(x=-half_l, y=half_w, z=0.0),   # Rear Left
         ]
         self.footprint_pub.publish(footprint_msg)
+
+        # 4. Rover Footprint MarkerArray Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        marker_array = MarkerArray()
+
+        # 4a. Semi-transparent Cyan Body (CUBE)
+        m_body = Marker()
+        m_body.header.stamp = stamp_msg
+        m_body.header.frame_id = self.base_frame
+        m_body.ns = "footprint_body"
+        m_body.id = 0
+        m_body.type = Marker.CUBE
+        m_body.action = Marker.ADD
+        m_body.pose.position.x = 0.0
+        m_body.pose.position.y = 0.0
+        m_body.pose.position.z = 0.0
+        m_body.pose.orientation.w = 1.0
+        m_body.scale.x = 0.254   # 10 inches (length)
+        m_body.scale.y = 0.2286  # 9 inches (width)
+        m_body.scale.z = 0.01    # thin chassis slab
+        m_body.color.r = 0.0
+        m_body.color.g = 0.95
+        m_body.color.b = 1.0
+        m_body.color.a = 0.20    # light semi-transparent cyan fill
+        marker_array.markers.append(m_body)
+
+        # 4b. Thin Cyan Outline (LINE_STRIP)
+        m_outline = Marker()
+        m_outline.header.stamp = stamp_msg
+        m_outline.header.frame_id = self.base_frame
+        m_outline.ns = "footprint_outline"
+        m_outline.id = 1
+        m_outline.type = Marker.LINE_STRIP
+        m_outline.action = Marker.ADD
+        m_outline.scale.x = 0.012  # line thickness
+        m_outline.color.r = 0.0
+        m_outline.color.g = 0.95
+        m_outline.color.b = 1.0
+        m_outline.color.a = 0.90   # bright cyan outline
+        m_outline.points = [
+            Point(x=half_l, y=half_w, z=0.01),
+            Point(x=half_l, y=-half_w, z=0.01),
+            Point(x=-half_l, y=-half_w, z=0.01),
+            Point(x=-half_l, y=half_w, z=0.01),
+            Point(x=half_l, y=half_w, z=0.01),
+        ]
+        marker_array.markers.append(m_outline)
+
+        # 4c. Red Front/Nose Indicator (ARROW)
+        m_nose = Marker()
+        m_nose.header.stamp = stamp_msg
+        m_nose.header.frame_id = self.base_frame
+        m_nose.ns = "footprint_nose"
+        m_nose.id = 2
+        m_nose.type = Marker.ARROW
+        m_nose.action = Marker.ADD
+        m_nose.scale.x = 0.015  # shaft diameter
+        m_nose.scale.y = 0.035  # head diameter
+        m_nose.scale.z = 0.030  # head length
+        m_nose.color.r = 1.0
+        m_nose.color.g = 0.0
+        m_nose.color.b = 0.33
+        m_nose.color.a = 1.0    # solid red
+        m_nose.points = [
+            Point(x=0.04, y=0.0, z=0.015),
+            Point(x=0.15, y=0.0, z=0.015),
+        ]
+        marker_array.markers.append(m_nose)
+
+        self.marker_pub.publish(marker_array)
+        self.vis_marker_pub.publish(marker_array)
 
 
 def main(args=None):

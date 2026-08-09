@@ -19,7 +19,9 @@
       "scene": {
         "transforms": {
           "showLabel": false,
-          "enableFrameLabels": false
+          "enableFrameLabels": false,
+          "axisScale": 0,
+          "size": 0
         },
         "labelScaleFactor": 0,
         "showLegend": false,
@@ -30,13 +32,29 @@
       },
       "transforms": {
         "frame:base_link": {
-          "visible": true
+          "visible": true,
+          "showLabel": false
         },
         "frame:laser_frame": {
-          "visible": false
+          "visible": false,
+          "showLabel": false
+        },
+        "frame:odom": {
+          "visible": false,
+          "showLabel": false
+        },
+        "frame:map": {
+          "visible": false,
+          "showLabel": false
         }
       },
       "topics": {
+        "/rover_footprint_marker": {
+          "visible": true
+        },
+        "/visualization_marker": {
+          "visible": true
+        },
         "/footprint": {
           "visible": true,
           "color": "#00f2fe",
