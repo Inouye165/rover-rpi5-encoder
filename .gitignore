@@ -79,6 +79,7 @@ run_deploy_transcript.ps1
 ros2/ros2_ws/core
 ros2/maps/
 serialize_map_service.py
+ros2/ros2_ws/src/rover_bringup/rover_bringup/measure_tf_lag.py
 
 
 

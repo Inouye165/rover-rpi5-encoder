@@ -150,3 +150,68 @@ def test_scenario_i_gyro_yaw_unaffected_by_translation_gate():
     
     # Yaw integration remains equal to external_d_yaw
     assert abs(k.yaw - external_yaw_delta) < 1e-4
+
+
+def test_failed_floor_sample_regression():
+    k = create_kinematics()
+    k.update([1000, 1000, 1000, 1000], timestamp_sec=100.0, sequence=1)
+    
+    # Reproduction of actual failed floor sample: left_diff = 128 ticks (13.2mm), right_diff = 8 ticks (0.8mm)
+    # IMU yaw delta = 0.001 rad (negligible body rotation)
+    success, msg = k.update([1128, 1008, 1128, 1008], timestamp_sec=100.05, sequence=2, external_d_yaw=0.001)
+    
+    assert success is True
+    assert k.slip_gate_active is True
+    assert k.slip_event_count == 1
+    # Gated translation should equal smaller right wheel movement (~0.0008m) instead of ungated average (~0.0070m)
+    assert abs(k.last_gated_d_center_m - 0.000828) < 1e-4
+    assert k.last_ungated_d_center_m > 0.0069
+
+
+def test_boundary_disparity_7mm():
+    k = create_kinematics()
+    k.update([1000, 1000, 1000, 1000], timestamp_sec=100.0, sequence=1)
+    
+    # 7mm disparity (7.2mm vs 0.8mm -> 70 ticks vs 8 ticks = 6.4mm disparity < 8.0mm threshold)
+    success, msg = k.update([1070, 1008, 1070, 1008], timestamp_sec=100.05, sequence=2, external_d_yaw=0.001)
+    
+    assert success is True
+    assert k.slip_gate_active is False
+
+
+def test_boundary_disparity_9mm():
+    k = create_kinematics()
+    k.update([1000, 1000, 1000, 1000], timestamp_sec=100.0, sequence=1)
+    
+    # 9.3mm disparity (98 ticks vs 8 ticks = 9.3mm disparity > 8.0mm threshold), IMU yaw near zero
+    success, msg = k.update([1098, 1008, 1098, 1008], timestamp_sec=100.05, sequence=2, external_d_yaw=0.001)
+    
+    assert success is True
+    assert k.slip_gate_active is True
+
+
+def test_legitimate_skid_steer_turn_with_large_disparity():
+    k = create_kinematics()
+    k.update([1000, 1000, 1000, 1000], timestamp_sec=100.0, sequence=1)
+    
+    # Legitimate turn: left_diff = 120 ticks (12.4mm), right_diff = 30 ticks (3.1mm) -> Disparity = 9.3mm > 8.0mm
+    # Kinematic wheel yaw = (0.0031 - 0.0124) / 0.340857 = -0.0273 rad
+    # IMU gyro measures matching physical rotation (external_d_yaw = -0.0270 rad)
+    success, msg = k.update([1120, 1030, 1120, 1030], timestamp_sec=100.05, sequence=2, external_d_yaw=-0.0270)
+    
+    assert success is True
+    # PROOF: Even though disparity (9.3mm) > 8mm, IMU agrees with wheel rotation -> Gate remains INACTIVE
+    assert k.slip_gate_active is False
+
+
+def test_fast_arc_turn_compatibility():
+    k = create_kinematics()
+    k.update([1000, 1000, 1000, 1000], timestamp_sec=100.0, sequence=1)
+    
+    # Fast arc turn: left_diff = 180 ticks (18.6mm), right_diff = 60 ticks (6.2mm) -> Disparity = 12.4mm > 8.0mm
+    # Kinematic wheel yaw = (0.0062 - 0.0186) / 0.340857 = -0.0364 rad
+    # IMU gyro measures matching physical rotation (external_d_yaw = -0.0360 rad)
+    success, msg = k.update([1180, 1060, 1180, 1060], timestamp_sec=100.05, sequence=2, external_d_yaw=-0.0360)
+    
+    assert success is True
+    assert k.slip_gate_active is False

@@ -252,14 +252,14 @@ class EncoderKinematics:
         effective_d_yaw = float(external_d_yaw) if external_d_yaw is not None else d_yaw_wheel
 
         # Slip detection rule:
-        # 1. Severe wheel speed disparity: >0.03m per tick (~0.6 m/s speed diff)
-        # 2. Kinematics vs IMU rotation disagreement: |d_yaw_wheel - external_d_yaw| > 0.05 rad (~2.9 deg)
+        # 1. Severe wheel speed disparity: >0.008m per tick (~0.16 m/s speed diff)
+        # 2. Kinematics vs IMU rotation disagreement: |d_yaw_wheel - external_d_yaw| > 0.03 rad (~1.7 deg)
         wheel_disparity_m = abs(d_left_m - d_right_m)
         yaw_disagreement_rad = abs(d_yaw_wheel - effective_d_yaw)
 
-        is_severe_disparity = wheel_disparity_m > 0.03
-        is_yaw_disagree = yaw_disagreement_rad > 0.05 if external_d_yaw is not None else (
-            (max(abs(d_left_m), abs(d_right_m)) / (min(abs(d_left_m), abs(d_right_m)) + 1e-6)) > 4.0
+        is_severe_disparity = wheel_disparity_m > 0.008
+        is_yaw_disagree = yaw_disagreement_rad > 0.025 if external_d_yaw is not None else (
+            (max(abs(d_left_m), abs(d_right_m)) / (min(abs(d_left_m), abs(d_right_m)) + 1e-6)) > 3.0
         )
 
         prev_slip_active = self.slip_gate_active

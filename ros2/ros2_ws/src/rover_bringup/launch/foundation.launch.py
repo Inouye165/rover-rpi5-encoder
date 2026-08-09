@@ -62,6 +62,22 @@ def generate_launch_description():
             ],
         ),
         Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='base_link_to_imu_link_publisher',
+            output='screen',
+            arguments=[
+                '--x', '-0.0254',
+                '--y', '-0.0254',
+                '--z', '0.146',
+                '--roll', '0.0',
+                '--pitch', '0.0',
+                '--yaw', '0.0',
+                '--frame-id', 'base_link',
+                '--child-frame-id', 'imu_link',
+            ],
+        ),
+        Node(
             package='foxglove_bridge',
             executable='foxglove_bridge',
             name='foxglove_bridge',
