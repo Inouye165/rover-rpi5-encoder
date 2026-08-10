@@ -289,8 +289,94 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
             self.assertNotIn('privileged: true', content)
             self.assertNotIn('devices:', content)
 
+    def test_compute_integrated_gyro_yaw_math_and_timing(self):
+        """Verify trapezoidal integration of gyro Z samples over an encoder update interval [t_prev, t_curr]."""
+        # Feed 50Hz IMU samples: gz = 0.5 rad/s from T=100.00 to T=100.10
+        for i in range(6):
+            t = 100.00 + i * 0.02  # 100.00, 100.02, 100.04, 100.06, 100.08, 100.10
+            msg = Imu()
+            msg.header.stamp.sec = int(t)
+            msg.header.stamp.nanosec = int((t - int(t)) * 1e9)
+            msg.angular_velocity.z = 0.5
+            self.node._imu_callback(msg)
+
+        # Integrate over [100.00, 100.10] -> expected 0.5 rad/s * 0.10s = 0.050 rad
+        d_yaw = self.node._compute_integrated_gyro_yaw(100.00, 100.10)
+        self.assertIsNotNone(d_yaw)
+        self.assertAlmostEqual(d_yaw, 0.050, places=5)
+
+    def test_gyro_sign_convention(self):
+        """Verify positive gyro Z produces positive CCW yaw delta, negative gyro Z produces negative CW yaw delta."""
+        # Positive Z gyro (+1.0 rad/s)
+        msg_pos = Imu()
+        msg_pos.header.stamp.sec = 200
+        msg_pos.header.stamp.nanosec = 0
+        msg_pos.angular_velocity.z = 1.0
+        self.node._imu_callback(msg_pos)
+
+        msg_pos2 = Imu()
+        msg_pos2.header.stamp.sec = 200
+        msg_pos2.header.stamp.nanosec = 100000000  # 0.1s
+        msg_pos2.angular_velocity.z = 1.0
+        self.node._imu_callback(msg_pos2)
+
+        d_yaw_pos = self.node._compute_integrated_gyro_yaw(200.0, 200.1)
+        self.assertGreater(d_yaw_pos, 0.0)
+        self.assertAlmostEqual(d_yaw_pos, 0.1, places=4)
+
+        # Clear buffer
+        with self.node._imu_lock:
+            self.node._imu_gyro_buffer.clear()
+
+        # Negative Z gyro (-1.0 rad/s)
+        msg_neg = Imu()
+        msg_neg.header.stamp.sec = 300
+        msg_neg.header.stamp.nanosec = 0
+        msg_neg.angular_velocity.z = -1.0
+        self.node._imu_callback(msg_neg)
+
+        msg_neg2 = Imu()
+        msg_neg2.header.stamp.sec = 300
+        msg_neg2.header.stamp.nanosec = 100000000  # 0.1s
+        msg_neg2.angular_velocity.z = -1.0
+        self.node._imu_callback(msg_neg2)
+
+        d_yaw_neg = self.node._compute_integrated_gyro_yaw(300.0, 300.1)
+        self.assertLess(d_yaw_neg, 0.0)
+        self.assertAlmostEqual(d_yaw_neg, -0.1, places=4)
+
+    def test_imu_stale_or_missing_fallback(self):
+        """Verify that when IMU samples are stale or missing, _compute_integrated_gyro_yaw returns None."""
+        # Case 1: Empty buffer
+        self.assertIsNone(self.node._compute_integrated_gyro_yaw(100.0, 100.05))
+
+        # Case 2: Buffer timestamp too old for window
+        msg = Imu()
+        msg.header.stamp.sec = 10
+        msg.header.stamp.nanosec = 0
+        msg.angular_velocity.z = 0.5
+        self.node._imu_callback(msg)
+
+        msg2 = Imu()
+        msg2.header.stamp.sec = 10
+        msg2.header.stamp.nanosec = 50000000
+        msg2.angular_velocity.z = 0.5
+        self.node._imu_callback(msg2)
+
+        # Querying interval [100.0, 100.05] when buffer only has t=10.0s -> None
+        self.assertIsNone(self.node._compute_integrated_gyro_yaw(100.0, 100.05))
+
+        # Case 3: Stale wall clock (>0.5s since last IMU callback)
+        msg_stale = Imu()
+        msg_stale.header.stamp.sec = 500
+        msg_stale.header.stamp.nanosec = 0
+        msg_stale.angular_velocity.z = 0.5
+        self.node._imu_callback(msg_stale)
+        self.node._last_imu_recv_time_sec = time.time() - 2.0  # Simulate 2.0s age
+
+        self.assertIsNone(self.node._compute_integrated_gyro_yaw(500.0, 500.05))
 
 
-import math
 if __name__ == '__main__':
     unittest.main()
+

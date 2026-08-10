@@ -124,6 +124,12 @@ class EncoderKinematics:
         self.slip_event_count: int = 0
         self.last_raw_d_left_m: float = 0.0
         self.last_raw_d_right_m: float = 0.0
+        self.last_wheel_disparity_m: float = 0.0
+        self.last_d_yaw_wheel_rad: float = 0.0
+        self.last_external_d_yaw_rad: Optional[float] = None
+        self.last_yaw_disagreement_rad: float = 0.0
+        self.last_imu_yaw_valid: bool = False
+        self.last_ratio_fallback_used: bool = False
         self.last_ungated_d_center_m: float = 0.0
         self.last_gated_d_center_m: float = 0.0
         self.last_slip_reason: str = ""
@@ -144,6 +150,12 @@ class EncoderKinematics:
         self.slip_event_count = 0
         self.last_raw_d_left_m = 0.0
         self.last_raw_d_right_m = 0.0
+        self.last_wheel_disparity_m = 0.0
+        self.last_d_yaw_wheel_rad = 0.0
+        self.last_external_d_yaw_rad = None
+        self.last_yaw_disagreement_rad = 0.0
+        self.last_imu_yaw_valid = False
+        self.last_ratio_fallback_used = False
         self.last_ungated_d_center_m = 0.0
         self.last_gated_d_center_m = 0.0
         self.last_slip_reason = ""
@@ -253,12 +265,13 @@ class EncoderKinematics:
 
         # Slip detection rule:
         # 1. Severe wheel speed disparity: >0.008m per tick (~0.16 m/s speed diff)
-        # 2. Kinematics vs IMU rotation disagreement: |d_yaw_wheel - external_d_yaw| > 0.03 rad (~1.7 deg)
+        # 2. Kinematics vs IMU rotation disagreement: |d_yaw_wheel - external_d_yaw| > 0.025 rad (~1.4 deg)
         wheel_disparity_m = abs(d_left_m - d_right_m)
         yaw_disagreement_rad = abs(d_yaw_wheel - effective_d_yaw)
 
+        imu_valid = external_d_yaw is not None
         is_severe_disparity = wheel_disparity_m > 0.008
-        is_yaw_disagree = yaw_disagreement_rad > 0.025 if external_d_yaw is not None else (
+        is_yaw_disagree = yaw_disagreement_rad > 0.025 if imu_valid else (
             (max(abs(d_left_m), abs(d_right_m)) / (min(abs(d_left_m), abs(d_right_m)) + 1e-6)) > 3.0
         )
 
@@ -268,8 +281,10 @@ class EncoderKinematics:
         if self.slip_gate_active:
             if not prev_slip_active:
                 self.slip_event_count += 1
+            mode_str = "IMU_YAW_DISAGREE" if imu_valid else "RATIO_FALLBACK"
             self.last_slip_reason = (
-                f"Wheel slip detected: left={d_left_m*1000:.1f}mm, right={d_right_m*1000:.1f}mm, "
+                f"Wheel slip detected [{mode_str}]: left={d_left_m*1000:.1f}mm, right={d_right_m*1000:.1f}mm, "
+                f"wheel_yaw={math.degrees(d_yaw_wheel):.1f}deg, imu_yaw={math.degrees(effective_d_yaw):.1f}deg, "
                 f"yaw_err={math.degrees(yaw_disagreement_rad):.1f}deg"
             )
             d_center_m = signed_min_magnitude(d_left_m, d_right_m)
@@ -278,7 +293,6 @@ class EncoderKinematics:
             d_center_m = ungated_d_center_m
 
         # Per-update sanity cap: 0.15m max translation step per 50ms sample (equivalent to 3.0 m/s max speed)
-        # Derived from max_plausible_wheel_speed_mps (2.5 m/s) * dt (0.05s) * 1.2 safety margin = 0.15m
         max_step_m = self.max_plausible_wheel_speed_mps * dt * 1.2
         if abs(d_center_m) > max_step_m:
             d_center_m = math.copysign(max_step_m, d_center_m)
@@ -286,6 +300,12 @@ class EncoderKinematics:
         # Update telemetry attributes
         self.last_raw_d_left_m = d_left_m
         self.last_raw_d_right_m = d_right_m
+        self.last_wheel_disparity_m = wheel_disparity_m
+        self.last_d_yaw_wheel_rad = d_yaw_wheel
+        self.last_external_d_yaw_rad = float(external_d_yaw) if imu_valid else None
+        self.last_yaw_disagreement_rad = yaw_disagreement_rad
+        self.last_imu_yaw_valid = imu_valid
+        self.last_ratio_fallback_used = not imu_valid
         self.last_ungated_d_center_m = ungated_d_center_m
         self.last_gated_d_center_m = d_center_m
 
