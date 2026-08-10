@@ -7,7 +7,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
-const VALID_TOKEN = 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890';
+const VALID_TOKEN = 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890'; // gitleaks:allow
 
 // Set test environment
 process.env.PORT = '3800';
