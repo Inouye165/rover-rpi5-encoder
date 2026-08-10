@@ -1,3 +1,112 @@
+const UI_BUILD_ID = '2026.07.31-operator-auth';
+
+function isRememberBrowserEnabled() {
+  const checkbox = document.getElementById('remember-token-checkbox');
+  if (checkbox) return checkbox.checked;
+  return !!(localStorage.getItem('rover_operator_token'));
+}
+
+function setStoredOperatorToken(val, remember) {
+  if (!val) {
+    sessionStorage.removeItem('rover_operator_token');
+    localStorage.removeItem('rover_operator_token');
+    return;
+  }
+  sessionStorage.setItem('rover_operator_token', val);
+  if (remember) {
+    localStorage.setItem('rover_operator_token', val);
+  } else {
+    localStorage.removeItem('rover_operator_token');
+  }
+}
+
+function getOrSyncOperatorToken() {
+  const inputToken = document.getElementById('operator-token-input');
+  let val = '';
+  if (inputToken && inputToken.value && inputToken.value.trim()) {
+    val = inputToken.value.trim();
+  }
+  if (!val) {
+    val = sessionStorage.getItem('rover_operator_token') || localStorage.getItem('rover_operator_token') || '';
+  }
+  if (val) {
+    setStoredOperatorToken(val, isRememberBrowserEnabled());
+  }
+  return val;
+}
+
+function getOperatorAuthHeaders() {
+  const token = getOrSyncOperatorToken();
+  return token ? { 'X-Rover-Operator-Token': token } : {};
+}
+
+function showAuthErrorMessage(msg) {
+  const displayMsg = msg || 'Operator token missing or invalid. Enter the token and try again.';
+  if (typeof logSystem === 'function') {
+    logSystem(`[AUTH ERROR] ${displayMsg}`);
+  }
+  const bannerArm = document.getElementById('arm-auth-error-banner');
+  const banner1 = document.getElementById('v2-autonomy-error-banner');
+  const banner2 = document.getElementById('v2-calib-error-banner');
+  const banner3 = document.getElementById('maint-test-error-banner');
+  const errBanner = bannerArm || banner1 || banner2 || banner3;
+  if (errBanner) {
+    errBanner.textContent = displayMsg;
+    errBanner.style.display = 'block';
+    setTimeout(() => {
+      if (errBanner.textContent === displayMsg) {
+        errBanner.style.display = 'none';
+      }
+    }, 7000);
+  } else {
+    alert(displayMsg);
+  }
+}
+
+const activeProtectedRequests = new Map();
+
+async function authenticatedFetch(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const requestKey = `${method}:${url}`;
+
+  if (activeProtectedRequests.get(requestKey)) {
+    console.warn(`[Debounce] Protected request ${requestKey} is already in progress.`);
+    return { ok: false, status: 429, json: { ok: false, error: 'Request in flight' } };
+  }
+
+  activeProtectedRequests.set(requestKey, true);
+
+  try {
+    const authHeaders = getOperatorAuthHeaders();
+    const headers = {
+      ...(options.headers || {}),
+      ...authHeaders
+    };
+
+    const res = await fetch(url, { ...options, headers });
+
+    if (res.status === 401 || res.status === 403) {
+      let errText = (res.status === 401)
+        ? 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.'
+        : 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.';
+      showAuthErrorMessage(errText);
+      return { ok: false, status: res.status, res, json: { ok: false, error: errText } };
+    }
+
+    let json = null;
+    try {
+      json = await res.json();
+    } catch (e) {}
+
+    return { ok: res.ok, status: res.status, res, json };
+  } catch (err) {
+    console.error(`Fetch error for ${url}:`, err);
+    return { ok: false, status: 0, error: err.message, json: { ok: false, error: err.message } };
+  } finally {
+    activeProtectedRequests.delete(requestKey);
+  }
+}
+
 let ws = null;
 let reconnectTimer = null;
 let reconnectInterval = 1000;
@@ -8,7 +117,8 @@ let gpDeadmanPressed = false;
 
 // Calibration variables
 let currentWheelDiameter = 0.065; // synchronized from ESP32 parameters
-let currentTrackWidth = 0.382;    // synchronized from ESP32 parameters
+let currentTrackWidth = 0.3408575433;    // synchronized from ESP32 parameters / calibration_db (effective track width)
+const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
 let activeTest = null;            // 'distance', 'rotation_cw', 'rotation_ccw', 'out_and_back'
 let testTimer = null;
 let testStartOdom = null;
@@ -215,6 +325,12 @@ function connectWebSocket() {
     if (window.roverState && window.roverState.connection) {
       window.roverState.connection.ws = true;
     }
+
+    const token = sessionStorage.getItem('rover_operator_token');
+    if (token && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'auth', token }));
+    }
+    updateEsp32Badge();
     
     // Automatically query firmware identity from ESP32
     fetch('/api/firmware').catch(err => console.error('Firmware query failed:', err));
@@ -250,6 +366,7 @@ function connectWebSocket() {
     if (typeof driveRover === 'function') {
       driveRover('stop');
     }
+    updateEsp32Badge();
     scheduleReconnect();
   };
 
@@ -259,6 +376,7 @@ function connectWebSocket() {
     if (window.roverState && window.roverState.connection) {
       window.roverState.connection.ws = false;
     }
+    updateEsp32Badge();
   };
 }
 
@@ -287,6 +405,28 @@ function updateBadge(badgeElement, state, text) {
   
   // Append the updated status text
   badgeElement.appendChild(document.createTextNode(' ' + text));
+}
+
+function updateEsp32Badge() {
+  const espBadge = document.getElementById('esp32-version-badge');
+  if (!espBadge) return;
+  const isWsConnected = ws && ws.readyState === WebSocket.OPEN;
+  const serialText = (serialStatus ? serialStatus.textContent : '').toLowerCase();
+  const isSerialConnected = serialText.includes('connected');
+
+  if (!isWsConnected || !isSerialConnected) {
+    updateBadge(espBadge, 'alert', 'ESP32: Offline');
+    return;
+  }
+
+  const fw = (window.roverState && window.roverState.firmware) ? window.roverState.firmware : null;
+  if (fw && (fw.version || fw.name)) {
+    const ver = fw.version || '1.3.0';
+    const fwLabel = fw.commit ? `ESP32: v${ver} (${fw.commit})` : `ESP32: v${ver}`;
+    updateBadge(espBadge, 'ok', fwLabel);
+  } else {
+    updateBadge(espBadge, 'off', 'ESP32: Unknown');
+  }
 }
 
 const maxLogEntries = 500;
@@ -431,6 +571,7 @@ function handleServerMessage(msg) {
           updateBadge(serialStatus, 'alert', 'Serial: Disconnected');
           logSystem(`Serial port disconnected.${msg.error ? ' Error: ' + msg.error : ''}`);
         }
+        updateEsp32Badge();
       }
       break;
 
@@ -508,7 +649,7 @@ function handleServerMessage(msg) {
           const deltaM3 = msg.m3 - prevM3;
           const deltaM4 = msg.m4 - prevM4;
 
-          const tpr = 937.2;
+          const tpr = 1974.1666666667;
           const rpm1 = (deltaM1 / dt) / tpr * 60.0;
           const rpm2 = (deltaM2 / dt) / tpr * 60.0;
           const rpm3 = (deltaM3 / dt) / tpr * 60.0;
@@ -722,7 +863,76 @@ function handleServerMessage(msg) {
       }
       break;
 
+    case 'bno08x_imu': {
+      realIMUActive = true;
+
+      // Extract quaternion
+      const qw = msg.orientation ? msg.orientation.w : 1.0;
+      const qx = msg.orientation ? msg.orientation.x : 0.0;
+      const qy = msg.orientation ? msg.orientation.y : 0.0;
+      const qz = msg.orientation ? msg.orientation.z : 0.0;
+
+      // Compute Euler pitch and roll from quaternion
+      const sinr_cosp = 2 * (qw * qx + qy * qz);
+      const cosr_cosp = 1 - 2 * (qx * qx + qy * qy);
+      const rollRad = Math.atan2(sinr_cosp, cosr_cosp);
+
+      const sinp = 2 * (qw * qy - qz * qx);
+      const pitchRad = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+
+      const siny_cosp = 2 * (qw * qz + qx * qy);
+      const cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+      const yawRad = Math.atan2(siny_cosp, cosy_cosp);
+
+      imuRoll = rollRad * 180 / Math.PI;
+      imuPitch = pitchRad * 180 / Math.PI;
+      imuYaw = yawRad * 180 / Math.PI;
+
+      const gx = msg.gyro ? (msg.gyro.x * 180 / Math.PI) : 0.0;
+      const gy = msg.gyro ? (msg.gyro.y * 180 / Math.PI) : 0.0;
+      const gz = msg.gyro ? (msg.gyro.z * 180 / Math.PI) : 0.0;
+
+      const ax = msg.accel ? (msg.accel.x / 9.80665) : 0.0; // g units for UI
+      const ay = msg.accel ? (msg.accel.y / 9.80665) : 0.0;
+      const az = msg.accel ? (msg.accel.z / 9.80665) : 0.0;
+
+      // Update UI readouts
+      setText('imu-roll', `${imuRoll.toFixed(1)}°`);
+      setText('imu-pitch', `${imuPitch.toFixed(1)}°`);
+      setText('imu-yaw', `${imuYaw.toFixed(1)}°`);
+
+      setHTML('imu-ax', `${ax.toFixed(2)} <small>g</small>`);
+      setHTML('imu-ay', `${ay.toFixed(2)} <small>g</small>`);
+      setHTML('imu-az', `${az.toFixed(2)} <small>g</small>`);
+
+      setHTML('imu-gx', `${gx.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gy', `${gy.toFixed(1)} <small>°/s</small>`);
+      setHTML('imu-gz', `${gz.toFixed(1)} <small>°/s</small>`);
+
+      // Update window.roverState for Diagnostics page
+      if (window.roverState && window.roverState.imu) {
+        window.roverState.imu.roll = imuRoll;
+        window.roverState.imu.pitch = imuPitch;
+        window.roverState.imu.yaw = imuYaw;
+        window.roverState.imu.accel = [msg.accel.x, msg.accel.y, msg.accel.z];
+        window.roverState.imu.gyro = [gx, gy, gz];
+        window.roverState.imu.seq = msg.sequence;
+        window.roverState.imu.gaps = msg.sequenceGaps;
+        window.roverState.imu.resets = msg.resetCount;
+        window.roverState.imu.calibStatus = msg.calibrationStatus;
+        window.roverState.imu.inResetRecovery = msg.inResetRecovery;
+      }
+
+      // Update 3D Model rotation and Drive Control Room IMU orientation panel
+      update3DModelRotation(imuPitch, imuRoll, imuYaw);
+      if (typeof updateDriveControlRoomImuUI === 'function') {
+        updateDriveControlRoomImuUI(msg, imuPitch, imuRoll, imuYaw);
+      }
+      break;
+    }
+
     case 'imu':
+      if (Date.now() - lastBno3ATimeMs < 2000) break; // Skip legacy if 0x3A is active
       realIMUActive = true;
       imuYaw = msg.yaw;
       imuPitch = msg.pitch;
@@ -782,6 +992,7 @@ function handleServerMessage(msg) {
         };
         renderDiagnosticsV2();
       }
+      updateEsp32Badge();
       logSystem(`[Firmware Info] Live board identity received: ${msg.name} v${msg.version}`);
       break;
 
@@ -914,10 +1125,104 @@ function handleServerMessage(msg) {
       const elFirmwareBuild = document.getElementById('ui-firmware-build');
       if (elFirmwareVer) elFirmwareVer.innerText = `${msg.version} (${msg.commit})`;
       if (elFirmwareBuild) elFirmwareBuild.innerText = msg.build;
+      updateEsp32Badge();
       break;
     }
 
     case 'loop_timing': {
+      window._latestLoopTiming = {
+        lastDurationUs: msg.lastDurationUs,
+        minDurationUs: msg.minDurationUs,
+        avgDurationUs: msg.avgDurationUs,
+        maxDurationUs: msg.maxDurationUs,
+        missedDeadlines: msg.missedDeadlines,
+        totalIterations: msg.totalIterations,
+        schedulingMetricsAvailable: (msg.schedulingMetricsAvailable === true),
+        lastStartLatenessUs: msg.lastStartLatenessUs || 0,
+        maxStartLatenessUs: msg.maxStartLatenessUs || 0,
+        missedControlPeriods: msg.missedControlPeriods || 0,
+        maxConsecutiveMissedPeriods: msg.maxConsecutiveMissedPeriods || 0,
+        updatedAt: Date.now()
+      };
+
+      const elBadge = document.getElementById('v2-diag-badge-loop');
+      const elStatus = document.getElementById('v2-diag-val-loop-status');
+      const elMissed = document.getElementById('v2-diag-val-loop-missed');
+      const elLast = document.getElementById('v2-diag-val-loop-last');
+      const elAvg = document.getElementById('v2-diag-val-loop-avg');
+      const elMinMax = document.getElementById('v2-diag-val-loop-minmax');
+      const elTotal = document.getElementById('v2-diag-val-loop-total');
+      const elAge = document.getElementById('v2-diag-val-loop-age');
+
+      const elLatenessLast = document.getElementById('v2-diag-val-loop-lateness-last');
+      const elLatenessMax = document.getElementById('v2-diag-val-loop-lateness-max');
+      const elPeriodsMissed = document.getElementById('v2-diag-val-loop-periods-missed');
+      const elPeriodsConsec = document.getElementById('v2-diag-val-loop-periods-consec');
+
+      if (elMissed) elMissed.innerText = msg.missedDeadlines;
+      if (elLast) elLast.innerText = `${msg.lastDurationUs} us (${(msg.lastDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elAvg) elAvg.innerText = `${msg.avgDurationUs} us (${(msg.avgDurationUs / 1000.0).toFixed(2)} ms)`;
+      if (elMinMax) elMinMax.innerText = `${msg.minDurationUs} us / ${msg.maxDurationUs} us`;
+      if (elTotal) elTotal.innerText = msg.totalIterations;
+      if (elAge) elAge.innerText = '0 ms';
+
+      const isSchedAvailable = (msg.schedulingMetricsAvailable === true);
+
+      if (!isSchedAvailable) {
+        if (elLatenessLast) elLatenessLast.innerText = 'NOT AVAILABLE (24B Firmware)';
+        if (elLatenessMax) elLatenessMax.innerText = 'NOT AVAILABLE (24B Firmware)';
+        if (elPeriodsMissed) elPeriodsMissed.innerText = 'NOT AVAILABLE';
+        if (elPeriodsConsec) elPeriodsConsec.innerText = 'NOT AVAILABLE';
+      } else {
+        const lastLateMs = ((msg.lastStartLatenessUs || 0) / 1000.0).toFixed(2);
+        const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+
+        if (elLatenessLast) elLatenessLast.innerText = `${msg.lastStartLatenessUs || 0} us (${lastLateMs} ms)`;
+        if (elLatenessMax) elLatenessMax.innerText = `${msg.maxStartLatenessUs || 0} us (${maxLateMs} ms)`;
+        if (elPeriodsMissed) elPeriodsMissed.innerText = msg.missedControlPeriods || 0;
+        if (elPeriodsConsec) elPeriodsConsec.innerText = msg.maxConsecutiveMissedPeriods || 0;
+      }
+
+      const isDeadlineViolated = msg.maxDurationUs >= 10000;
+      const hasMissedDeadlines = msg.missedDeadlines > 0;
+      const missedPeriods = isSchedAvailable ? (msg.missedControlPeriods || 0) : 0;
+      const maxLatenessUs = isSchedAvailable ? (msg.maxStartLatenessUs || 0) : 0;
+
+      if (isSchedAvailable && (missedPeriods > 0 || maxLatenessUs >= 10000)) {
+        if (elBadge) {
+          elBadge.className = 'badge badge-danger';
+          elBadge.innerText = 'SCHEDULING DELAY';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-danger';
+          const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+          elStatus.innerText = `SCHEDULING LATE: ${missedPeriods} missed periods (Peak Lateness: ${maxLateMs} ms)`;
+        }
+      } else if (hasMissedDeadlines || isDeadlineViolated) {
+        if (elBadge) {
+          elBadge.className = 'badge badge-danger';
+          elBadge.innerText = 'EXECUTION OVERRUN';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-danger';
+          elStatus.innerText = `EXECUTION OVERRUN: ${msg.missedDeadlines} overruns (Max Exec: ${msg.maxDurationUs} us)`;
+        }
+      } else {
+        if (elBadge) {
+          elBadge.className = 'badge badge-healthy';
+          elBadge.innerText = 'HEALTHY (100 Hz)';
+        }
+        if (elStatus) {
+          elStatus.className = 'status-val badge-healthy';
+          if (isSchedAvailable) {
+            const maxLateMs = ((msg.maxStartLatenessUs || 0) / 1000.0).toFixed(2);
+            elStatus.innerText = `HEALTHY: On-time scheduling & execution (Avg Exec: ${msg.avgDurationUs} us, Peak Lateness: ${maxLateMs} ms)`;
+          } else {
+            elStatus.innerText = `EXECUTION HEALTHY: Avg Exec: ${msg.avgDurationUs} us (Scheduling telemetry requiring 40B firmware update)`;
+          }
+        }
+      }
+
       // Rate-limit console logs for timing stats to every 5 seconds to avoid flooding the log viewer,
       // or print immediately if a new deadline is missed.
       if (!window._lastTimingLogTime) window._lastTimingLogTime = 0;
@@ -1124,6 +1429,11 @@ function handleServerMessage(msg) {
 
     case 'normal_drive_status': {
       updateCanonicalDriveState(msg);
+      break;
+    }
+
+    case 'autonomy_status': {
+      if (msg.status) updateAutonomyState(msg.status);
       break;
     }
 
@@ -1700,16 +2010,38 @@ function fetchDriveStatus() {
 
 async function armNormalDrive() {
   logSystem('Sending arm normal drive request...');
+
+  // Pre-check operator token presence before issuing network call
+  const token = getOrSyncOperatorToken();
+  if (!token) {
+    const msg = 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.';
+    logSystem(`⚠️ ${msg}`);
+    showAuthErrorMessage(msg);
+    await fetchDriveStatus();
+    return;
+  }
+
   try {
-    const res = await fetch('/api/drive/arm', { method: 'POST' });
-    const data = await res.json();
-    if (data && data.ok) {
+    const result = await authenticatedFetch('/api/drive/arm', { method: 'POST' });
+    const data = result.json || {};
+    if (result.ok && data.ok) {
       logSystem(data.message || 'Arm request processed.');
     } else {
-      logSystem(`⚠️ Arm request rejected: ${(data && data.error) || 'Unknown error'}`);
+      let errorMsg = data.error;
+      if (result.status === 401) {
+        errorMsg = 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.';
+      } else if (result.status === 403) {
+        errorMsg = 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.';
+      } else if (!errorMsg) {
+        errorMsg = 'Cannot arm rover: Re-authentication is required.';
+      }
+      logSystem(`⚠️ ${errorMsg}`);
+      showAuthErrorMessage(errorMsg);
     }
   } catch (err) {
-    logSystem(`⚠️ Error arming normal drive: ${err.message}`);
+    const errorMsg = 'Cannot arm rover: Re-authentication is required.';
+    logSystem(`⚠️ ${errorMsg}`);
+    showAuthErrorMessage(errorMsg);
   }
 
   // Immediate status refresh & brief 150ms retry for ESP32 telemetry packet propagation
@@ -1721,12 +2053,12 @@ async function armNormalDrive() {
 async function disarmNormalDrive() {
   logSystem('Sending disarm normal drive request...');
   try {
-    const res = await fetch('/api/drive/disarm', { method: 'POST' });
-    const data = await res.json();
-    if (data && data.ok) {
+    const result = await authenticatedFetch('/api/drive/disarm', { method: 'POST' });
+    const data = result.json || {};
+    if (result.ok && data.ok) {
       logSystem(data.message || 'Disarm request processed.');
-    } else {
-      logSystem(`⚠️ Disarm request rejected: ${(data && data.error) || 'Unknown error'}`);
+    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
+      logSystem(`⚠️ Disarm request rejected: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
     logSystem(`⚠️ Error disarming normal drive: ${err.message}`);
@@ -2111,16 +2443,49 @@ function renderSensorsV2Summary() {
   if (elLidarAge) elLidarAge.textContent = `${st.lidar.ageMs} ms`;
 
   // IMU HUD items in sensors-imu
+  const elImuBadge = document.getElementById('v2-imu-badge');
+  const elImuSummary = document.getElementById('v2-sensor-val-imu');
+  const now = Date.now();
+  const imuAgeMs = st.imu.lastTime ? (now - st.imu.lastTime) : 99999;
+  const isImuFresh = realIMUActive && (imuAgeMs <= 500);
+
+  if (!isImuFresh) {
+    if (elImuBadge) {
+      elImuBadge.className = 'badge badge-warning';
+      elImuBadge.textContent = 'STALE / NOT AVAILABLE';
+    }
+    if (elImuSummary) elImuSummary.textContent = 'Stale / Offline';
+  } else {
+    if (elImuBadge) {
+      elImuBadge.className = 'badge badge-success';
+      elImuBadge.textContent = 'HEALTHY (50 Hz)';
+    }
+    if (elImuSummary) elImuSummary.textContent = 'Healthy (50 Hz)';
+  }
+
   const elRoll = document.getElementById('v2-imu-val-roll');
-  if (elRoll) elRoll.textContent = `${st.imu.roll.toFixed(1)}°`;
+  if (elRoll) elRoll.textContent = isImuFresh ? `${st.imu.roll.toFixed(1)}°` : '--';
+
   const elPitch = document.getElementById('v2-imu-val-pitch');
-  if (elPitch) elPitch.textContent = `${st.imu.pitch.toFixed(1)}°`;
+  if (elPitch) elPitch.textContent = isImuFresh ? `${st.imu.pitch.toFixed(1)}°` : '--';
+
   const elYaw = document.getElementById('v2-imu-val-yaw');
-  if (elYaw) elYaw.textContent = `${st.imu.yaw.toFixed(1)}°`;
+  if (elYaw) elYaw.textContent = isImuFresh ? `${st.imu.yaw.toFixed(1)}°` : '--';
+
   const elAccel = document.getElementById('v2-imu-val-accel');
-  if (elAccel) elAccel.textContent = `${st.imu.accel.map(n => n.toFixed(1)).join(', ')} m/s²`;
+  if (elAccel) elAccel.textContent = isImuFresh ? `${st.imu.accel.map(n => n.toFixed(1)).join(', ')} m/s²` : '-- m/s²';
+
   const elGyro = document.getElementById('v2-imu-val-gyro');
-  if (elGyro) elGyro.textContent = `${st.imu.gyro.map(n => n.toFixed(1)).join(', ')} °/s`;
+  if (elGyro) elGyro.textContent = isImuFresh ? `${st.imu.gyro.map(n => n.toFixed(1)).join(', ')} °/s` : '-- °/s';
+
+  const elSeq = document.getElementById('v2-imu-val-seq');
+  if (elSeq) elSeq.textContent = isImuFresh ? `#${st.imu.seq || 0} (${st.imu.gaps || 0} gaps)` : '--';
+
+  const elResets = document.getElementById('v2-imu-val-resets');
+  if (elResets) elResets.textContent = isImuFresh ? `${st.imu.resets || 0} (Rec: ${st.imu.inResetRecovery ? 'YES' : 'NO'})` : '--';
+
+  const elCalib = document.getElementById('v2-imu-val-calib');
+  if (elCalib) elCalib.textContent = isImuFresh ? `Lvl ${st.imu.calibStatus || 0} / ${imuAgeMs}ms` : '--';
 
   // Odometry HUD items in sensors-odometry
   const elOdomX = document.getElementById('v2-odom-val-x');
@@ -2628,6 +2993,16 @@ function update3DModelRotation(pitch, roll, yaw) {
   }
 }
 
+// --- Chassis Footprint Configuration (10 in x 9 in = 0.254m x 0.2286m) ---
+const ROVER_FOOTPRINT_CONFIG = {
+  lengthM: 0.254,   // 10 inches chassis length (X axis / front-to-back)
+  widthM: 0.2286,   // 9 inches chassis width (Y axis / side-to-side)
+  strokeColor: '#00f2fe',
+  strokeWidth: 1.5,
+  fillColor: 'rgba(0, 242, 254, 0.15)',
+  noseColor: '#ff0055',
+};
+
 // --- Canvas Trail Map Drawing ---
 function resizeCanvas() {
   const rect = pathCanvas.parentElement.getBoundingClientRect();
@@ -2701,25 +3076,46 @@ function drawPath() {
     ctx.shadowBlur = 0; // reset
   }
   
-  // Draw Rover Indicator (Triangle pointing in current heading odomTheta)
+  // Draw Rover Indicator & Footprint Overlay (centered on current robot pose)
   const rx = odomX / 1000;
   const ry = odomY / 1000;
   const screenX = centerX + rx * scale;
   const screenY = centerY - ry * scale;
   
+  const fpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2) * scale;
+  const fpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2) * scale;
+  
   ctx.save();
   ctx.translate(screenX, screenY);
   ctx.rotate(-odomTheta); // Y-axis in canvas is inverted
   
-  // Draw glowing rover triangle
+  // 1. Chassis footprint fill and thin outline (10 in x 9 in scaled)
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-fpHalfL, -fpHalfW, fpHalfL * 2, fpHalfW * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-fpHalfL, -fpHalfW, fpHalfL * 2, fpHalfW * 2);
+  
+  // 2. Clear front/nose indication (chevron arrow on front bumper)
+  const noseSize = Math.max(4, Math.min(fpHalfL * 0.5, 10));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
+  ctx.beginPath();
+  ctx.moveTo(fpHalfL, 0); // nose tip
+  ctx.lineTo(fpHalfL - noseSize, -noseSize * 0.6);
+  ctx.lineTo(fpHalfL - noseSize * 0.6, 0);
+  ctx.lineTo(fpHalfL - noseSize, noseSize * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  
+  // 3. Central pose marker triangle
   ctx.fillStyle = 'var(--red-glow)';
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.0;
   ctx.beginPath();
-  ctx.moveTo(12, 0);   // Tip
-  ctx.lineTo(-8, -8);  // Rear left
-  ctx.lineTo(-4, 0);   // Rear center indent
-  ctx.lineTo(-8, 8);   // Rear right
+  ctx.moveTo(Math.min(10, fpHalfL), 0);   // Tip
+  ctx.lineTo(-Math.min(6, fpHalfL * 0.6), -Math.min(6, fpHalfW * 0.6));  // Rear left
+  ctx.lineTo(-Math.min(3, fpHalfL * 0.3), 0);   // Rear center indent
+  ctx.lineTo(-Math.min(6, fpHalfL * 0.6), Math.min(6, fpHalfW * 0.6));   // Rear right
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
@@ -3326,8 +3722,8 @@ function updateTrackInterference(scan) {
   if (!scan || !scan.points) return;
   
   const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset')?.value || 0);
-  const lx = parseFloat(document.getElementById('cfg-lidar-x')?.value || 0.0127);
-  const ly = parseFloat(document.getElementById('cfg-lidar-y')?.value || 0.034925);
+  const lx = parseFloat(document.getElementById('cfg-lidar-x')?.value || 0.03175);
+  const ly = parseFloat(document.getElementById('cfg-lidar-y')?.value || 0.0);
   const maxRangeCfg = parseFloat(document.getElementById('cfg-max-range')?.value || 4.0);
   
   const selectTrackWidth = document.getElementById('monitored-track-width');
@@ -3413,7 +3809,6 @@ function updateTrackInterference(scan) {
 }
 
 function updateTrackInterferenceUI(dFront, dLeft, dRight) {
-  const elBadge = document.getElementById('interference-warning-badge');
   const elFront = document.getElementById('val-interfere-front');
   const elLeft = document.getElementById('val-interfere-left');
   const elRight = document.getElementById('val-interfere-right');
@@ -3451,23 +3846,21 @@ function updateTrackInterferenceUI(dFront, dLeft, dRight) {
   formatValAndStyle(elLeft, boxLeft, dLeft);
   formatValAndStyle(elRight, boxRight, dRight);
   
-  if (elBadge) {
-    if (dFront < 0 || dLeft < 0 || dRight < 0) {
-      if (elBadge) elBadge.textContent = '⚠️ Interference';
-      if (elBadge) elBadge.style.background = 'rgba(255, 0, 85, 0.15)';
-      if (elBadge) elBadge.style.color = '#ff0055';
-      if (elBadge) elBadge.style.borderColor = 'rgba(255, 0, 85, 0.4)';
-    } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
-      if (elBadge) elBadge.textContent = '⚠️ Caution';
-      if (elBadge) elBadge.style.background = 'rgba(245, 158, 11, 0.15)';
-      if (elBadge) elBadge.style.color = '#f59e0b';
-      if (elBadge) elBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
-    } else {
-      if (elBadge) elBadge.textContent = '✓ Clear';
-      if (elBadge) elBadge.style.background = 'rgba(16, 185, 129, 0.15)';
-      if (elBadge) elBadge.style.color = '#10b981';
-      if (elBadge) elBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-    }
+  if (dFront < 0 || dLeft < 0 || dRight < 0) {
+    setText('interference-warning-badge', '⚠️ Interference');
+    setStyle('interference-warning-badge', 'background', 'rgba(255, 0, 85, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#ff0055');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(255, 0, 85, 0.4)');
+  } else if (dFront < 0.15 || dLeft < 0.15 || dRight < 0.15) {
+    setText('interference-warning-badge', '⚠️ Caution');
+    setStyle('interference-warning-badge', 'background', 'rgba(245, 158, 11, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#f59e0b');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(245, 158, 11, 0.4)');
+  } else {
+    setText('interference-warning-badge', '✓ Clear');
+    setStyle('interference-warning-badge', 'background', 'rgba(16, 185, 129, 0.15)');
+    setStyle('interference-warning-badge', 'color', '#10b981');
+    setStyle('interference-warning-badge', 'borderColor', 'rgba(16, 185, 129, 0.4)');
   }
 }
 
@@ -3563,6 +3956,34 @@ function drawPolarScan(scan) {
   ctx.textAlign = 'right';
   ctx.fillText('270° LEFT', centerX - radius - 8, centerY);
   
+  // Draw Top-Down Rover Chassis Footprint Overlay (10" x 9" scaled in meters)
+  const polarScaleM = scale * 1000.0;
+  const pFpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2.0) * polarScaleM;
+  const pFpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2.0) * polarScaleM;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+
+  // Chassis footprint fill and thin outline
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-pFpHalfW, -pFpHalfL, pFpHalfW * 2, pFpHalfL * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-pFpHalfW, -pFpHalfL, pFpHalfW * 2, pFpHalfL * 2);
+
+  // Front nose indicator (0° FRONT)
+  const pNoseSize = Math.max(4, Math.min(pFpHalfL * 0.5, 8));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
+  ctx.beginPath();
+  ctx.moveTo(0, -pFpHalfL); // Front nose tip
+  ctx.lineTo(-pNoseSize * 0.6, -pFpHalfL + pNoseSize);
+  ctx.lineTo(0, -pFpHalfL + pNoseSize * 0.6);
+  ctx.lineTo(pNoseSize * 0.6, -pFpHalfL + pNoseSize);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+
   // Draw the points
   if (scan.points && scan.points.length > 0) {
     let closestPt = null;
@@ -4329,11 +4750,11 @@ function logOutAndBackTrial() {
 }
 
 // ── Backtracking Recording & Return ──
+// ── Backtracking Recording & Return ──
 async function startPathRecording() {
   try {
-    const res = await fetch('/api/path/record/start', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Recording started: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/record/start', { method: 'POST' });
+    logSystem(`[Path] Recording started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start path recording:', err);
   }
@@ -4341,9 +4762,8 @@ async function startPathRecording() {
 
 async function stopPathRecording() {
   try {
-    const res = await fetch('/api/path/record/stop', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Recording stopped: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/record/stop', { method: 'POST' });
+    logSystem(`[Path] Recording stopped: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to stop path recording:', err);
   }
@@ -4351,9 +4771,8 @@ async function stopPathRecording() {
 
 async function startBacktrackHome() {
   try {
-    const res = await fetch('/api/path/backtrack/start', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Backtracking started: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/backtrack/start', { method: 'POST' });
+    logSystem(`[Path] Backtracking started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start backtrack:', err);
   }
@@ -4361,9 +4780,8 @@ async function startBacktrackHome() {
 
 async function abortBacktrackHome() {
   try {
-    const res = await fetch('/api/path/backtrack/stop', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Path] Backtracking aborted: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/path/backtrack/stop', { method: 'POST' });
+    logSystem(`[Path] Backtracking aborted: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to abort backtrack:', err);
   }
@@ -4383,13 +4801,12 @@ function logBacktrackTrial() {
 // ── Breakaway Calibration & Safety Control ──
 async function triggerCalibrateStart() {
   try {
-    const res = await fetch('/api/calibration/simulate/start', {
+    const result = await authenticatedFetch('/api/calibration/simulate/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ safetyAck: true })
     });
-    const data = await res.json();
-    logSystem(`[Calibration Simulation] Started: ${JSON.stringify(data)}`);
+    logSystem(`[Calibration Simulation] Started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start calibration simulation:', err);
   }
@@ -4397,9 +4814,8 @@ async function triggerCalibrateStart() {
 
 async function triggerCalibrateCancel() {
   try {
-    const res = await fetch('/api/calibration/abort', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Calibration] Aborted: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/calibration/abort', { method: 'POST' });
+    logSystem(`[Calibration] Aborted: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to abort calibration:', err);
   }
@@ -4407,13 +4823,12 @@ async function triggerCalibrateCancel() {
 
 async function triggerRealCalibrateStart() {
   try {
-    const res = await fetch('/api/calibration/real/start', {
+    const result = await authenticatedFetch('/api/calibration/real/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ safetyAck: true })
     });
-    const data = await res.json();
-    logSystem(`[Real Calibration] Started: ${JSON.stringify(data)}`);
+    logSystem(`[Real Calibration] Started: ${JSON.stringify(result.json || {})}`);
   } catch (err) {
     console.error('Failed to start real calibration:', err);
   }
@@ -4433,7 +4848,7 @@ async function runSingleMotorTest(motorIndex, direction) {
 
   try {
     logSystem(`[Maintenance Test] Starting single motor test: m${motorIndex + 1} ${direction}...`);
-    const res = await fetch('/api/maintenance/run_test', {
+    const result = await authenticatedFetch('/api/maintenance/run_test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4444,11 +4859,11 @@ async function runSingleMotorTest(motorIndex, direction) {
         durationSec: 2.0
       })
     });
-    const data = await res.json();
-    if (data.ok && data.test_result) {
+    const data = result.json || {};
+    if (result.ok && data.ok && data.test_result) {
       updateMaintenanceHUD(data.test_result);
       logSystem(`[Maintenance Test] Test complete for ${data.test_result.motor_label}: Delta=${data.test_result.encoder_delta} ticks, Steady=${data.test_result.encoder_steady}, Isolation=${data.test_result.isolation_verified}`);
-    } else {
+    } else if (!result.ok && result.status !== 401 && result.status !== 403) {
       showTestErrorBanner(`Maintenance test failed: ${data.error || 'Unknown error'}`);
       logSystem(`[Maintenance Test ERROR] ${data.error || 'Unknown error'}`);
     }
@@ -4462,9 +4877,8 @@ async function runSingleMotorTest(motorIndex, direction) {
 
 async function stopAllMaintenance() {
   try {
-    const res = await fetch('/api/maintenance/exit', { method: 'POST' });
-    const data = await res.json();
-    logSystem(`[Maintenance Test] STOP ALL triggered: ${JSON.stringify(data)}`);
+    const result = await authenticatedFetch('/api/maintenance/exit', { method: 'POST' });
+    logSystem(`[Maintenance Test] STOP ALL triggered: ${JSON.stringify(result.json || {})}`);
     showTestErrorBanner('🛑 EMERGENCY STOP ACTIVATED — All outputs locked.');
   } catch (err) {
     console.error('Failed to stop all maintenance:', err);
@@ -4739,7 +5153,12 @@ function updateGamepadBadge(connected, name = '') {
   }
 }
 
-function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
+function updateGamepadHUD(x, y, deadman, pressedButtonsStr, rawX = 0, rawY = 0, rtRaw = 0, txStatus = 'IDLE', modelName = '') {
+  const elCtrl = document.getElementById('gp-live-controller');
+  if (elCtrl) {
+    elCtrl.innerText = gamepadActive ? (modelName || 'Connected') : 'Disconnected';
+    elCtrl.style.color = gamepadActive ? '#00f2fe' : '#9ca3af';
+  }
   const elArm = document.getElementById('gp-live-arm');
   if (elArm) {
     const isArmed = window.roverState && window.roverState.drive && window.roverState.drive.armed;
@@ -4749,23 +5168,23 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
   const elDeadman = document.getElementById('gp-live-deadman');
   if (elDeadman) {
     if (gamepadActive && !deadman) {
-      elDeadman.innerText = 'Controller connected — deadman not active';
+      elDeadman.innerText = `RELEASED (RT Raw: ${rtRaw.toFixed(2)})`;
       elDeadman.style.color = '#f59e0b'; // Amber
     } else if (deadman) {
-      elDeadman.innerText = 'ACTIVE';
+      elDeadman.innerText = `ACTIVE (RT Raw: ${rtRaw.toFixed(2)})`;
       elDeadman.style.color = '#10b981'; // Green
     } else {
-      elDeadman.innerText = 'RELEASED';
+      elDeadman.innerText = 'RELEASED (RT Raw: 0.00)';
       elDeadman.style.color = '#ef4444'; // Red
     }
   }
   const elLinear = document.getElementById('gp-live-linear');
   if (elLinear) {
-    elLinear.innerText = y.toFixed(2);
+    elLinear.innerText = `${y.toFixed(2)} (Raw: ${rawY.toFixed(2)})`;
   }
   const elAngular = document.getElementById('gp-live-angular');
   if (elAngular) {
-    elAngular.innerText = x.toFixed(2);
+    elAngular.innerText = `${x.toFixed(2)} (Raw: ${rawX.toFixed(2)})`;
   }
   const elButtons = document.getElementById('gp-live-buttons');
   if (elButtons) {
@@ -4782,6 +5201,11 @@ function updateGamepadHUD(x, y, deadman, pressedButtonsStr) {
     const isEstop = window.roverState && window.roverState.drive && window.roverState.drive.estop;
     elEstop.innerText = isEstop ? 'TRIGGERED' : 'NOMINAL';
     elEstop.style.color = isEstop ? '#ef4444' : '#10b981';
+  }
+  const elTx = document.getElementById('gp-live-tx-status');
+  if (elTx) {
+    elTx.innerText = txStatus;
+    elTx.style.color = txStatus === 'TRANSMITTED' ? '#10b981' : (txStatus.startsWith('SUPPRESSED') ? '#f59e0b' : '#9ca3af');
   }
 }
 
@@ -4807,13 +5231,24 @@ function startGamepadLoop() {
       return;
     }
 
-    // Primary Control: Left stick vertical (axes 1) and horizontal (axes 0)
+    // Standard Xbox Controller mapping:
+    // Steering: axes[0]
+    // Throttle: -axes[1] (Forward stick is negative axes[1])
+    const rawX = (gp.axes && gp.axes[0] !== undefined) ? gp.axes[0] : 0;
+    const rawY = (gp.axes && gp.axes[1] !== undefined) ? gp.axes[1] : 0;
+
     let throttle = -gp.axes[1];
     let turn = gp.axes[0];
 
     // Apply deadzone (0.10) to block resting drift
     if (Math.abs(throttle) < 0.10) throttle = 0;
     if (Math.abs(turn) < 0.10) turn = 0;
+
+    // Right Trigger (buttons[7]) / RB (buttons[5]) Deadman evaluation
+    const rtVal = (gp.buttons && gp.buttons[7] && typeof gp.buttons[7].value === 'number') ? gp.buttons[7].value : 0;
+    const rtPressed = Boolean(gp.buttons && gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5));
+    const rbPressed = Boolean(gp.buttons && gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5));
+    const deadmanPressed = Boolean(rtPressed || rbPressed);
 
     // Detect pressed buttons
     const pressedButtons = [];
@@ -4831,18 +5266,12 @@ function startGamepadLoop() {
       if (btnIdx === 0) buttonNames.push("A (ESTOP)");
       else if (btnIdx === 1) buttonNames.push("B (ESTOP)");
       else if (btnIdx === 5) buttonNames.push("RB (Deadman)");
-      else if (btnIdx === 7) buttonNames.push("RT (Deadman)");
+      else if (btnIdx === 7) buttonNames.push(`RT (${rtVal.toFixed(2)})`);
       else if (btnIdx === 8) buttonNames.push("Select (Disarm)");
       else if (btnIdx === 9) buttonNames.push("Start (Arm)");
       else buttonNames.push(btnIdx);
     });
     const pressedButtonsStr = buttonNames.length > 0 ? buttonNames.join(", ") : "None";
-
-    // Intended Deadman switch: Hold RB (5) or RT (7) past 50% pull (value > 0.5)
-    const deadmanPressed = Boolean(
-      (gp.buttons[5] && (gp.buttons[5].pressed || gp.buttons[5].value > 0.5)) ||
-      (gp.buttons[7] && (gp.buttons[7].pressed || gp.buttons[7].value > 0.5))
-    );
 
     // Safety buttons: A (0) or B (1) triggers ESTOP
     const estopPressed = Boolean(
@@ -4854,29 +5283,40 @@ function startGamepadLoop() {
     const armPressed = Boolean(gp.buttons[9] && (gp.buttons[9].pressed || gp.buttons[9].value > 0.5));
     const disarmPressed = Boolean(gp.buttons[8] && (gp.buttons[8].pressed || gp.buttons[8].value > 0.5));
 
+    let txStatus = 'IDLE';
     if (estopPressed) {
+      txStatus = 'SUPPRESSED: E-Stop Active';
       if (typeof triggerEstop === 'function') triggerEstop();
-      updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr);
+      updateGamepadHUD(0, 0, deadmanPressed, pressedButtonsStr, rawX, rawY, rtVal, txStatus, gp.id);
       lastSentJoystick = { x: 0, y: 0, deadman: deadmanPressed };
       lastGamepadSendTime = Date.now();
     } else if (armPressed) {
+      txStatus = 'ARM TRIGGERED';
       if (typeof armNormalDrive === 'function') armNormalDrive();
       lastGamepadSendTime = Date.now() + 500;
     } else if (disarmPressed) {
+      txStatus = 'DISARM TRIGGERED';
       if (typeof disarmNormalDrive === 'function') disarmNormalDrive();
       lastGamepadSendTime = Date.now() + 500;
     }
 
-    // Sync with HUD
-    updateGamepadHUD(turn, throttle, deadmanPressed, pressedButtonsStr);
-
     // Send joystick commands to server
     if (!estopPressed && !armPressed && !disarmPressed) {
       const now = Date.now();
-      const changed = Math.abs(turn - lastSentJoystick.x) > 0.02 ||
-                      Math.abs(throttle - lastSentJoystick.y) > 0.02 ||
+      const isArmed = window.roverState && window.roverState.drive && window.roverState.drive.armed;
+
+      const changed = Math.abs(turn - lastSentJoystick.x) > 0.01 ||
+                      Math.abs(throttle - lastSentJoystick.y) > 0.01 ||
                       deadmanPressed !== lastSentJoystick.deadman;
-      const timeElapsed = now - lastGamepadSendTime > 100;
+      const timeElapsed = now - lastGamepadSendTime > 50;
+
+      if (!isArmed && (turn !== 0 || throttle !== 0 || deadmanPressed)) {
+        txStatus = 'SUPPRESSED: Disarmed';
+      } else if (!deadmanPressed && (turn !== 0 || throttle !== 0)) {
+        txStatus = 'SUPPRESSED: Deadman Released';
+      } else if (throttle === 0 && turn === 0 && !deadmanPressed && !changed) {
+        txStatus = 'SUPPRESSED: Neutral';
+      }
 
       if (changed || (timeElapsed && (turn !== 0 || throttle !== 0 || deadmanPressed))) {
         sendServerMessage({
@@ -4887,13 +5327,21 @@ function startGamepadLoop() {
         });
         lastSentJoystick = { x: turn, y: throttle, deadman: deadmanPressed };
         lastGamepadSendTime = now;
+        if (deadmanPressed && (turn !== 0 || throttle !== 0)) {
+          txStatus = 'TRANSMITTED';
+        }
       }
     }
+
+    // Sync with HUD
+    updateGamepadHUD(turn, throttle, deadmanPressed, pressedButtonsStr, rawX, rawY, rtVal, txStatus, gp.id);
 
     requestAnimationFrame(poll);
   }
   requestAnimationFrame(poll);
 }
+
+// Stage 4 Safety Event Handlers
 
 // ==============================================================================
 // LiDAR Straight-Line Correction & Calibration Setup
@@ -4996,8 +5444,8 @@ function initLidarStraightLineTest() {
       calibPathHistory = []; // Clear historical paths for new run
       
       const frontAngleOffset = parseFloat(document.getElementById('cfg-front-angle-offset').value || 0);
-      const lidarXOffset = parseFloat(document.getElementById('cfg-lidar-x').value || 0.0127);
-      const lidarYOffset = parseFloat(document.getElementById('cfg-lidar-y').value || 0.034925);
+      const lidarXOffset = parseFloat(document.getElementById('cfg-lidar-x').value || 0.03175);
+      const lidarYOffset = parseFloat(document.getElementById('cfg-lidar-y').value || 0.0);
       const maxRange = parseFloat(document.getElementById('cfg-max-range').value || 4.0);
       const minConfidence = parseFloat(document.getElementById('cfg-min-confidence').value || 0.65);
       const headingGain = parseFloat(document.getElementById('cfg-heading-gain').value || 0.80);
@@ -5364,8 +5812,8 @@ function drawLidarTestCanvas() {
       const y_lidar = - distM * Math.sin(angleRad); // Negated for right-handed mapping
       
       // LiDAR to chassis frame translation
-      const x_chassis = x_lidar + (parseFloat(document.getElementById('cfg-lidar-x')?.value) || 0.0127);
-      const y_chassis = y_lidar + (parseFloat(document.getElementById('cfg-lidar-y')?.value) || 0.034925);
+      const x_chassis = x_lidar + (parseFloat(document.getElementById('cfg-lidar-x')?.value) || 0.03175);
+      const y_chassis = y_lidar + (parseFloat(document.getElementById('cfg-lidar-y')?.value) || 0.0);
       
       // Chassis to track frame translation and rotation
       const x_track = latestPose.x + x_chassis * Math.cos(latestPose.yaw) - y_chassis * Math.sin(latestPose.yaw);
@@ -5449,7 +5897,7 @@ function openLowEndCalibration() {
 // ────────────────────────────────────────────────────────────
 // Closed-Loop Automatic Calibration UI Logic
 // ────────────────────────────────────────────────────────────
-let pendingAutoCalibTest = null;
+var pendingAutoCalibTest = null;
 let autoCalibPollingInterval = null;
 
 function promptAutoCalib(testType) {
@@ -5573,10 +6021,10 @@ function updateCalibrationReadiness() {
 
   // Active parameter readouts
   const diaVal = currentWheelDiameter || 0.065;
-  const trackVal = currentTrackWidth || 0.382;
+  const trackVal = currentTrackWidth || 0.3408575433;
   const wheelDiaMm = diaVal * 1000.0;
   const trackMm = trackVal * 1000.0;
-  const ticksPerRev = 1894.0;
+  const ticksPerRev = 1974.1666666667;
 
   if (elDia) elDia.textContent = `${diaVal.toFixed(3)} m (${wheelDiaMm.toFixed(1)} mm)`;
   if (elTrack) elTrack.textContent = `${trackVal.toFixed(3)} m (${trackMm.toFixed(1)} mm)`;
@@ -5673,23 +6121,134 @@ function updateAutoCalibUI(status) {
       }
     });
 
-    setText('res-test-type', status.test || '-');
-    if (status.startPose) {
-      setText('res-start-pose', `(${status.startPose.x.toFixed(3)}, ${status.startPose.y.toFixed(3)}, ${status.startPose.yawDeg.toFixed(1)}°)`);
+    setText('res-test-type', (res && res.test) ? res.test : (status.test || '-'));
+    const startP = (res && res.startPose) || status.startPose;
+    if (startP) {
+      setText('res-start-pose', `(${startP.x.toFixed(3)}, ${startP.y.toFixed(3)}, ${startP.yawDeg.toFixed(1)}°)`);
     }
-    if (status.finalPose) {
-      setText('res-ending-pose', `(${status.finalPose.x.toFixed(3)}, ${status.finalPose.y.toFixed(3)}, ${status.finalPose.yawDeg.toFixed(1)}°)`);
+    const finalP = (res && res.finalPose) || status.finalPose;
+    if (finalP) {
+      setText('res-ending-pose', `(${finalP.x.toFixed(3)}, ${finalP.y.toFixed(3)}, ${finalP.yawDeg.toFixed(1)}°)`);
     }
-    setText('res-measured-dist', `${(status.reportedDistance || 0).toFixed(3)} m`);
-    setText('res-measured-yaw', `${(status.reportedYawDegrees || 0).toFixed(1)}°`);
-    setText('res-target-errors', `Dist Err: ${status.distanceError > 0 ? '+' : ''}${status.distanceError || 0}m | Yaw Err: ${status.yawErrorDegrees > 0 ? '+' : ''}${status.yawErrorDegrees || 0}°`);
-    setText('res-elapsed-time', `${((status.elapsedMs || 0) / 1000.0).toFixed(1)} s`);
-    setText('res-stop-reason', `${status.stopReason || '-'} ${status.fault ? '(' + status.fault + ')' : ''}`);
+    const rDist = (res && res.reportedDistance !== undefined) ? res.reportedDistance : (status.reportedDistance || 0);
+    setText('res-measured-dist', `${rDist.toFixed(3)} m`);
+    const rYaw = (res && res.reportedYawDegrees !== undefined) ? res.reportedYawDegrees : (status.reportedYawDegrees || 0);
+    setText('res-measured-yaw', `${rYaw.toFixed(1)}°`);
+    const dErr = (res && res.distanceError !== undefined) ? res.distanceError : (status.distanceError || 0);
+    const yErr = (res && res.yawErrorDegrees !== undefined) ? res.yawErrorDegrees : (status.yawErrorDegrees || 0);
+    setText('res-target-errors', `Dist Err: ${dErr > 0 ? '+' : ''}${dErr}m | Yaw Err: ${yErr > 0 ? '+' : ''}${yErr}°`);
+    const elMs = (res && res.elapsedMs !== undefined) ? res.elapsedMs : (status.elapsedMs || 0);
+    setText('res-elapsed-time', `${(elMs / 1000.0).toFixed(1)} s`);
+    const sReason = (res && res.stopReason) || status.stopReason || '-';
+    const sFault = (res && res.fault !== undefined) ? res.fault : status.fault;
+    setText('res-stop-reason', `${sReason} ${sFault ? '(' + sFault + ')' : ''}`);
   }
 }
 
 // Query initial automatic calibration status on page load
 document.addEventListener('DOMContentLoaded', () => {
+  const uiBadge = document.getElementById('ui-version-badge');
+  if (uiBadge) {
+    uiBadge.textContent = `UI: ${UI_BUILD_ID}`;
+  }
+
+  updateEsp32Badge();
+
+  const btnSaveToken = document.getElementById('btn-save-token');
+  const btnClearToken = document.getElementById('btn-clear-token');
+  const inputToken = document.getElementById('operator-token-input');
+  const rememberCheckbox = document.getElementById('remember-token-checkbox');
+
+  // Token restoration on page load: prefer sessionStorage, otherwise restore localStorage
+  const sessionTok = sessionStorage.getItem('rover_operator_token');
+  const localTok = localStorage.getItem('rover_operator_token');
+  let activeTok = '';
+
+  if (sessionTok && sessionTok.trim()) {
+    activeTok = sessionTok.trim();
+    if (rememberCheckbox) {
+      rememberCheckbox.checked = !!(localTok && localTok.trim() && localTok.trim() === activeTok);
+    }
+  } else if (localTok && localTok.trim()) {
+    activeTok = localTok.trim();
+    if (rememberCheckbox) {
+      rememberCheckbox.checked = true;
+    }
+    sessionStorage.setItem('rover_operator_token', activeTok);
+  }
+
+  if (inputToken && activeTok) {
+    inputToken.value = activeTok;
+    inputToken.placeholder = 'Operator Token (Active)';
+  }
+
+  if (rememberCheckbox) {
+    rememberCheckbox.addEventListener('change', () => {
+      const curTok = getOrSyncOperatorToken();
+      if (curTok) {
+        setStoredOperatorToken(curTok, rememberCheckbox.checked);
+        if (typeof logSystem === 'function') {
+          logSystem(rememberCheckbox.checked ? 'Operator token remembered in localStorage.' : 'Operator token stored in sessionStorage only.');
+        }
+      }
+    });
+  }
+
+  if (inputToken) {
+    inputToken.addEventListener('input', () => {
+      const val = inputToken.value.trim();
+      if (val) {
+        setStoredOperatorToken(val, isRememberBrowserEnabled());
+        inputToken.placeholder = 'Operator Token (Active)';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'auth', token: val }));
+        }
+      } else {
+        sessionStorage.removeItem('rover_operator_token');
+        localStorage.removeItem('rover_operator_token');
+        inputToken.placeholder = 'Operator Token';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'deauth' }));
+        }
+      }
+    });
+  }
+
+  if (btnSaveToken) {
+    btnSaveToken.addEventListener('click', () => {
+      const val = getOrSyncOperatorToken();
+      if (val) {
+        if (inputToken) inputToken.placeholder = 'Operator Token (Active)';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'auth', token: val }));
+        }
+        const storageType = isRememberBrowserEnabled() ? 'localStorage' : 'sessionStorage';
+        if (typeof logSystem === 'function') {
+          logSystem(`Operator token stored in ${storageType}.`);
+        }
+      } else {
+        showAuthErrorMessage('Enter an operator token first.');
+      }
+    });
+  }
+
+  if (btnClearToken) {
+    btnClearToken.addEventListener('click', () => {
+      sessionStorage.removeItem('rover_operator_token');
+      localStorage.removeItem('rover_operator_token');
+      if (inputToken) {
+        inputToken.value = '';
+        inputToken.placeholder = 'Operator Token';
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'deauth' }));
+      }
+      if (typeof logSystem === 'function') {
+        logSystem('Operator authorization cleared.');
+      }
+    });
+  }
+
   updateCalibrationReadiness();
   fetch('/api/calibration/auto/status')
     .then(res => res.json())
@@ -5703,14 +6262,95 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearResult = document.getElementById('btn-clear-calib-result');
   if (btnClearResult) {
     btnClearResult.addEventListener('click', () => {
-      fetch('/api/calibration/auto/clear_result', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.ok && data.status) updateAutoCalibUI(data.status);
+      authenticatedFetch('/api/calibration/auto/clear_result', { method: 'POST' })
+        .then(result => {
+          if (result.ok && result.json && result.json.ok && result.json.status) {
+            updateAutoCalibUI(result.json.status);
+          }
         });
     });
   }
+
+  const btnAutonomy = document.getElementById('btn-enable-autonomy');
+  if (btnAutonomy) {
+    btnAutonomy.addEventListener('click', () => {
+      const isCurrentlyEnabled = btnAutonomy.textContent.includes('Disable');
+      const endpoint = isCurrentlyEnabled ? '/api/autonomy/disable' : '/api/autonomy/enable';
+      authenticatedFetch(endpoint, { method: 'POST' })
+        .then(result => {
+          if (result.ok && result.json && result.json.ok && result.json.status) {
+            updateAutonomyState(result.json.status);
+          }
+        })
+        .catch(err => console.error('Autonomy toggle failed:', err));
+    });
+  }
+
+  fetch('/api/autonomy/status')
+    .then(res => res.json())
+    .then(data => {
+      if (data.ok) updateAutonomyState(data);
+    })
+    .catch(() => {});
 });
+
+function updateAutonomyState(status) {
+  if (!status) return;
+  const elDriveAutonomy = document.getElementById('v2-drive-val-autonomy');
+  const btnAutonomy = document.getElementById('btn-enable-autonomy');
+  const isArmed = (typeof latestNormalDriveStatus !== 'undefined' && latestNormalDriveStatus && latestNormalDriveStatus.armed) || false;
+
+  if (elDriveAutonomy) {
+    const st = (status.state || (status.enabled ? (status.active ? 'ACTIVE' : 'READY') : 'DISABLED')).toUpperCase();
+    if (st === 'ACTIVE') {
+      elDriveAutonomy.textContent = 'ACTIVE (ROS 2)';
+      elDriveAutonomy.className = 'status-val badge-armed';
+    } else if (st === 'READY_ARMED' || st === 'READY') {
+      elDriveAutonomy.textContent = 'READY (ARMED)';
+      elDriveAutonomy.className = 'status-val badge-armed';
+    } else if (st === 'READY_DISARMED') {
+      elDriveAutonomy.textContent = 'READY (DISARMED)';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'WAITING_FOR_ZERO') {
+      elDriveAutonomy.textContent = `WAITING FOR ZERO (${status.zeroHandshakeCount || 0}/3)`;
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'STALE') {
+      elDriveAutonomy.textContent = 'STALE (TIMEOUT)';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else if (st === 'FAULT') {
+      elDriveAutonomy.textContent = 'FAULT';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    } else {
+      elDriveAutonomy.textContent = 'DISABLED';
+      elDriveAutonomy.className = 'status-val badge-disarmed';
+    }
+  }
+
+  if (btnAutonomy) {
+    if (status.enabled) {
+      btnAutonomy.textContent = 'Disable Autonomy';
+      btnAutonomy.style.background = 'rgba(239, 68, 68, 0.2)';
+      btnAutonomy.style.borderColor = '#ef4444';
+      btnAutonomy.style.color = '#fca5a5';
+      btnAutonomy.disabled = false;
+      btnAutonomy.title = 'Click to disable ROS 2 autonomy intake';
+    } else {
+      btnAutonomy.textContent = 'Enable Autonomy';
+      btnAutonomy.style.background = 'rgba(0, 242, 254, 0.15)';
+      btnAutonomy.style.borderColor = 'rgba(0, 242, 254, 0.4)';
+      btnAutonomy.style.color = '#00f2fe';
+      if (isArmed) {
+        btnAutonomy.disabled = true;
+        btnAutonomy.style.opacity = '0.5';
+        btnAutonomy.title = 'Cannot enable autonomy while rover is armed. Disarm first.';
+      } else {
+        btnAutonomy.disabled = false;
+        btnAutonomy.style.opacity = '1.0';
+        btnAutonomy.title = 'Enables ROS 2 autonomy intake (requires zero-velocity handshake before arming)';
+      }
+    }
+  }
+}
 
 // --- Stage 4 Compact LiDAR Local View Renderer & Safety Lifecycle Listeners ---
 function drawCompactLidarScan(scan) {
@@ -5782,16 +6422,42 @@ function drawCompactLidarScan(scan) {
     }
   }
 
-  // Draw Center Rover Icon
-  ctx.fillStyle = '#10b981';
-  ctx.fillRect(centerX - 6, centerY - 8, 12, 16);
-  ctx.fillStyle = '#ffffff';
+  // Draw Top-Down Rover Chassis Footprint Overlay (10" x 9" scaled in meters)
+  const scaleM = scale * 1000.0;
+  const fpHalfL = (ROVER_FOOTPRINT_CONFIG.lengthM / 2.0) * scaleM;
+  const fpHalfW = (ROVER_FOOTPRINT_CONFIG.widthM / 2.0) * scaleM;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+
+  // 1. Chassis footprint fill and thin outline
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.fillColor;
+  ctx.fillRect(-fpHalfW, -fpHalfL, fpHalfW * 2, fpHalfL * 2);
+  ctx.strokeStyle = ROVER_FOOTPRINT_CONFIG.strokeColor;
+  ctx.lineWidth = ROVER_FOOTPRINT_CONFIG.strokeWidth;
+  ctx.strokeRect(-fpHalfW, -fpHalfL, fpHalfW * 2, fpHalfL * 2);
+
+  // 2. Clear front/nose indication (Chevron arrow on top bumper pointing 0° FRONT)
+  const noseSize = Math.max(4, Math.min(fpHalfL * 0.5, 8));
+  ctx.fillStyle = ROVER_FOOTPRINT_CONFIG.noseColor;
   ctx.beginPath();
-  ctx.moveTo(centerX, centerY - 12);
-  ctx.lineTo(centerX - 4, centerY - 6);
-  ctx.lineTo(centerX + 4, centerY - 6);
+  ctx.moveTo(0, -fpHalfL); // Front nose tip
+  ctx.lineTo(-noseSize * 0.6, -fpHalfL + noseSize);
+  ctx.lineTo(0, -fpHalfL + noseSize * 0.6);
+  ctx.lineTo(noseSize * 0.6, -fpHalfL + noseSize);
   ctx.closePath();
   ctx.fill();
+
+  // 3. Central pose marker arrow
+  ctx.fillStyle = '#10b981';
+  ctx.beginPath();
+  ctx.moveTo(0, -Math.min(10, fpHalfL));
+  ctx.lineTo(-Math.min(4, fpHalfW * 0.5), 0);
+  ctx.lineTo(Math.min(4, fpHalfW * 0.5), 0);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
 
   // Update Closest Obstacle Readout HUD
   const elDist = document.getElementById('v2-compact-lidar-dist');
@@ -5820,7 +6486,8 @@ function drawCompactLidarScan(scan) {
   }
 }
 
-// Stage 4 Safety Event Handlers: Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
+// Stage 4 Safety Event Handlers
+// Window blur, visibility change, and gamepad disconnect immediately trigger safe stop
 window.addEventListener('blur', () => {
   if (typeof driveRover === 'function') driveRover('stop');
   sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
@@ -5835,8 +6502,213 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('gamepaddisconnect', () => {
+window.addEventListener('gamepaddisconnected', () => {
   if (typeof driveRover === 'function') driveRover('stop');
   sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
   lastSentJoystick = { x: 0, y: 0, deadman: false };
 });
+
+// --- Drive Control Room Live IMU Panel & Watchdog ---
+let lastDriveImuRxMs = 0;
+
+function updateDriveControlRoomImuUI(msg, pitch, roll, yaw) {
+  lastDriveImuRxMs = Date.now();
+  const gzRad = (msg && msg.gyro && typeof msg.gyro.z === 'number') ? msg.gyro.z : 0.0;
+  const cal = (msg && msg.calibrationStatus !== undefined) ? msg.calibrationStatus : '--';
+  const dataAge = (msg && msg.rotVecAgeMs !== undefined && msg.rotVecAgeMs !== null) ? msg.rotVecAgeMs : 0;
+
+  setText('v2-drive-imu-roll', `${roll.toFixed(1)}°`);
+  setText('v2-drive-imu-pitch', `${pitch.toFixed(1)}°`);
+  setText('v2-drive-imu-yaw', `${yaw.toFixed(1)}°`);
+  setText('v2-drive-imu-gyroz', `${gzRad.toFixed(3)} rad/s`);
+  setText('v2-drive-imu-cal', `${cal}/3`);
+  setText('v2-drive-imu-age', `${dataAge} ms`);
+
+  const badge = document.getElementById('v2-drive-imu-badge');
+  if (badge) {
+    badge.className = 'badge badge-success';
+    badge.textContent = 'HEALTHY';
+  }
+
+  const overlay = document.getElementById('drive-imu-stale-overlay');
+  if (overlay) overlay.style.display = 'none';
+
+  const model3d = document.getElementById('drive-imu-3d-model');
+  if (model3d) {
+    if (msg && msg.orientation) {
+      const qw = typeof msg.orientation.w === 'number' ? msg.orientation.w : 1.0;
+      const qx = typeof msg.orientation.x === 'number' ? msg.orientation.x : 0.0;
+      const qy = typeof msg.orientation.y === 'number' ? msg.orientation.y : 0.0;
+      const qz = typeof msg.orientation.z === 'number' ? msg.orientation.z : 0.0;
+
+      const norm = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+      const w = norm > 0 ? qw / norm : 1.0;
+      const x = norm > 0 ? qx / norm : 0.0;
+      const y = norm > 0 ? qy / norm : 0.0;
+      const z = norm > 0 ? qz / norm : 0.0;
+
+      const r11 = 1 - 2 * (y * y + z * z);
+      const r12 = 2 * (x * y - w * z);
+      const r13 = 2 * (x * z + w * y);
+
+      const r21 = 2 * (x * y + w * z);
+      const r22 = 1 - 2 * (x * x + z * z);
+      const r23 = 2 * (y * z - w * x);
+
+      const r31 = 2 * (x * z - w * y);
+      const r32 = 2 * (y * z + w * x);
+      const r33 = 1 - 2 * (x * x + y * y);
+
+      // Box matrix R_box = M_basis * R(Q) * M_basis^T
+      // Column-major CSS matrix3d arguments:
+      // Col 1:  r22,  r32, -r12, 0
+      // Col 2:  r23,  r33, -r13, 0
+      // Col 3: -r21, -r31,  r11, 0
+      // Col 4: 0, 0, 0, 1
+      const m3d = `matrix3d(${r22.toFixed(6)}, ${r32.toFixed(6)}, ${(-r12).toFixed(6)}, 0, ${r23.toFixed(6)}, ${r33.toFixed(6)}, ${(-r13).toFixed(6)}, 0, ${(-r21).toFixed(6)}, ${(-r31).toFixed(6)}, ${r11.toFixed(6)}, 0, 0, 0, 0, 1)`;
+
+      model3d.style.transform = `rotateX(-20deg) rotateY(-30deg) ${m3d}`;
+    } else {
+      model3d.style.transform = `rotateX(${-20 + pitch}deg) rotateY(${-30 + roll}deg) rotateZ(${-yaw}deg)`;
+    }
+  }
+}
+
+function checkDriveImuStaleWatchdog() {
+  const now = Date.now();
+  const isStale = (lastDriveImuRxMs === 0 || (now - lastDriveImuRxMs) > 600);
+
+  if (isStale) {
+    const badge = document.getElementById('v2-drive-imu-badge');
+    if (badge) {
+      badge.className = 'badge badge-warning';
+      badge.textContent = 'STALE';
+    }
+    const overlay = document.getElementById('drive-imu-stale-overlay');
+    if (overlay) {
+      overlay.style.display = 'flex';
+    }
+    if (lastDriveImuRxMs > 0) {
+      setText('v2-drive-imu-age', `${now - lastDriveImuRxMs} ms (STALE)`);
+    }
+  }
+}
+setInterval(checkDriveImuStaleWatchdog, 500);
+
+// --- SLAM Control & Status Handler ---
+let currentSlamState = 'STOPPED';
+
+function updateSlamUI(slamData) {
+  if (!slamData) return;
+  const state = slamData.state || 'STOPPED';
+  currentSlamState = state;
+
+  const btnToggle = document.getElementById('btn-toggle-slam');
+  const dot = document.getElementById('slam-status-dot');
+  const text = document.getElementById('slam-status-text');
+  const errBanner = document.getElementById('slam-error-banner');
+
+  if (errBanner) {
+    if (slamData.error) {
+      errBanner.textContent = `SLAM Error: ${slamData.error}`;
+      errBanner.style.display = 'block';
+    } else {
+      errBanner.style.display = 'none';
+    }
+  }
+
+  if (dot) {
+    if (state === 'RUNNING') {
+      dot.className = 'status-indicator on';
+      dot.style.background = '#10b981';
+      dot.style.boxShadow = '0 0 8px rgba(16, 185, 129, 0.8)';
+    } else if (state === 'STARTING' || state === 'STOPPING') {
+      dot.className = 'status-indicator warning';
+      dot.style.background = '#f59e0b';
+      dot.style.boxShadow = '0 0 8px rgba(245, 158, 11, 0.8)';
+    } else if (state === 'ERROR') {
+      dot.className = 'status-indicator off';
+      dot.style.background = '#ef4444';
+      dot.style.boxShadow = '0 0 8px rgba(239, 68, 68, 0.8)';
+    } else {
+      dot.className = 'status-indicator off';
+      dot.style.background = '#6b7280';
+      dot.style.boxShadow = '0 0 6px rgba(107, 114, 128, 0.5)';
+    }
+  }
+
+  if (text) {
+    text.textContent = state;
+    if (state === 'RUNNING') text.style.color = '#10b981';
+    else if (state === 'STARTING' || state === 'STOPPING') text.style.color = '#f59e0b';
+    else if (state === 'ERROR') text.style.color = '#fca5a5';
+    else text.style.color = '#9ca3af';
+  }
+
+  if (btnToggle) {
+    if (state === 'STARTING') {
+      btnToggle.disabled = true;
+      btnToggle.textContent = 'Starting SLAM...';
+      btnToggle.className = 'btn btn-secondary';
+    } else if (state === 'STOPPING') {
+      btnToggle.disabled = true;
+      btnToggle.textContent = 'Stopping SLAM...';
+      btnToggle.className = 'btn btn-secondary';
+    } else if (state === 'RUNNING') {
+      btnToggle.disabled = false;
+      btnToggle.textContent = 'Stop SLAM';
+      btnToggle.className = 'btn btn-danger';
+    } else {
+      btnToggle.disabled = false;
+      btnToggle.textContent = 'Start SLAM';
+      btnToggle.className = 'btn btn-primary';
+    }
+  }
+}
+
+function pollSlamStatus() {
+  fetch('/api/slam/status')
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.ok) updateSlamUI(data);
+    })
+    .catch(() => {});
+}
+
+function initSlamControls() {
+  const btnToggle = document.getElementById('btn-toggle-slam');
+  if (btnToggle) {
+    btnToggle.addEventListener('click', () => {
+      if (btnToggle.disabled) return;
+      btnToggle.disabled = true;
+
+      const isRunning = (currentSlamState === 'RUNNING');
+      const targetEndpoint = isRunning ? '/api/slam/stop' : '/api/slam/start';
+      const transitionState = isRunning ? 'STOPPING' : 'STARTING';
+
+      updateSlamUI({ state: transitionState, error: null });
+
+      fetch(targetEndpoint, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (!data || !data.ok) {
+            updateSlamUI({ state: (data && data.state) || 'ERROR', error: (data && data.error) || 'SLAM action failed' });
+          } else {
+            updateSlamUI(data);
+          }
+        })
+        .catch(err => {
+          updateSlamUI({ state: 'ERROR', error: err.message || 'Network request failed' });
+        });
+    });
+  }
+
+  pollSlamStatus();
+  setInterval(pollSlamStatus, 3000);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initSlamControls);
+} else {
+  initSlamControls();
+}

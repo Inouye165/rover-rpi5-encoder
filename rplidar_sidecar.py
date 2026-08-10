@@ -43,10 +43,11 @@ test_metrics = {
 }
 
 # Test configuration (sent on /test/start)
+# Measured current rover LiDAR position relative to base_link (ROS TF and sidecar must remain synchronized)
 test_config = {
     "front_angle_offset": 0.0,
-    "lidar_x_offset": 0.0127,  # base_link to laser x translation in meters
-    "lidar_y_offset": 0.034925,  # base_link to laser y translation in meters
+    "lidar_x_offset": 0.03175,  # base_link to laser x translation in meters (+0.03175 m)
+    "lidar_y_offset": 0.0,      # base_link to laser y translation in meters (0.0 m)
     "lidar_yaw_offset": 0.0,
     "min_range": 0.15,
     "max_range": 4.0,
@@ -67,8 +68,8 @@ def filter_and_process_scan(points, config):
     min_range = config.get("min_range", 0.15)
     max_range = config.get("max_range", 4.0)
     chassis_margin = config.get("chassis_margin", 0.02)
-    lx = config.get("lidar_x_offset", 0.0127)
-    ly = config.get("lidar_y_offset", 0.034925)
+    lx = config.get("lidar_x_offset", 0.03175)
+    ly = config.get("lidar_y_offset", 0.0)
     lyaw = config.get("lidar_yaw_offset", 0.0)
     sector_masks = config.get("angle_sector_masks", [])
     
@@ -370,6 +371,7 @@ latest_scan = {
     "pointCount": 0,
     "points": []
 }
+latest_scan_bytes = b'{"timestamp":null,"sequence":0,"scanHz":0.0,"pointCount":0,"points":[]}'
 
 status_data = {
     "connected": False,
@@ -495,6 +497,7 @@ def poll_mock(interval):
                 "pointCount": len(processed),
                 "points": processed
             })
+            latest_scan_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
             status_data.update({
                 "scanHz": scan_hz,
                 "pointsPerSecond": points_per_sec,
@@ -543,8 +546,8 @@ async def async_scan_loop(device_path):
             print(f"[LiDAR Sidecar] Connecting to RPLIDAR C1 on {device_path}...")
             lidar = RPLidar(device_path, 460800)
             
-            # Start simple_scan task in the background
-            scan_task = asyncio.create_task(lidar.simple_scan(make_return_dict=True))
+            # Start simple_scan task in the background (output_dict=False to prevent float key accumulation)
+            scan_task = asyncio.create_task(lidar.simple_scan(make_return_dict=False))
             
             with state_lock:
                 status_data.update({
@@ -569,8 +572,15 @@ async def async_scan_loop(device_path):
                         raise exc
                     break
                 
-                data = lidar.output_dict
-                if not data:
+                # Drain output_queue to prevent memory accumulation in rplidarc1 library queue
+                raw_items = []
+                while not lidar.output_queue.empty():
+                    try:
+                        raw_items.append(lidar.output_queue.get_nowait())
+                    except Exception:
+                        break
+                
+                if not raw_items:
                     continue
                 
                 now = time.time()
@@ -578,11 +588,11 @@ async def async_scan_loop(device_path):
                 last_time = now
                 seq += 1
                 
-                # Make a thread-safe copy of output_dict
-                snapshot = dict(data)
-                
                 processed = []
-                for ang, dist in snapshot.items():
+                for pt in raw_items:
+                    ang = pt.get("a_deg")
+                    dist = pt.get("d_mm")
+                    q = pt.get("q", 31)
                     if dist is None or dist <= 0 or not math.isfinite(dist) or not math.isfinite(ang):
                         continue
                     norm_ang = ang % 360.0
@@ -591,7 +601,7 @@ async def async_scan_loop(device_path):
                     processed.append({
                         "angleDeg": round(norm_ang, 2),
                         "distanceMm": round(dist),
-                        "quality": 31 # Static nominal quality
+                        "quality": int(q)
                     })
                 
                 processed.sort(key=lambda p: p["angleDeg"])
@@ -620,6 +630,7 @@ async def async_scan_loop(device_path):
                         "pointCount": len(processed),
                         "points": processed
                     })
+                    latest_scan_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
                     status_data.update({
                         "scanHz": scan_hz,
                         "pointsPerSecond": points_per_sec,
@@ -676,7 +687,83 @@ def poll_rplidar(device_path, baudrate):
         print(f"[LiDAR Sidecar] Async loop failed: {e}", file=sys.stderr)
 
 
+# Disconnect and parser realignment metrics
+http_disconnect_counter = 0
+realign_counter = 0
+last_diag_log_time = time.time()
+
+def log_periodic_sidecar_diagnostics():
+    global http_disconnect_counter, realign_counter, last_diag_log_time
+    now = time.time()
+    if now - last_diag_log_time >= 60.0:
+        if http_disconnect_counter > 0 or realign_counter > 0:
+            print(f"[LiDAR Sidecar DIAG] 60s Summary: Client Disconnects={http_disconnect_counter}, Parser Realignments={realign_counter}")
+            http_disconnect_counter = 0
+            realign_counter = 0
+        last_diag_log_time = now
+
+_EXACT_RPLIDAR_PARSER_STRINGS = (
+    "C bit verification failed. Realigning.",
+    "S bit verification failed. Realigning.",
+    "Verification bytes not matching"
+)
+
+class StreamRateLimiter:
+    """Wraps a text stream (stdout/stderr) to count and rate-limit exact RPLIDAR C1 parser realignment messages."""
+
+    def __init__(self, target_stream):
+        self.target_stream = target_stream
+        self.last_log_time = 0.0
+
+    def write(self, s):
+        global realign_counter
+        # Narrowly intercept ONLY the exact RPLIDAR parser messages
+        if any(exact_msg in s for exact_msg in _EXACT_RPLIDAR_PARSER_STRINGS):
+            realign_counter += 1
+            now = time.time()
+            if now - self.last_log_time >= 60.0:
+                self.last_log_time = now
+                self.target_stream.write(f"[LiDAR Sidecar] Rate-limited RPLIDAR parser realignments ({realign_counter} occurrences)\n")
+            return len(s)
+        return self.target_stream.write(s)
+
+    def flush(self):
+        return self.target_stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.target_stream, name)
+
 class LiDARHTTPHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def handle(self):
+        global http_disconnect_counter
+        self.close_connection = True
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            http_disconnect_counter += 1
+            log_periodic_sidecar_diagnostics()
+        except OSError as e:
+            if getattr(e, 'errno', None) in (32, 104, 103, 10053, 10054):
+                http_disconnect_counter += 1
+                log_periodic_sidecar_diagnostics()
+            else:
+                raise
+
+    def handle_error(self, request, client_address):
+        global http_disconnect_counter
+        exc_type, exc_val, exc_tb = sys.exc_info()
+        if exc_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            http_disconnect_counter += 1
+            log_periodic_sidecar_diagnostics()
+            return
+        if isinstance(exc_val, OSError) and getattr(exc_val, 'errno', None) in (32, 104, 103, 10053, 10054):
+            http_disconnect_counter += 1
+            log_periodic_sidecar_diagnostics()
+            return
+        super().handle_error(request, client_address)
+
     def do_GET(self):
         global test_active, test_state, test_ref_scans, test_ref_cloud, test_pose, test_metrics, test_config
         parsed_url = urlparse(self.path)
@@ -685,27 +772,21 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
 
         if path in ("/status", "/status/"):
             with state_lock:
-                # Update uptime and scan age
                 status_data["serviceUptimeSeconds"] = int(time.time() - start_time)
                 if latest_scan["timestamp"]:
-                    # Convert timestamp back or just compute from current time
-                    # We can use actual elapsed time
-                    if status_data["lastCompleteScanAt"]:
-                        # Simply estimate age
-                        status_data["lastScanAgeMs"] = int(status_data["lastScanAgeMs"]) # Keep last processed age
+                    status_data["lastScanAgeMs"] = int(status_data["lastScanAgeMs"])
                 payload = dict(status_data)
             self._send(200, payload)
-            
+
         elif path in ("/scan", "/scan/"):
             with state_lock:
                 if not latest_scan["timestamp"]:
                     self._send(503, {"error": "No scan data available", "connected": status_data["connected"], "state": status_data["state"]})
                     return
-                # Update scan age
                 status_data["lastScanAgeMs"] = int(status_data["lastScanAgeMs"])
-                payload = dict(latest_scan)
-            self._send(200, payload)
-            
+                raw_bytes = json.dumps(latest_scan, separators=(',', ':')).encode('utf-8')
+            self._send_bytes(200, raw_bytes)
+
         elif path in ("/test/start", "/test/start/"):
             with test_lock:
                 test_active = True
@@ -721,8 +802,7 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
                     "status": "zeroing",
                     "rejection_reason": "Starting zeroing calibration"
                 }
-                
-                # Load configuration from query parameters if provided
+
                 if "front_angle_offset" in query_params:
                     test_config["front_angle_offset"] = float(query_params["front_angle_offset"][0])
                 if "lidar_x_offset" in query_params:
@@ -745,7 +825,7 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
                         if len(parts) == 2:
                             masks.append([float(parts[0]), float(parts[1])])
                     test_config["angle_sector_masks"] = masks
-                
+
             self._send(200, {"ok": True, "message": "LiDAR straight-line test session started.", "config": test_config})
 
         elif path in ("/test/pose", "/test/pose/"):
@@ -762,22 +842,41 @@ class LiDARHTTPHandler(BaseHTTPRequestHandler):
             with test_lock:
                 test_active = False
                 test_state = "IDLE"
+                test_ref_scans = []
+                test_ref_cloud = None
             self._send(200, {"ok": True, "message": "LiDAR straight-line test session stopped."})
-            
+
         else:
             self._send(404, {"error": f"Unknown path: {self.path}"})
-            
+
+    def _send_bytes(self, code, body_bytes):
+        global http_disconnect_counter
+        self.close_connection = True
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body_bytes)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            http_disconnect_counter += 1
+            log_periodic_sidecar_diagnostics()
+        except OSError as e:
+            if getattr(e, 'errno', None) in (32, 104, 103, 10053, 10054):
+                http_disconnect_counter += 1
+                log_periodic_sidecar_diagnostics()
+            else:
+                raise
+
     def _send(self, code, obj):
         body = json.dumps(obj, separators=(',', ':')).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_bytes(code, body)
 
     def log_message(self, fmt, *args):
         pass
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="RPLIDAR C1 HTTP Sidecar")
@@ -789,8 +888,10 @@ def parse_args():
 
 def main():
     global running
+    sys.stdout = StreamRateLimiter(sys.stdout)
+    sys.stderr = StreamRateLimiter(sys.stderr)
     args = parse_args()
-    
+
     print(f"[LiDAR Sidecar] Starting server on http://localhost:{args.port}")
     
     if args.mock:

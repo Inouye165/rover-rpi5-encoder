@@ -153,6 +153,15 @@ journalctl -u rover-server.service -f
 
 ---
 
+## 📚 Motion Control & Calibration Documentation
+
+* [Motion Control, Architecture & Automatic Calibration](docs/motion-control-and-calibration.md) - System architecture, component responsibilities, failure/fix chronology, confirmed floor test results, and proposed future automated commissioning sequence.
+* [Nav2 Motion Tuning Audit & Configuration Analysis](docs/nav2-motion-tuning-audit.md) - Parameter audit matrix, existing vs missing Nav2 layers, velocity smoother requirements, and calibration taper speed vs hardware stall deadband guidance.
+* [Manual SLAM Mapping & Nav2 Handoff](docs/manual-slam-mapping-handoff.md) - Audit of ROS 2 SLAM/Nav2 packages, empirical Foxglove mapping results, open diagnostic hypotheses, and next-phase implementation scope.
+
+---
+
+
 ## 📡 RPLIDAR C1 Integration
 
 The rover integrates a USB RPLIDAR C1 scanning telemetry sensor connected directly to the Raspberry Pi 5.

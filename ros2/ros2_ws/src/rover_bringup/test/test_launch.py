@@ -21,9 +21,9 @@ def test_launch_description():
     ld = launch_module.generate_launch_description()
     assert isinstance(ld, LaunchDescription)
 
-    # Phase 3 + Foxglove: 5 entities — rover_system_health, rover_lidar_bridge, rover_encoder_odometry, static_transform_publisher, foxglove_bridge
+    # Phase 3 + Foxglove + cmd_vel + IMU static TF: 7 entities
     entities = ld.entities
-    assert len(entities) == 5, f"Expected 5 entities in launch, found {len(entities)}"
+    assert len(entities) == 7, f"Expected 7 entities in launch, found {len(entities)}"
 
     nodes = [e for e in entities if isinstance(e, Node)]
     node_executables = {e.node_executable for e in nodes}
@@ -31,12 +31,15 @@ def test_launch_description():
     assert 'rover_system_health' in node_executables, "rover_system_health must be in launch"
     assert 'rover_lidar_bridge' in node_executables, "rover_lidar_bridge must be in launch"
     assert 'rover_encoder_odometry' in node_executables, "rover_encoder_odometry must be in launch"
+    assert 'rover_cmd_vel_bridge' in node_executables, "rover_cmd_vel_bridge must be in launch"
     assert 'static_transform_publisher' in node_executables, "static_transform_publisher must be in launch"
     assert 'foxglove_bridge' in node_executables, "foxglove_bridge must be in launch"
 
-    # Static TF node check
-    tf_node = [n for n in nodes if n.node_executable == 'static_transform_publisher'][0]
-    assert tf_node.node_package == 'tf2_ros'
+    # Static TF nodes check
+    tf_nodes = [n for n in nodes if n.node_executable == 'static_transform_publisher']
+    assert len(tf_nodes) == 2, f"Expected 2 static_transform_publisher nodes, found {len(tf_nodes)}"
+    for n in tf_nodes:
+        assert n.node_package == 'tf2_ros'
 
     # Foxglove bridge safety & read-only parameters check
     foxglove_node = [n for n in nodes if n.node_executable == 'foxglove_bridge'][0]

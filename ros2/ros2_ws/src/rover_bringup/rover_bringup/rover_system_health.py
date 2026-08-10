@@ -83,7 +83,25 @@ class RoverSystemHealthNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to query LiDAR API status: {str(e)}")
 
-        # 3. Compute overall status level & message
+        # 3. Query Autonomy status
+        autonomy_enabled = False
+        autonomy_active = False
+        autonomy_bridge_connected = False
+        autonomy_rejected_count = 0
+        autonomy_watchdog_timeouts = 0
+        try:
+            r = requests.get(f"{self.server_url}/api/autonomy/status", timeout=0.5)
+            if r.status_code == 200:
+                aut_data = r.json()
+                autonomy_enabled = aut_data.get('enabled', False)
+                autonomy_active = aut_data.get('active', False)
+                autonomy_bridge_connected = aut_data.get('bridgeConnected', False)
+                autonomy_rejected_count = aut_data.get('rejectedCount', 0)
+                autonomy_watchdog_timeouts = aut_data.get('watchdogTimeouts', 0)
+        except Exception as e:
+            self.get_logger().error(f"Failed to query Cockpit API autonomy status: {str(e)}")
+
+        # 4. Compute overall status level & message
         level = DiagnosticStatus.OK
         msg = "All systems nominal"
 
@@ -100,7 +118,7 @@ class RoverSystemHealthNode(Node):
             level = DiagnosticStatus.ERROR
             msg = "LiDAR health error"
 
-        # 4. Construct DiagnosticArray message
+        # 5. Construct DiagnosticArray message
         diag_array = DiagnosticArray()
         diag_array.header.stamp = self.get_clock().now().to_msg()
         
@@ -120,6 +138,11 @@ class RoverSystemHealthNode(Node):
             KeyValue(key="lidar_connected", value=str(lidar_connected)),
             KeyValue(key="lidar_health", value=str(lidar_health)),
             KeyValue(key="lidar_scan_hz", value=f"{lidar_scan_hz:.2f}"),
+            KeyValue(key="ros_cmd_vel_autonomy_enabled", value=str(autonomy_enabled)),
+            KeyValue(key="ros_cmd_vel_autonomy_active", value=str(autonomy_active)),
+            KeyValue(key="ros_cmd_vel_bridge_connected", value=str(autonomy_bridge_connected)),
+            KeyValue(key="ros_cmd_vel_rejected_count", value=str(autonomy_rejected_count)),
+            KeyValue(key="ros_cmd_vel_watchdog_timeouts", value=str(autonomy_watchdog_timeouts)),
         ]
         
         diag_array.status.append(status)

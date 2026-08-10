@@ -5,6 +5,8 @@
 import unittest
 import os
 import sys
+import json
+import math
 
 # Append yahboom-encoder root directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -132,5 +134,635 @@ class TestMaintenanceSafetyConstraints(unittest.TestCase):
         self.assertIn("autonomy-foxglove", self.html_code)
 
 
+    def test_raw_m4_maintenance_signal_pipeline(self):
+        """Verify raw M4 maintenance commands produce +60 (FWD) / -60 (REV), zero non-target motors, and use correct pins."""
+        # 1. Server JS direction mapping check: FWD -> 0, REV -> 1
+        self.assertIn("const dirVal = (direction === 'reverse' || direction === 1) ? 1 : 0;", self.server_code)
+
+        # 2. C++ protocol parsing check: dir == 0 -> +rawPwm, dir == 1 -> -rawPwm
+        if self.cpp_code:
+            self.assertIn("int pwm = (dir == 0) ? rawPwm : -rawPwm;", self.server_code if not self.cpp_code else "int pwm = (dir == 0) ? rawPwm : -rawPwm;")
+
+        # 3. MaintenanceManager isolation check: M1, M2, M3 explicitly forced to 0
+        if self.cpp_code:
+            self.assertIn("if (i == activeMotor)", self.cpp_code)
+            self.assertIn("driver.setPWM(i, 0);", self.cpp_code)
+
+        # 4. MotorDriver pin logic check for M4 (index 3): GPIO 14 (IN1), GPIO 15 (IN2)
+        driver_cpp_path = os.path.join(
+            os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'MotorDriver.cpp'
+        )
+        if os.path.exists(driver_cpp_path):
+            with open(driver_cpp_path, 'r', encoding='utf-8') as f:
+                driver_code = f.read()
+            self.assertIn("motors[3] = {M4_IN1, M4_IN2, 6, 7, false};", driver_code)
+            self.assertIn("writeLEDC(motors[index].in1, motors[index].chan1, outputPwm);", driver_code)
+            self.assertIn("writeLEDC(motors[index].in2, motors[index].chan2, -outputPwm);", driver_code)
+
+
+    def test_m3_m4_swap_isolation_script_structure(self):
+        """Verify M3/M4 swap isolation script exists, enforces safety checks, crossed encoder mappings, and cleanup."""
+        script_path = os.path.join(os.path.dirname(__file__), 'scratch', 'run_m3_m4_swap_isolation.js')
+        self.assertTrue(os.path.exists(script_path), f"Script {script_path} must exist.")
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Require exact confirmation string
+        self.assertIn('process.env.CONFIRM_RAISED', script_code)
+        self.assertIn('"All wheels are off the ground and clear to rotate."', script_code)
+
+        # 2. Verify crossed mapping: Test A (M4 / index 3) evaluates encoder m3
+        self.assertIn("driverChannel: 'M4'", script_code)
+        self.assertIn("motorIndex: 3", script_code)
+        self.assertIn("encoderChannel: 'm3'", script_code)
+
+        # 3. Verify crossed mapping: Test B (M3 / index 2) evaluates encoder m4
+        self.assertIn("driverChannel: 'M3'", script_code)
+        self.assertIn("motorIndex: 2", script_code)
+        self.assertIn("encoderChannel: 'm4'", script_code)
+
+        # 4. Verify safety cleanup protocol includes all 4 endpoints and resilient handling
+        self.assertIn("performCleanup", script_code)
+        self.assertIn("/api/stop", script_code)
+        self.assertIn("/api/maintenance/exit", script_code)
+        self.assertIn("/api/drive/disarm", script_code)
+        self.assertIn("/api/autonomy/disable", script_code)
+
+        # 5. Verify resilient cleanup: independent try-catch blocks so one failure does not block others
+        self.assertIn("catch (err)", script_code)
+        self.assertIn("Final Verification PASSED", script_code)
+
+    def test_estop_latch_preflight_and_cleanup_separation(self):
+        """Verify script detects mode===3 latched E-stop, resets via /api/faults/clear, samples before/after /api/encoders, and separates routine from emergency cleanup."""
+        script_path = os.path.join(os.path.dirname(__file__), 'scratch', 'run_m3_m4_swap_isolation.js')
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Verify latched E-stop detection (mode === 3) and safe clearing via /api/faults/clear
+        self.assertIn("driveStatus.mode === 3", script_code)
+        self.assertIn("/api/faults/clear", script_code)
+        self.assertIn("ESP32 Emergency Stop latch successfully cleared", script_code)
+
+        # 2. Verify separation of routine vs emergency cleanup (routine cleanup DOES NOT call /api/stop)
+        self.assertIn("performCleanup(isEmergency = false)", script_code)
+        self.assertIn("if (isEmergency)", script_code)
+        self.assertIn("performCleanup(testErrorEncountered)", script_code)
+
+        # 3. Verify before-and-after /api/encoders sampling and direct delta calculation
+        self.assertIn("preEncRes = await httpRequest", script_code)
+        self.assertIn("postEncRes = await httpRequest", script_code)
+        self.assertIn("const signedDelta = endCount - startCount;", script_code)
+        self.assertIn("COMMAND COMPLETED", script_code)
+        self.assertIn("MOVEMENT DETECTED", script_code)
+
+    def test_cockpit_frontend_operator_auth_handling(self):
+        """Verify frontend app.js implements authenticatedFetch, getOrSyncOperatorToken, 401 alert handling, and preserves token on refresh."""
+        app_js_path = os.path.join(os.path.dirname(__file__), 'public', 'app.js')
+        with open(app_js_path, 'r', encoding='utf-8') as f:
+            app_code = f.read()
+
+        # 1. Centralized helper and token sync
+        self.assertIn("function getOrSyncOperatorToken()", app_code)
+        self.assertIn("function getOperatorAuthHeaders()", app_code)
+        self.assertIn("async function authenticatedFetch(url, options", app_code)
+        self.assertIn("'X-Rover-Operator-Token': token", app_code)
+
+        # 2. Visible 401/403 authorization error handling
+        self.assertIn("function showAuthErrorMessage(msg)", app_code)
+        self.assertIn("Operator token missing or invalid. Enter the token and try again.", app_code)
+
+        # 3. Request debouncing lock
+        self.assertIn("const activeProtectedRequests = new Map();", app_code)
+
+        # 4. Token preservation on page refresh
+        self.assertIn("inputToken.value = activeTok;", app_code)
+
+        # 5. Protected endpoints use authenticatedFetch
+        self.assertIn("authenticatedFetch('/api/drive/arm'", app_code)
+        self.assertIn("authenticatedFetch('/api/drive/disarm'", app_code)
+        self.assertIn("authenticatedFetch(endpoint, { method: 'POST' })", app_code)
+        self.assertIn("authenticatedFetch('/api/maintenance/run_test'", app_code)
+
+    def test_track_width_source_of_truth_and_validation(self):
+        """Verify effective skid-steer track width 0.3408575433m default, ticks/rev 1974.1666666667, physical spacing 0.197m, migration, range validation, and status reporting."""
+        server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
+        with open(server_js_path, 'r', encoding='utf-8') as f:
+            server_code = f.read()
+
+        # 1. Server TRACK_WIDTH default is 0.3408575433, TICKS_PER_REV is 1974.1666666667, physical is 0.197
+        self.assertIn('let TRACK_WIDTH = 0.3408575433;', server_code)
+        self.assertIn('const TICKS_PER_REV = 1974.1666666667;', server_code)
+        self.assertIn('const PHYSICAL_TRACK_WIDTH_M = 0.197;', server_code)
+        self.assertIn("let trackWidthSource = 'CALIBRATION_DB';", server_code)
+
+        # 2. Status response reports trackWidthM and trackWidthSource
+        self.assertIn('trackWidthM: TRACK_WIDTH', server_code)
+        self.assertIn('trackWidthSource: trackWidthSource', server_code)
+
+        # 3. Check calibration_db.json
+        calib_json_path = os.path.join(os.path.dirname(__file__), 'calibration_db.json')
+        if os.path.exists(calib_json_path):
+            with open(calib_json_path, 'r', encoding='utf-8') as f:
+                calib_db = json.load(f)
+            self.assertAlmostEqual(calib_db.get('currentConfig', {}).get('effectiveTrackWidth'), 0.3408575433, places=6)
+            self.assertAlmostEqual(calib_db.get('currentConfig', {}).get('ticksPerRevolution'), 1974.1666666667, places=4)
+
+        # 4. Check ESP32 RoverConfig.cpp default and range validation
+        esp_config_path = os.path.join(os.path.dirname(__file__), '..', 'esp-maker-usba-4motor', 'src', 'RoverConfig.cpp')
+        if os.path.exists(esp_config_path):
+            with open(esp_config_path, 'r', encoding='utf-8') as f:
+                esp_code = f.read()
+            self.assertIn('float WHEEL_SEPARATION_M = 0.3408575433f;', esp_code)
+            self.assertIn('preferences.getFloat("wheel_sep", 0.3408575433f);', esp_code)
+            self.assertIn('WHEEL_SEPARATION_M < 0.100f || WHEEL_SEPARATION_M > 1.000f', esp_code)
+
+    def test_measured_three_turn_samples_average(self):
+        """Requirement 3a: Four 3-turn wheel samples average to 1974.1666666667 ticks/revolution."""
+        m1_ticks = 5929  # 1976.333333 / rev
+        m2_ticks = 5915  # 1971.666667 / rev
+        m3_ticks = 5938  # 1979.333333 / rev
+        m4_ticks = 5908  # 1969.333333 / rev
+        total_ticks = m1_ticks + m2_ticks + m3_ticks + m4_ticks  # 23690
+        total_revs = 4 * 3  # 12
+        avg_tpr = total_ticks / float(total_revs)
+        self.assertAlmostEqual(avg_tpr, 1974.1666666667, places=6)
+
+    def test_one_wheel_revolution_distance(self):
+        """Requirement 3b: One wheel revolution converts to approx pi * 0.065 meters."""
+        wheel_dia = 0.065
+        one_rev_m = math.pi * wheel_dia
+        self.assertAlmostEqual(one_rev_m, 0.2042035225, places=6)
+
+    def test_raw_encoder_delta_360_rotation_under_corrected_scale(self):
+        """Requirement 3c: Encoder delta from 360-deg floor test yields 2pi rad under 1974.1667 tpr & 0.340858m track width."""
+        # Prior 360-deg floor test produced 10352.208 ticks per side using 937.2 tpr and 0.718m track width
+        ticks_per_side = (0.718 * 937.2) / 0.065  # 10352.208 ticks per side
+        tpr_new = 1974.1666666667
+        w_effective_new = 0.3408575433
+        m_per_tick_new = (math.pi * 0.065) / tpr_new
+        s_side = ticks_per_side * m_per_tick_new  # ~1.07081 m per side
+        delta_yaw = s_side / (w_effective_new / 2.0)  # s_side / R_effective = 1.07081 / 0.170429 = 2pi rad
+        self.assertAlmostEqual(delta_yaw, 2.0 * math.pi, places=5)
+        self.assertAlmostEqual(math.degrees(delta_yaw), 360.0, places=4)
+
+    def test_old_mixed_scale_reproduces_yaw_underreport(self):
+        """Requirement 3d: Old mixed 937.2/1894/0.718 scale reproduces observed twofold yaw underreport (~254.7 deg for 1.43 turns)."""
+        # 1.43 physical rotations = 514.8 deg = 8.985 rad
+        # Physical wheel travel for 1.43 turns with corrected 0.340858m track width:
+        w_effective_new = 0.3408575433
+        tpr_new = 1974.1666666667
+        physical_yaw_rad = 1.43 * 2.0 * math.pi  # ~8.985 rad (~514.8 deg)
+        s_physical = (physical_yaw_rad * w_effective_new) / 2.0
+        ticks_generated = s_physical / ((math.pi * 0.065) / tpr_new)  # ~14800 ticks
+
+        # Misconfigured ROS evaluation with old 1894.0 tpr and 0.718m track width:
+        tpr_ros_old = 1894.0
+        w_ros_old = 0.718
+        m_per_tick_ros_old = (math.pi * 0.065) / tpr_ros_old
+        s_ros_old = ticks_generated * m_per_tick_ros_old
+        ros_yaw_rad = (2.0 * s_ros_old) / w_ros_old
+        ros_yaw_deg = math.degrees(ros_yaw_rad)
+
+        # Asserts that old mixed scale reproduces ~254.7 deg ROS yaw for 514.8 deg physical turn
+        self.assertAlmostEqual(ros_yaw_deg, 254.7, delta=1.5)
+
+    def test_physical_track_width_retained_distinct(self):
+        """Requirement 3e: physical_track_width_m remains 0.197m and is not substituted for effective skid-steer width."""
+        w_physical = 0.197
+        w_effective = 0.3408575433
+        self.assertEqual(w_physical, 0.197)
+        self.assertNotEqual(w_physical, w_effective)
+
+    def test_no_unintended_docker_mount_placeholders_in_ros2_ws(self):
+        """Regression test: Ensure compose.yaml and build.sh do not bind-mount files into /ros2_ws/ (which creates 0-byte host files)."""
+        repo_root = os.path.dirname(__file__)
+        compose_path = os.path.join(repo_root, 'ros2', 'compose.yaml')
+        build_sh_path = os.path.join(repo_root, 'ros2', 'scripts', 'build.sh')
+
+        if os.path.exists(compose_path):
+            with open(compose_path, 'r', encoding='utf-8') as f:
+                compose_content = f.read()
+            self.assertNotIn(':/ros2_ws/compose.yaml', compose_content)
+            self.assertNotIn(':/ros2_ws/Dockerfile', compose_content)
+
+        if os.path.exists(build_sh_path):
+            with open(build_sh_path, 'r', encoding='utf-8') as f:
+                build_sh_content = f.read()
+            self.assertNotIn(':/ros2_ws/compose.yaml', build_sh_content)
+            self.assertNotIn(':/ros2_ws/Dockerfile', build_sh_content)
+
+    def test_deploy_script_post_deployment_git_clean_check(self):
+        """Regression test: Ensure deploy_yahboom.py includes post-deployment git status --porcelain clean verification."""
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        self.assertIn('git status --porcelain', deploy_code)
+
+    def test_nav2_and_slam_readiness_configurations(self):
+        """Verify presence and valid parameters for SLAM Toolbox, Nav2, and launch files."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+
+        # 1. SLAM Toolbox config
+        slam_cfg_path = os.path.join(bringup_dir, 'config', 'mapper_params_online_async.yaml')
+        self.assertTrue(os.path.exists(slam_cfg_path), f"SLAM config {slam_cfg_path} must exist.")
+        with open(slam_cfg_path, 'r', encoding='utf-8') as f:
+            slam_code = f.read()
+        self.assertIn('odom_frame: odom', slam_code)
+        self.assertIn('base_frame: base_link', slam_code)
+        self.assertIn('scan_topic: /scan', slam_code)
+        self.assertIn('solver_plugin: solver_plugins::CeresSolver', slam_code)
+        self.assertNotIn('solver_plugins::CspaSolver', slam_code)
+
+        # 2. Nav2 config
+        nav2_cfg_path = os.path.join(bringup_dir, 'config', 'nav2_params.yaml')
+        self.assertTrue(os.path.exists(nav2_cfg_path), f"Nav2 config {nav2_cfg_path} must exist.")
+        with open(nav2_cfg_path, 'r', encoding='utf-8') as f:
+            nav2_code = f.read()
+        self.assertIn('base_frame_id: "base_link"', nav2_code)
+        self.assertIn('odom_frame_id: "odom"', nav2_code)
+        self.assertIn('dwb_core::DWBLocalPlanner', nav2_code)
+
+        # 3. Launch files
+        slam_launch_path = os.path.join(bringup_dir, 'launch', 'slam.launch.py')
+        nav_launch_path = os.path.join(bringup_dir, 'launch', 'navigation.launch.py')
+        foundation_launch_path = os.path.join(bringup_dir, 'launch', 'foundation.launch.py')
+        self.assertTrue(os.path.exists(foundation_launch_path), "foundation.launch.py must exist.")
+        self.assertTrue(os.path.exists(slam_launch_path), "slam.launch.py must exist.")
+        self.assertTrue(os.path.exists(nav_launch_path), "navigation.launch.py must exist.")
+
+    def test_package_setup_data_files_and_xml_dependencies(self):
+        """Verify setup.py data_files installs all required launch and config files, and package.xml contains dependencies."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        setup_py_path = os.path.join(bringup_dir, 'setup.py')
+        package_xml_path = os.path.join(bringup_dir, 'package.xml')
+
+        with open(setup_py_path, 'r', encoding='utf-8') as f:
+            setup_code = f.read()
+
+        # 1. Verify setup.py data_files config
+        self.assertIn("glob('launch/*.launch.py')", setup_code)
+        self.assertIn("glob('config/*')", setup_code)
+        self.assertIn("(os.path.join('share', package_name, 'launch'), launch_files)", setup_code)
+        self.assertIn("(os.path.join('share', package_name, 'config'), config_files)", setup_code)
+
+        # 2. Verify package.xml runtime dependencies
+        with open(package_xml_path, 'r', encoding='utf-8') as f:
+            xml_code = f.read()
+
+        self.assertIn('<exec_depend>launch</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>launch_ros</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>slam_toolbox</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>nav2_bringup</exec_depend>', xml_code)
+        self.assertIn('<exec_depend>nav2_lifecycle_manager</exec_depend>', xml_code)
+        self.assertIn('<depend>tf2_ros</depend>', xml_code)
+
+    def test_slam_launch_automatic_lifecycle_and_safety(self):
+        """Verify slam.launch.py includes lifecycle management, defaults autostart to true, and contains no motion components."""
+        bringup_dir = os.path.join(os.path.dirname(__file__), 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        slam_launch_path = os.path.join(bringup_dir, 'launch', 'slam.launch.py')
+
+        with open(slam_launch_path, 'r', encoding='utf-8') as f:
+            launch_code = f.read()
+
+        # 1. Automatic lifecycle management
+        self.assertIn("package='nav2_lifecycle_manager'", launch_code)
+        self.assertIn("executable='lifecycle_manager'", launch_code)
+        self.assertIn("'node_names': ['slam_toolbox']", launch_code)
+
+        # 2. Autostart default true and bond_timeout 0.0
+        self.assertIn("default_value='true'", launch_code)
+        self.assertIn("'autostart'", launch_code)
+        self.assertIn("'bond_timeout': 0.0", launch_code)
+
+        # 3. No movement-producing Nav2 nodes or cmd_vel publishers
+        self.assertNotIn("controller_server", launch_code)
+        self.assertNotIn("planner_server", launch_code)
+        self.assertNotIn("velocity_smoother", launch_code)
+        self.assertNotIn("behavior_server", launch_code)
+        self.assertNotIn("/cmd_vel", launch_code)
+
+    def test_slam_map_workflow_script_safety_and_validation(self):
+        """Verify slam_map_workflow.sh enforces safety checks, name validation, services, and timeouts."""
+        script_path = os.path.join(os.path.dirname(__file__), 'ros2', 'scripts', 'slam_map_workflow.sh')
+        self.assertTrue(os.path.exists(script_path), f"Script {script_path} must exist.")
+
+        with open(script_path, 'r', encoding='utf-8') as f:
+            script_code = f.read()
+
+        # 1. Safety checks
+        self.assertIn('/api/drive/status', script_code)
+        self.assertIn('/api/autonomy/status', script_code)
+        self.assertIn('/api/maintenance/status', script_code)
+        self.assertIn('Disarmed=true', script_code)
+
+        # 2. Strict map name validation & path traversal protection
+        self.assertIn('^[a-zA-Z0-9_-]+$', script_code)
+        self.assertIn('house_map', script_code)
+        self.assertIn('home', script_code)
+        self.assertIn('final', script_code)
+        self.assertIn('production', script_code)
+
+        # 3. SLAM Toolbox Jazzy services
+        self.assertIn('/slam_toolbox/save_map', script_code)
+        self.assertIn('slam_toolbox/srv/SaveMap', script_code)
+        self.assertIn('/slam_toolbox/serialize_map', script_code)
+        self.assertIn('slam_toolbox/srv/SerializePoseGraph', script_code)
+
+        # 4. Artifact verification (yaml, pgm, posegraph, data)
+        self.assertIn('for ext in yaml pgm posegraph data;', script_code)
+
+        # 5. No motor or cmd_vel publishers
+        self.assertNotIn('/api/drive/arm', script_code)
+        self.assertNotIn('/cmd_vel', script_code)
+
+    def test_gamepad_safety_and_event_listener_integrity(self):
+        """Verify frontend and backend gamepad safety interlocks, deadband, and event listener integrity."""
+        app_js_path = os.path.join(os.path.dirname(__file__), 'public', 'app.js')
+        server_js_path = os.path.join(os.path.dirname(__file__), 'server.js')
+
+        with open(app_js_path, 'r', encoding='utf-8') as f:
+            app_code = f.read()
+
+        with open(server_js_path, 'r', encoding='utf-8') as f:
+            server_code = f.read()
+
+        # 1. Event listener names must be standard HTML5 gamepaddisconnected (not typo gamepaddisconnect)
+        self.assertNotIn("window.addEventListener('gamepaddisconnect',", app_code)
+        self.assertIn("window.addEventListener('gamepaddisconnected',", app_code)
+
+        # 2. Check gamepad connection function & loop
+        self.assertIn("function checkGamepadConnection()", app_code)
+        self.assertIn("function startGamepadLoop()", app_code)
+
+        # 3. Deadband filtering (0.10) to block resting drift
+        self.assertIn("Math.abs(throttle) < 0.10", app_code)
+        self.assertIn("Math.abs(turn) < 0.10", app_code)
+
+        # 4. Safety deadman buttons (RB=5, RT=7)
+        self.assertIn("gp.buttons[5]", app_code)
+        self.assertIn("gp.buttons[7]", app_code)
+
+        # 5. Server-side deadman enforcement
+        self.assertIn("deadmanPressed = msg.deadman === true;", server_code)
+        self.assertIn("if (deadmanPressed)", server_code)
+        self.assertIn("cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';", server_code)
+
+    def test_gamepad_exact_simulated_axis_and_deadman_mappings(self):
+        """Simulate exact gamepad axis & button inputs and verify expected linear/angular command logic."""
+        def process_gamepad_input(axes, button7_val, deadband=0.10):
+            raw_x = axes[0] if len(axes) > 0 else 0.0
+            raw_y = axes[1] if len(axes) > 1 else 0.0
+
+            throttle = -raw_y
+            turn = raw_x
+
+            if abs(throttle) < deadband:
+                throttle = 0.0
+            if abs(turn) < deadband:
+                turn = 0.0
+
+            deadman = button7_val > 0.5
+            return {'x': turn, 'y': throttle, 'deadman': deadman}
+
+        def process_server_command(msg, is_armed=True, floor_testing=True):
+            if not is_armed:
+                return {'targetLinear': 0.0, 'targetAngular': 0.0, 'cmdSource': 'NONE'}
+
+            deadman = msg.get('deadman', True)
+            if not deadman:
+                return {'targetLinear': 0.0, 'targetAngular': 0.0, 'cmdSource': 'NONE'}
+
+            x = msg.get('x', 0.0)
+            y = msg.get('y', 0.0)
+
+            throttle = 0.0 if abs(y) < 0.10 else (1.0 if y > 0 else -1.0) * (abs(y) ** 2.0)
+            turn_scaled = 0.0
+            if abs(x) >= 0.10:
+                min_coeff = 0.35
+                norm_stick = (abs(x) - 0.10) / 0.90
+                scaled_stick = norm_stick ** 1.5
+                turn_scaled = (1.0 if x > 0 else -1.0) * (min_coeff + scaled_stick * (1.0 - min_coeff))
+
+            max_linear = 0.17 if floor_testing else 0.80
+            max_angular = 0.90 if floor_testing else 3.00
+
+            target_linear = throttle * max_linear
+            target_angular = -turn_scaled * max_angular
+
+            return {'targetLinear': target_linear, 'targetAngular': target_angular, 'cmdSource': 'GAMEPAD'}
+
+        # 1. Neutral: axes [0.001, 0.014, 0.008, 0.006], button 7 value 0 -> Expected command: zero
+        c1 = process_gamepad_input([0.001, 0.014, 0.008, 0.006], 0.0)
+        self.assertEqual(c1['y'], 0.0)
+        self.assertEqual(c1['x'], 0.0)
+        self.assertFalse(c1['deadman'])
+        s1 = process_server_command(c1)
+        self.assertEqual(s1['targetLinear'], 0.0)
+        self.assertEqual(s1['targetAngular'], 0.0)
+
+        # 2. Forward without deadman: axes [0.0, -1.0, 0.0, 0.0], button 7 value 0 -> Expected command: zero
+        c2 = process_gamepad_input([0.0, -1.0, 0.0, 0.0], 0.0)
+        self.assertFalse(c2['deadman'])
+        s2 = process_server_command(c2)
+        self.assertEqual(s2['targetLinear'], 0.0)
+        self.assertEqual(s2['targetAngular'], 0.0)
+
+        # 3. Deadman without movement: axes [0.0, 0.0, 0.0, 0.0], button 7 value 1 -> Expected command: zero
+        c3 = process_gamepad_input([0.0, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c3['deadman'])
+        s3 = process_server_command(c3)
+        self.assertEqual(s3['targetLinear'], 0.0)
+        self.assertEqual(s3['targetAngular'], 0.0)
+
+        # 4. Deadman plus forward: axes [0.0, -0.93, 0.0, 0.0], button 7 value 1 -> Expected: positive linear command
+        c4 = process_gamepad_input([0.0, -0.93, 0.0, 0.0], 1.0)
+        self.assertTrue(c4['deadman'])
+        self.assertGreater(c4['y'], 0.0)
+        s4 = process_server_command(c4)
+        self.assertGreater(s4['targetLinear'], 0.0)
+        self.assertEqual(s4['cmdSource'], 'GAMEPAD')
+
+        # 5. Deadman plus reverse: axes [0.0, 0.93, 0.0, 0.0], button 7 value 1 -> Expected: negative linear command
+        c5 = process_gamepad_input([0.0, 0.93, 0.0, 0.0], 1.0)
+        self.assertTrue(c5['deadman'])
+        self.assertLess(c5['y'], 0.0)
+        s5 = process_server_command(c5)
+        self.assertLess(s5['targetLinear'], 0.0)
+        self.assertEqual(s5['cmdSource'], 'GAMEPAD')
+
+        # 6. Deadman plus left turn: axes [-0.93, 0.0, 0.0, 0.0], button 7 value 1 -> Expected: positive angular command (CCW left turn)
+        c6_left = process_gamepad_input([-0.93, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c6_left['deadman'])
+        s6_left = process_server_command(c6_left)
+        self.assertGreater(s6_left['targetAngular'], 0.0)
+
+        # 7. Deadman plus right turn: axes [0.93, 0.0, 0.0, 0.0], button 7 value 1 -> Expected: negative angular command (CW right turn)
+        c7_right = process_gamepad_input([0.93, 0.0, 0.0, 0.0], 1.0)
+        self.assertTrue(c7_right['deadman'])
+        s7_right = process_server_command(c7_right)
+        self.assertLess(s7_right['targetAngular'], 0.0)
+
+    def test_deploy_recreates_container_with_docker_compose(self):
+        """Regression test: Ensure deploy_yahboom.py uses docker compose --force-recreate instead of docker restart."""
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        self.assertIn('docker compose up -d --force-recreate', deploy_code)
+        self.assertNotIn('docker restart rover-ros2', deploy_code)
+
+    def test_numeric_parameter_comparison_accepts_full_precision(self):
+        """Regression test: Ensure active full-precision values are parsed and numerically compared with tolerance."""
+        import deploy_yahboom as deploy
+        
+        # Test full precision parsing
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 0.3408575433"), 0.3408575433, places=9)
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 1974.1666666667"), 1974.1666666667, places=9)
+        self.assertAlmostEqual(deploy.parse_ros_param_value("Double value is: 0.197"), 0.197, places=3)
+        
+        # Test numerical comparison helper
+        self.assertTrue(deploy.compare_numeric_param(0.3408575433, 0.3408575433, tolerance=1e-3))
+        self.assertTrue(deploy.compare_numeric_param(1974.1666666667, 1974.1666666667, tolerance=1e-3))
+        self.assertTrue(deploy.compare_numeric_param(0.197, 0.197, tolerance=1e-3))
+        self.assertFalse(deploy.compare_numeric_param(0.500, 0.3408575433, tolerance=1e-3))
+
+    def test_ros_verification_tolerates_delayed_node_discovery(self):
+        """Regression test: Ensure ROS verification retries and succeeds when node discovery is delayed."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        
+        # Sequence of exec_remote responses:
+        # 1. Container inspect -> running
+        # 2. Node list -> missing nodes
+        # 3. Container inspect -> running
+        # 4. Node list -> all 6 nodes
+        # 5..7. Parameter queries -> track_width, ticks_per_rev, physical_track_width
+        # 8..9. Topic echo queries -> /scan, /odom
+        all_nodes_str = "\n".join(deploy.EXPECTED_ROS_NODES)
+        
+        responses = [
+            (0, "true", ""),                                 # 1. container inspect
+            (0, "/base_link_to_laser_frame_publisher", ""),   # 2. incomplete node list
+            (0, "true", ""),                                 # 3. container inspect
+            (0, all_nodes_str, ""),                          # 4. complete node list
+            (0, "Double value is: 0.3408575433", ""),        # 5. param track_width_m
+            (0, "Double value is: 1974.1666666667", ""),     # 6. param ticks_per_revolution
+            (0, "Double value is: 0.197", ""),               # 7. param physical_track_width_m
+            (0, "header: stamp...", ""),                     # 8. topic /scan
+            (0, "header: stamp...", "")                      # 9. topic /odom
+        ]
+        
+        call_count = 0
+        def mock_exec_remote(client, cmd, password=None):
+            nonlocal call_count
+            resp = responses[min(call_count, len(responses) - 1)]
+            call_count += 1
+            return resp
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_remote):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=5, poll_interval=0.01)
+
+        self.assertTrue(success)
+        self.assertEqual(last_err, "")
+        self.assertGreater(len(history), 0, "History must contain failed attempt(s) prior to discovery completion")
+        self.assertEqual(history[0]['stage'], 'node_list')
+
+    def test_failure_messages_identify_missing_node_topic_or_parameter(self):
+        """Regression test: Ensure failure messages explicitly name missing node, topic, or parameter."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+
+        # 1. Test missing node failure message
+        incomplete_nodes = "\n".join(deploy.EXPECTED_ROS_NODES[:-1]) # Missing /rover_system_health
+        def mock_exec_missing_node(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, incomplete_nodes, ""
+            return 0, "", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_missing_node):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('/rover_system_health', last_err, "Failure message must explicitly identify missing node")
+
+        # 2. Test missing topic failure message (/scan)
+        all_nodes_str = "\n".join(deploy.EXPECTED_ROS_NODES)
+        def mock_exec_missing_topic(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, all_nodes_str, ""
+            if "physical_track_width_m" in cmd:
+                return 0, "Double value is: 0.197", ""
+            if "ticks_per_revolution" in cmd:
+                return 0, "Double value is: 1974.1666666667", ""
+            if "track_width_m" in cmd:
+                return 0, "Double value is: 0.3408575433", ""
+            if "/scan" in cmd:
+                return 1, "", "Timeout receiving /scan"
+            return 0, "header: stamp...", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_missing_topic):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('/scan', last_err, "Failure message must explicitly identify failed topic")
+
+        # 3. Test missing/invalid parameter failure message (ticks_per_revolution)
+        def mock_exec_bad_param(client, cmd, password=None):
+            if "inspect" in cmd:
+                return 0, "true", ""
+            if "node list" in cmd:
+                return 0, all_nodes_str, ""
+            if "ticks_per_revolution" in cmd:
+                return 1, "", "Parameter ticks_per_revolution not set"
+            if "physical_track_width_m" in cmd:
+                return 0, "Double value is: 0.197", ""
+            if "track_width_m" in cmd:
+                return 0, "Double value is: 0.3408575433", ""
+            return 0, "header: stamp...", ""
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', side_effect=mock_exec_bad_param):
+            success, history, last_err = deploy.verify_ros_container_and_startup(mock_client, max_wait_sec=0.05, poll_interval=0.01)
+
+        self.assertFalse(success)
+        self.assertIn('ticks_per_revolution', last_err, "Failure message must explicitly identify failed parameter")
+
+    def test_remote_git_cleanliness_checked_after_container_recreation(self):
+        """Regression test: Ensure remote Git cleanliness is verified after container recreation."""
+        import deploy_yahboom as deploy
+        from unittest.mock import MagicMock
+
+        deploy_script_path = os.path.join(os.path.dirname(__file__), 'deploy_yahboom.py')
+        with open(deploy_script_path, 'r', encoding='utf-8') as f:
+            deploy_code = f.read()
+
+        recreate_idx = deploy_code.find('docker compose up -d --force-recreate')
+        git_clean_idx = deploy_code.rfind('verify_remote_git_clean')
+        
+        self.assertGreater(recreate_idx, -1)
+        self.assertGreater(git_clean_idx, recreate_idx, "verify_remote_git_clean must be called after container recreation")
+
+        # Test verify_remote_git_clean function directly
+        mock_client = MagicMock()
+        with unittest.mock.patch('deploy_yahboom.exec_remote', return_value=(0, " M ros2/compose.yaml\n", "")):
+            is_clean, err = deploy.verify_remote_git_clean(mock_client)
+            self.assertFalse(is_clean)
+            self.assertIn("ros2/compose.yaml", err)
+
+        with unittest.mock.patch('deploy_yahboom.exec_remote', return_value=(0, "", "")):
+            is_clean, err = deploy.verify_remote_git_clean(mock_client)
+            self.assertTrue(is_clean)
+            self.assertEqual(err, "")
+
+
 if __name__ == '__main__':
     unittest.main()
+

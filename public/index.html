@@ -23,6 +23,12 @@
 
       <!-- Connection Status and Battery -->
       <div class="header-status">
+        <div class="status-badge" id="ui-version-badge" title="Frontend Build Version">
+          UI: 2026.07.29-ros2-cmdvel
+        </div>
+        <div class="status-badge" id="esp32-version-badge" title="Live ESP32 Firmware Identity">
+          <span class="status-indicator alert"></span> ESP32: Offline
+        </div>
         <div class="status-badge" id="time-status" style="font-family: monospace; font-weight: bold; color: #00f2fe;">
           Time: --:--:--
         </div>
@@ -35,6 +41,15 @@
         <div class="status-badge" id="gamepad-status">
           <span class="status-indicator off"></span> Gamepad: Disconnected
         </div>
+        <form class="operator-token-selector" onsubmit="return false;" style="display: flex; gap: 4px; align-items: center;">
+          <input type="text" id="operator-username-hidden" name="username" value="operator" autocomplete="username" style="display:none;" tabindex="-1" aria-hidden="true">
+          <input type="password" id="operator-token-input" name="rover-operator-token" placeholder="Operator Token" autocomplete="current-password" style="width: 110px; padding: 2px 6px; font-size: 11px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: #fff;">
+          <label id="remember-token-label" style="display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-muted, #94a3b8); cursor: pointer; user-select: none;" title="Remember token in this browser across sessions">
+            <input type="checkbox" id="remember-token-checkbox" style="cursor: pointer; width: 12px; height: 12px; accent-color: #00f2fe;"> Remember
+          </label>
+          <button type="button" id="btn-save-token" style="padding: 2px 8px; font-size: 11px; background: #00f2fe; color: #090e16; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Auth</button>
+          <button type="button" id="btn-clear-token" style="padding: 2px 6px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; cursor: pointer;">Clear</button>
+        </form>
         <div class="serial-port-selector">
           <input type="text" id="com-port-input" value="COM18" placeholder="Port">
           <button id="btn-change-port">Connect</button>
@@ -70,7 +85,7 @@
           </div>
         </div>
 
-        <!-- Desktop Viewports Grid: Camera (70%) + Compact LiDAR (30%) -->
+        <!-- Desktop Viewports Grid: Camera (70%) + Right Column (LiDAR + IMU) (30%) -->
         <div class="v2-drive-viewport-grid">
           <!-- RPi Camera Feed Viewport (65-75% visual area) -->
           <div class="v2-card" id="drive-camera" style="flex: 7; min-width: 320px;">
@@ -98,17 +113,59 @@
             </div>
           </div>
 
-          <!-- Compact LiDAR Driving Viewport (25-35% visual area) -->
-          <div class="v2-card" id="drive-compact-lidar" style="flex: 3; min-width: 260px;">
-            <div class="v2-card-header">
-              <h3>📡 LiDAR Local View</h3>
-              <span id="v2-compact-lidar-badge" class="badge badge-info">6.5 Hz</span>
+          <!-- Right Column Viewports: LiDAR Local View + Live IMU Orientation -->
+          <div style="flex: 3; min-width: 260px; display: flex; flex-direction: column; gap: 20px;">
+            <!-- Compact LiDAR Driving Viewport (25-35% visual area) -->
+            <div class="v2-card" id="drive-compact-lidar" style="width: 100%;">
+              <div class="v2-card-header">
+                <h3>📡 LiDAR Local View</h3>
+                <span id="v2-compact-lidar-badge" class="badge badge-info">6.5 Hz</span>
+              </div>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <canvas id="v2-compact-lidar-canvas" width="280" height="280" style="background: #0b0f19; border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; width: 100%; max-width: 280px; height: auto; aspect-ratio: 1/1;"></canvas>
+                <div style="font-size: 0.78rem; font-family: monospace; color: var(--text-muted); width: 100%; display: flex; justify-content: space-between;">
+                  <span>Closest: <strong id="v2-compact-lidar-dist" style="color: #00f2fe;">-- m</strong></span>
+                  <span id="v2-compact-lidar-status" style="color: #10b981;">✓ Clear</span>
+                </div>
+              </div>
             </div>
-            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
-              <canvas id="v2-compact-lidar-canvas" width="280" height="280" style="background: #0b0f19; border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; width: 100%; max-width: 280px; height: auto; aspect-ratio: 1/1;"></canvas>
-              <div style="font-size: 0.78rem; font-family: monospace; color: var(--text-muted); width: 100%; display: flex; justify-content: space-between;">
-                <span>Closest: <strong id="v2-compact-lidar-dist" style="color: #00f2fe;">-- m</strong></span>
-                <span id="v2-compact-lidar-status" style="color: #10b981;">✓ Clear</span>
+
+            <!-- Live IMU Orientation Panel (sits directly below LiDAR View) -->
+            <div class="v2-card" id="drive-imu-orientation" style="width: 100%;">
+              <div class="v2-card-header">
+                <h3>🧭 IMU Orientation</h3>
+                <span id="v2-drive-imu-badge" class="badge badge-warning">STALE</span>
+              </div>
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+                <!-- 3D Chassis Viewport -->
+                <div style="perspective: 600px; width: 100%; height: 160px; display: flex; align-items: center; justify-content: center; background: #0b0f19; border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; position: relative; overflow: hidden;">
+                  <div style="position: absolute; width: 200px; height: 200px; border: 1px dashed rgba(0,242,254,0.12); border-radius: 50%; transform: rotateX(65deg) translateZ(-40px); pointer-events: none;"></div>
+                  
+                  <!-- 3D Model Box -->
+                  <div id="drive-imu-3d-model" class="rover-3d-chassis" style="transform-style: preserve-3d; transform: rotateX(-20deg) rotateY(-30deg); transition: transform 0.1s ease-out; position: relative; width: 140px; height: 36px;">
+                    <div class="chassis-face front" style="position: absolute; width: 140px; height: 36px; transform: translateZ(40px); background: rgba(0, 242, 254, 0.25); border: 2px solid #00f2fe; color: #00f2fe; font-weight: bold; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: 0.5px;">FRONT (+X) ▲</div>
+                    <div class="chassis-face back" style="position: absolute; width: 140px; height: 36px; transform: rotateY(180deg) translateZ(40px); background: rgba(239, 68, 68, 0.25); border: 2px solid #ef4444; color: #ef4444; font-weight: bold; font-size: 11px; display: flex; align-items: center; justify-content: center;">BACK</div>
+                    <div class="chassis-face left" style="position: absolute; width: 80px; height: 36px; left: 30px; transform: rotateY(-90deg) translateZ(70px); background: rgba(16, 185, 129, 0.2); border: 2px solid #10b981; color: #10b981; font-weight: bold; font-size: 10px; display: flex; align-items: center; justify-content: center;">LEFT (+Y)</div>
+                    <div class="chassis-face right" style="position: absolute; width: 80px; height: 36px; left: 30px; transform: rotateY(90deg) translateZ(70px); background: rgba(16, 185, 129, 0.2); border: 2px solid #10b981; color: #10b981; font-weight: bold; font-size: 10px; display: flex; align-items: center; justify-content: center;">RIGHT</div>
+                    <div class="chassis-face top" style="position: absolute; width: 140px; height: 80px; top: -22px; transform: rotateX(90deg) translateZ(18px); background: rgba(15, 23, 42, 0.9); border: 2px solid #00f2fe; color: #f8fafc; font-weight: bold; font-size: 11px; display: flex; align-items: center; justify-content: center;">ROVER CHASSIS</div>
+                    <div class="chassis-face bottom" style="position: absolute; width: 140px; height: 80px; top: -22px; transform: rotateX(-90deg) translateZ(18px); background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(0,242,254,0.3);"></div>
+                  </div>
+
+                  <!-- Overlay for Stale telemetry state -->
+                  <div id="drive-imu-stale-overlay" style="display: none; position: absolute; inset: 0; background: rgba(11, 15, 25, 0.75); color: #f59e0b; font-weight: bold; font-size: 0.85rem; align-items: center; justify-content: center; backdrop-filter: blur(2px);">
+                    ⚠️ STALE TELEMETRY - FROZEN
+                  </div>
+                </div>
+
+                <!-- Live Numeric Readouts Grid -->
+                <div style="font-size: 0.78rem; font-family: monospace; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 8px 10px;">
+                  <div>Roll: <strong id="v2-drive-imu-roll" style="color: #00f2fe;">--°</strong></div>
+                  <div>Pitch: <strong id="v2-drive-imu-pitch" style="color: #00f2fe;">--°</strong></div>
+                  <div>Orientation Yaw: <strong id="v2-drive-imu-yaw" style="color: #00f2fe;">--°</strong></div>
+                  <div>Gyro Z: <strong id="v2-drive-imu-gyroz" style="color: #a855f7;">-- rad/s</strong></div>
+                  <div>Cal Status: <strong id="v2-drive-imu-cal" style="color: #3b82f6;">--</strong></div>
+                  <div>Data Age: <strong id="v2-drive-imu-age" style="color: #94a3b8;">-- ms</strong></div>
+                </div>
               </div>
             </div>
           </div>
@@ -129,7 +186,24 @@
             <div class="v2-status-item"><span class="v2-status-label">Battery Voltage:</span> <span id="v2-drive-val-battery" class="status-val">-- V</span></div>
             <div class="v2-status-item"><span class="v2-status-label">Telemetry Age:</span> <span id="v2-drive-val-telem-age" class="status-val">-- ms</span></div>
             <div class="v2-status-item"><span class="v2-status-label">Odometry Age:</span> <span id="v2-drive-val-odom-age" class="status-val">-- ms</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">ROS 2 Autonomy:</span> <span id="v2-drive-val-autonomy" class="status-val badge-disarmed">DISABLED</span></div>
+
+            <!-- Compact SLAM Control & Status Card -->
+            <div class="v2-status-item" id="v2-slam-status-card" style="grid-column: span 2; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(0, 242, 254, 0.2); padding: 8px 12px;">
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <span class="v2-status-label" style="letter-spacing: 0.5px; font-weight: bold; color: var(--cyan-glow, #00f2fe);">SLAM NAVIGATION</span>
+                <div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.85rem; font-weight: 600;">
+                  <span id="slam-status-dot" class="status-indicator off" style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #6b7280; box-shadow: 0 0 6px rgba(107, 114, 128, 0.5);"></span>
+                  <span id="slam-status-text" style="color: #9ca3af;">STOPPED</span>
+                </div>
+              </div>
+              <button id="btn-toggle-slam" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.8rem; font-weight: bold; border-radius: 6px; white-space: nowrap; transition: all 0.2s ease;">
+                Start SLAM
+              </button>
+            </div>
           </div>
+
+          <div id="slam-error-banner" class="v2-card-alert" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #fca5a5; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-top: 8px;"></div>
 
           <!-- Active Command Velocity HUD -->
           <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; font-family: monospace; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin-top: 6px;">
@@ -171,7 +245,9 @@
             <div style="display: flex; gap: 10px;">
               <button id="btn-arm-drive" class="btn btn-primary" style="flex: 1; font-weight: bold; padding: 12px;">Arm Normal Drive</button>
               <button id="btn-disarm-drive" class="btn btn-secondary" style="flex: 1; font-weight: bold; padding: 12px;">Disarm Normal Drive</button>
+              <button id="btn-enable-autonomy" class="btn" style="background: rgba(0, 242, 254, 0.15); border: 1px solid rgba(0, 242, 254, 0.4); color: #00f2fe; font-weight: bold; padding: 12px; flex: 1;">Enable Autonomy</button>
             </div>
+            <div id="arm-auth-error-banner" class="v2-card-alert" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #fca5a5; padding: 10px 14px; border-radius: 8px; font-weight: bold; font-size: 13px;"></div>
             <!-- EXACTLY ONE OPERATIONAL E-STOP BUTTON -->
             <button class="btn btn-danger btn-block" id="btn-estop" style="font-size: 1.1rem; font-weight: bold; padding: 14px; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);">
               🚨 EMERGENCY STOP ALL MOTORS
@@ -215,13 +291,15 @@
           <div class="control-group" style="margin-top: 15px;">
             <h3>Gamepad Telemetry HUD</h3>
             <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; font-family: monospace; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;">
+              <div>Controller:</div><div id="gp-live-controller" style="font-weight: bold; color: var(--cyan-glow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Disconnected</div>
               <div>Arm State:</div><div id="gp-live-arm" style="font-weight: bold; color: #6b7280;">DISARMED</div>
-              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED</div>
-              <div>Linear Axis Y:</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
-              <div>Angular Axis X:</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00</div>
+              <div>Deadman Switch:</div><div id="gp-live-deadman" style="font-weight: bold; color: #ef4444;">RELEASED (RT Raw: 0.00)</div>
+              <div>Linear Throttle (-Y):</div><div id="gp-live-linear" style="font-weight: bold; color: var(--cyan-glow);">0.00 (Raw: 0.00)</div>
+              <div>Angular Steering (X):</div><div id="gp-live-angular" style="font-weight: bold; color: var(--cyan-glow);">0.00 (Raw: 0.00)</div>
               <div>Stop State:</div><div id="gp-live-stop" style="font-weight: bold; color: #10b981;">STATIONARY</div>
               <div>Safety ESTOP:</div><div id="gp-live-estop" style="font-weight: bold; color: #10b981;">NOMINAL</div>
-              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent);">None</div>
+              <div>TX / Filter Status:</div><div id="gp-live-tx-status" style="font-weight: bold; color: #9ca3af;">IDLE</div>
+              <div>Pressed Buttons:</div><div id="gp-live-buttons" style="font-weight: bold; color: var(--accent); grid-column: span 2;">None</div>
             </div>
           </div>
 
@@ -353,7 +431,10 @@
               <span class="badge badge-success">PORT 8765</span>
             </div>
             <p style="font-size: 0.85rem; color: var(--text-muted);">Foxglove Studio WebSocket bridge active at <code>ws://10.0.0.246:8765</code>.</p>
-            <a href="https://studio.foxglove.dev" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="margin-top: 8px; display: inline-block;">Open Foxglove Web Studio</a>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+              <a href="https://studio.foxglove.dev/stream?ds=foxglove-websocket&ds.url=ws://10.0.0.246:8765" target="_blank" rel="noopener" class="btn btn-small btn-secondary" style="display: inline-block;">Open Foxglove Web Studio</a>
+              <a href="/foxglove_layout.json" download="foxglove_layout.json" class="btn btn-small btn-secondary" style="display: inline-block; opacity: 0.85;">📥 Download Clean Layout JSON</a>
+            </div>
           </div>
         </div>
       </div>
@@ -397,15 +478,18 @@
           </div>
           <div class="v2-card" id="sensors-imu">
             <div class="v2-card-header">
-              <h3>🧭 3D Chassis Attitude & 6-Axis Telemetry</h3>
-              <span id="v2-imu-badge" class="badge badge-success">HEALTHY</span>
+              <h3>🧭 BNO08x 9-DOF IMU & Chassis Attitude</h3>
+              <span id="v2-imu-badge" class="badge badge-warning">STALE / NOT AVAILABLE</span>
             </div>
             <div class="v2-status-grid" style="margin-bottom: 10px;">
-              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">0.0°</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">0.0, 0.0, 9.8 m/s²</span></div>
-              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">0.0, 0.0, 0.0 °/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Roll:</span> <span id="v2-imu-val-roll" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Pitch:</span> <span id="v2-imu-val-pitch" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Yaw:</span> <span id="v2-imu-val-yaw" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Accel (X/Y/Z):</span> <span id="v2-imu-val-accel" class="status-val">-- m/s²</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Gyro (X/Y/Z):</span> <span id="v2-imu-val-gyro" class="status-val">-- °/s</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Sequence (Gaps):</span> <span id="v2-imu-val-seq" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Resets / Recovery:</span> <span id="v2-imu-val-resets" class="status-val">--</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Calib / Data Age:</span> <span id="v2-imu-val-calib" class="status-val">--</span></div>
             </div>
             <div class="v2-canvas-container" style="position: relative; width: 100%; height: 200px; background: #0b0f19; border-radius: 8px; overflow: hidden;">
               <canvas id="v2-imu-model-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
@@ -490,11 +574,11 @@
               </div>
               <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
                 <div style="color: var(--text-muted); font-size: 10px;">TRACK WIDTH</div>
-                <div id="v2-calib-readiness-trackwidth" style="font-weight: bold; color: #a855f7;">0.382 m</div>
+                <div id="v2-calib-readiness-trackwidth" style="font-weight: bold; color: #a855f7;">0.340858 m</div>
               </div>
               <div style="background: rgba(0,0,0,0.25); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
                 <div style="color: var(--text-muted); font-size: 10px;">TICKS / REV</div>
-                <div id="v2-calib-readiness-ticks" style="font-weight: bold; color: #fbbf24;">1894.0</div>
+                <div id="v2-calib-readiness-ticks" style="font-weight: bold; color: #fbbf24;">1974.1667</div>
               </div>
             </div>
 
@@ -958,7 +1042,7 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
               <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
                 <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">TICKS PER REVOLUTION</div>
-                <div id="v2-const-val-ticks" style="font-size: 1.2rem; font-weight: bold; color: #fbbf24; font-family: monospace;">1894.0</div>
+                <div id="v2-const-val-ticks" style="font-size: 1.2rem; font-weight: bold; color: #fbbf24; font-family: monospace;">1974.1667</div>
                 <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">ESP32 Quadrature Encoder Count</div>
               </div>
 
@@ -970,8 +1054,8 @@
 
               <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
                 <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">EFFECTIVE TRACK WIDTH</div>
-                <div id="v2-const-val-track" style="font-size: 1.2rem; font-weight: bold; color: #a855f7; font-family: monospace;">0.382 m</div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Effective Wheel Spacing Width</div>
+                <div id="v2-const-val-track" style="font-size: 1.2rem; font-weight: bold; color: #a855f7; font-family: monospace;">0.340858 m</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Effective Skid-Steer Track Width (Physical 0.197m)</div>
               </div>
             </div>
           </section>
@@ -1044,7 +1128,33 @@
             </div>
           </div>
 
-          <!-- Section C: Connections and Services -->
+          <!-- Section B2: 100 Hz Control Loop Health -->
+          <div class="v2-card" id="diagnostics-loop-health">
+            <div class="v2-card-header">
+              <h3>⚡ 100 Hz Control Loop Health</h3>
+              <span id="v2-diag-badge-loop" class="badge badge-info">WAITING FOR DATA</span>
+            </div>
+            <div class="v2-status-grid">
+              <div class="v2-status-item" style="grid-column: 1 / -1;"><span class="v2-status-label">Overall Loop Status:</span> <span id="v2-diag-val-loop-status" class="status-val">Waiting for telemetry...</span></div>
+              
+              <!-- Sub-section: Execution Time (Internal runMotionControlLoop Duration) -->
+              <div class="v2-status-item" style="grid-column: 1 / -1; margin-top: 6px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">⏱️ Internal Execution Duration (PID/Safety Code)</div>
+              <div class="v2-status-item"><span class="v2-status-label">Last Exec Duration:</span> <span id="v2-diag-val-loop-last" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Average Exec Duration:</span> <span id="v2-diag-val-loop-avg" class="status-val">-- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Min / Max Exec Duration:</span> <span id="v2-diag-val-loop-minmax" class="status-val">-- us / -- us</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Exec Overruns (>10ms):</span> <span id="v2-diag-val-loop-missed" class="status-val">0</span></div>
+
+              <!-- Sub-section: Scheduling / Start Lateness (Whole-Loop Health) -->
+              <div class="v2-status-item" style="grid-column: 1 / -1; margin-top: 6px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">📅 Whole-Loop Scheduling & Start Lateness</div>
+              <div class="v2-status-item"><span class="v2-status-label">Last Start Lateness:</span> <span id="v2-diag-val-loop-lateness-last" class="status-val">-- ms</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Peak Start Lateness:</span> <span id="v2-diag-val-loop-lateness-max" class="status-val">-- ms</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Missed 100 Hz Periods:</span> <span id="v2-diag-val-loop-periods-missed" class="status-val">0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Max Consecutive Missed:</span> <span id="v2-diag-val-loop-periods-consec" class="status-val">0</span></div>
+
+              <div class="v2-status-item"><span class="v2-status-label">Total Iterations:</span> <span id="v2-diag-val-loop-total" class="status-val">0</span></div>
+              <div class="v2-status-item"><span class="v2-status-label">Data Age:</span> <span id="v2-diag-val-loop-age" class="status-val">-- ms</span></div>
+            </div>
+          </div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px;">
             <div class="v2-card" id="diagnostics-services">
               <div class="v2-card-header">
@@ -1294,7 +1404,7 @@
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
         <div style="display: flex; align-items: center; gap: 10px;">
           <span style="display: inline-block; width: 10px; height: 10px; background: #00f0ff; border-radius: 50%; box-shadow: 0 0 10px #00f0ff;"></span>
-          <h3 style="margin: 0; font-size: 1.3rem; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(135deg, #00f0ff, #0072ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Auto Test Live Tracker</h3>
+          <h3 style="margin: 0; font-size: 1.3rem; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(135deg, #00f0ff, #0072ff); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Auto Test Live Tracker</h3>
         </div>
         <div id="autotest-modal-step" style="font-weight: bold; color: var(--cyan-glow); font-family: monospace; font-size: 0.95rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); padding: 4px 10px; border-radius: 12px;">Leg 1/6 (Cycle 1/3)</div>
       </div>

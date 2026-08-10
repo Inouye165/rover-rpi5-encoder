@@ -12,14 +12,17 @@ services:
       - ROS_DISTRO=${ROS_DISTRO:-jazzy}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
       - ROVER_SERVER_URL=${ROVER_SERVER_URL:-http://127.0.0.1:3000}
+      - ROVER_INTERNAL_CMD_URL=${ROVER_INTERNAL_CMD_URL:-http://127.0.0.1:3010/api/cmd_vel}
+      - ROVER_CMD_VEL_TOKEN=${ROVER_CMD_VEL_TOKEN:-}
       - ROVER_LIDAR_URL=${ROVER_LIDAR_URL:-http://127.0.0.1:3002}
     volumes:
       - ./ros2_ws:/ros2_ws
       - ./volumes/maps:/ros2_ws/maps
       - ./volumes/logs:/ros2_ws/logs
       - ./volumes/rosbag:/ros2_ws/rosbag
-      - ./compose.yaml:/ros2_ws/compose.yaml:ro
-      - ./Dockerfile:/ros2_ws/Dockerfile:ro
+      - ./scripts:/ros2_ws/scripts:ro
+      - ./compose.yaml:/ros2_meta/compose.yaml:ro
+      - ./Dockerfile:/ros2_meta/Dockerfile:ro
     command: |
       bash -c '
       if [ ! -f /ros2_ws/install/setup.bash ]; then

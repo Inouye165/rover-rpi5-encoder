@@ -5,6 +5,7 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const slamManager = require('./slam_manager');
 
 
 // Load environment variables manually from .env if present
@@ -33,6 +34,25 @@ try {
 }
 
 const PORT = process.env.PORT || 3000;
+const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
+const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
+
+function isValidCmdToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const trimmed = token.trim();
+  if (trimmed.length < 64) return false;
+  return /^[0-9a-fA-F]+$/.test(trimmed);
+}
+
+const ROVER_CMD_VEL_TOKEN = process.env.ROVER_CMD_VEL_TOKEN || '';
+const isCmdTokenValid = isValidCmdToken(ROVER_CMD_VEL_TOKEN);
+
+if (!process.env.ROVER_OPERATOR_TOKEN) {
+  const crypto = require('crypto');
+  process.env.ROVER_OPERATOR_TOKEN = crypto.randomBytes(32).toString('hex');
+}
+const ROVER_OPERATOR_TOKEN = process.env.ROVER_OPERATOR_TOKEN;
+
 let COM_PORT = process.env.ROVER_ESP32_DEVICE || process.env.SERIAL_PORT;
 if (process.platform === 'win32' && COM_PORT && COM_PORT.startsWith('/dev/')) {
   COM_PORT = null;
@@ -82,6 +102,7 @@ const TYPE_BATTERY  = 0x0A; // Speed/battery packet (data[6] = voltage*10)
 const TYPE_ATTITUDE = 0x0C; // IMU attitude
 const TYPE_ENCODER  = 0x0D; // Encoder counts: 4x int32 LE (M1..M4)
 const TYPE_IMU      = 0x0E; // 9-axis IMU raw packet (21 bytes total)
+const TYPE_BNO08X_IMU = 0x3A; // Production BNO08x 69-byte IMU telemetry packet
 const TYPE_CALIBRATION = 0x30; // Calibration status telemetry
 const TYPE_FIRMWARE_INFO = 0x32; // Firmware identification telemetry
 const TYPE_LOOP_TIMING = 0x33; // Control loop timing statistics telemetry
@@ -89,14 +110,24 @@ const TYPE_FAULT_REPORT = 0x34; // Active safety fault flags telemetry
 const TYPE_MAINTENANCE = 0x35; // Maintenance status telemetry
 const TYPE_NORMAL_DRIVE_STATUS = 0x36;
 
+// In-memory production BNO08x IMU telemetry state
+let latestBnoImuState = null;
+let lastBno3ATimeMs = 0;
+let lastBnoSeq = null;
+let bnoSequenceGaps = 0;
+
 // NOTE: No COMPLEMENT constant needed – checksum = sum(packet[2..n-2]) & 0xFF
 
 // ────────────────────────────────────────────────────────────
 // Express / WebSocket Setup
 // ────────────────────────────────────────────────────────────
+const crypto = require('crypto');
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
+
+const internalCmdApp    = express();
+const internalCmdServer = http.createServer(internalCmdApp);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -130,7 +161,7 @@ let autoTestStep = 0; // 0=idle, 1..6 (3 cycles of fwd/bwd)
 let autoTestStartTicks = [0, 0, 0, 0];
 let currentAutoTestSpeedLimit = 25; // Dynamic cycle limits: 25, 45, 65
 let autoTestRunLogs = []; // Array of telemetry logs for data exports
-const TICKS_PER_REV = 937.2;
+const TICKS_PER_REV = 1974.1666666667;
 const KP_POSITION = 0.15;
 const MIN_POSITION_SPEED = 20;
 const MAX_POSITION_SPEED = 60;
@@ -147,6 +178,15 @@ let driveCommandNeedsFlush = false;
 let driveLoopStarted = false;
 let latestCalibrationStatus = null;
 let latestMaintenanceStatus = null;
+let latestLoopTiming = {
+  lastDurationUs: 0,
+  minDurationUs: 0,
+  avgDurationUs: 0,
+  maxDurationUs: 0,
+  missedDeadlines: 0,
+  totalIterations: 0,
+  updatedAt: null
+};
 
 // Phase 4 Coordinated Drive Odometry State
 let odomX = 0.0;
@@ -157,12 +197,104 @@ let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
 let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
-let TRACK_WIDTH = 0.382;  // mutable track width (synchronized with ESP32 NVS)
+let TRACK_WIDTH = 0.3408575433; // Effective skid-steer track width calibrated from 360-deg floor tests (0.3408575433 m)
+const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
+let trackWidthSource = 'CALIBRATION_DB';
 
 // Limits configuration and active command source
 let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
+
+// ROS 2 Autonomy Command State & Safety Machine
+let autonomyGeneration = 1;
+let zeroHandshakeCount = 0;
+let lastLimiterTime = process.hrtime.bigint();
+let limitedLinear = 0.0;
+let limitedAngular = 0.0;
+let watchdogFired = false;
+let reqRateWindowStart = Date.now();
+let reqRateCount = 0;
+
+let autonomyState = {
+  state: isCmdTokenValid ? 'DISABLED' : 'FAULT',
+  enabled: false,
+  active: false,
+  generation: 1,
+  zeroHandshakeCount: 0,
+  lastCmdTime: 0,
+  watchdogTimeoutMs: 500,
+  rawLinear: 0.0,
+  rawAngular: 0.0,
+  clampedLinear: 0.0,
+  clampedAngular: 0.0,
+  limitedLinear: 0.0,
+  limitedAngular: 0.0,
+  rejectedCount: 0,
+  watchdogTimeouts: 0,
+  lastRejectionReason: isCmdTokenValid ? '' : 'Internal command configuration fault',
+  lastBridgeHeartbeat: 0
+};
+
+function getAutonomyStatusObject() {
+  const now = Date.now();
+  const cmdAgeMs = autonomyState.lastCmdTime ? (now - autonomyState.lastCmdTime) : null;
+  const bridgeConnected = autonomyState.lastBridgeHeartbeat ? ((now - autonomyState.lastBridgeHeartbeat) < 2000) : false;
+  return {
+    ok: true,
+    state: autonomyState.state,
+    enabled: autonomyState.enabled,
+    active: autonomyState.active,
+    generation: autonomyGeneration,
+    zeroHandshakeCount: zeroHandshakeCount,
+    cmdSource: cmdSource,
+    bridgeConnected: bridgeConnected,
+    lastCmdAgeMs: cmdAgeMs,
+    rawLinear: autonomyState.rawLinear,
+    rawAngular: autonomyState.rawAngular,
+    clampedLinear: autonomyState.clampedLinear,
+    clampedAngular: autonomyState.clampedAngular,
+    limitedLinear: limitedLinear,
+    limitedAngular: limitedAngular,
+    rejectedCount: autonomyState.rejectedCount,
+    watchdogTimeouts: autonomyState.watchdogTimeouts,
+    lastRejectionReason: autonomyState.lastRejectionReason,
+    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs
+  };
+}
+
+function sendZeroMotionPacket() {
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
+  if (serialPort && serialPort.isOpen) {
+    sendBinaryCommand(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+  }
+}
+
+function resetAutonomyToSafe(reason = 'Reset') {
+  autonomyGeneration++;
+  autonomyState.enabled = false;
+  autonomyState.active = false;
+  autonomyState.state = isCmdTokenValid ? 'DISABLED' : 'FAULT';
+  autonomyState.generation = autonomyGeneration;
+  zeroHandshakeCount = 0;
+  autonomyState.zeroHandshakeCount = 0;
+  autonomyState.lastCmdTime = 0;
+  autonomyState.rawLinear = 0.0;
+  autonomyState.rawAngular = 0.0;
+  autonomyState.clampedLinear = 0.0;
+  autonomyState.clampedAngular = 0.0;
+  autonomyState.limitedLinear = 0.0;
+  autonomyState.limitedAngular = 0.0;
+  autonomyState.lastRejectionReason = isCmdTokenValid ? reason : 'Internal command configuration fault';
+  if (cmdSource === 'ROS_AUTONOMY') {
+    cmdSource = 'NONE';
+  }
+  sendZeroMotionPacket();
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+}
 
 // Path Recording State
 let recording = false;
@@ -207,10 +339,10 @@ let calibSpeedBoost = 0.0;
 let interPassPauseStartTime = 0;
 let returnHomeWaitStartTime = 0;
 
-// Calibration & offset settings
+// Calibration & offset settings (Measured current rover LiDAR position relative to base_link)
 let fwdAngleOffset = 0.0;
-let lidarXOffset = 0.0127;
-let lidarYOffset = 0.034925;
+let lidarXOffset = 0.03175;
+let lidarYOffset = 0.0;
 let lidarYawOffset = 0.0;
 let maxCalibRange = 4.0;
 let chassisMargin = 0.02;
@@ -266,10 +398,28 @@ function loadCalibrationDb() {
         if (calibrationDb.currentConfig.wheelDiameter) {
           WHEEL_RADIUS = calibrationDb.currentConfig.wheelDiameter / 2.0;
         }
-        if (calibrationDb.currentConfig.effectiveTrackWidth) {
-          TRACK_WIDTH = calibrationDb.currentConfig.effectiveTrackWidth;
+        const rawTrack = calibrationDb.currentConfig.effectiveTrackWidth;
+        const storedTpr = calibrationDb.currentConfig.ticksPerRevolution;
+
+        if (Math.abs(rawTrack - 0.718) < 0.05 || !storedTpr || Math.abs(storedTpr - 937.2) < 10.0) {
+          console.log(`[Config DB Migration] Migrated legacy track width (${rawTrack}m) to corrected scale 0.3408575433m with 1974.1667 ticks/rev`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.3408575433;
+          calibrationDb.currentConfig.ticksPerRevolution = 1974.1666666667;
+          TRACK_WIDTH = 0.3408575433;
+          trackWidthSource = 'CALIBRATION_DB';
+          saveCalibrationDb();
+        } else if (typeof rawTrack === 'number' && rawTrack >= 0.100 && rawTrack <= 1.000) {
+          TRACK_WIDTH = rawTrack;
+          trackWidthSource = 'CALIBRATION_DB';
+        } else {
+          console.log(`[Config DB Migration] Reset out-of-range track width (${rawTrack}m) to effective track width 0.3408575433m`);
+          calibrationDb.currentConfig.effectiveTrackWidth = 0.3408575433;
+          calibrationDb.currentConfig.ticksPerRevolution = 1974.1666666667;
+          TRACK_WIDTH = 0.3408575433;
+          trackWidthSource = 'CALIBRATION_DB';
+          saveCalibrationDb();
         }
-        console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m`);
+        console.log(`[Config DB] Set active dimensions: radius=${WHEEL_RADIUS} m, track=${TRACK_WIDTH} m (source=${trackWidthSource})`);
       }
       if (calibrationDb.floorTesting !== undefined) {
         floorTesting = calibrationDb.floorTesting;
@@ -293,7 +443,7 @@ function loadCalibrationDb() {
     console.error('[Config DB] Failed to load calibration database, using defaults:', err.message);
     if (!calibrationDb || typeof calibrationDb !== 'object') {
       calibrationDb = {
-        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.170 },
+        currentConfig: { wheelDiameter: 0.065, effectiveTrackWidth: 0.718 },
         proposedConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         previousConfig: { wheelDiameter: null, effectiveTrackWidth: null },
         fwdTrim: { left: 1.0, right: 1.0 },
@@ -411,7 +561,9 @@ function writePacket(packet, funcId, label = '') {
     } else {
       const hex = Array.from(packet).map(b => b.toString(16).padStart(2,'0')).join(' ');
       const prefix = label ? `${label} ` : '';
-      console.log(`[Binary Out] ${prefix}${hex}`);
+      if (process.env.VERBOSE_LOGGING === 'true') {
+        console.log(`[Binary Out] ${prefix}${hex}`);
+      }
       broadcast({ type: 'raw_serial_out', data: `${prefix}[0x${funcId.toString(16).padStart(2,'0')}] ${hex}` });
     }
   });
@@ -497,20 +649,102 @@ function startMotorKeepaliveLoop() {
 function startDriveKeepaliveLoop() {
   if (driveLoopStarted) return;
   driveLoopStarted = true;
+  lastLimiterTime = process.hrtime.bigint();
 
   setInterval(() => {
-    if (!serialPort || !serialPort.isOpen) return;
+    const now = Date.now();
+    const hrNow = process.hrtime.bigint();
+    let dt = Number(hrNow - lastLimiterTime) / 1e9;
+    lastLimiterTime = hrNow;
+    if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
 
-    // Guard: Do not send conflicting background velocity commands during position/autotests
-    const isPositionActive = positionMode.some(m => m === true) || (autoTestStep > 0);
-    if (isPositionActive) return;
+    // Check ROS 2 autonomy watchdog timeout
+    if (cmdSource === 'ROS_AUTONOMY' || autonomyState.state === 'ACTIVE') {
+      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE' || (now - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
+        if (!watchdogFired) {
+          watchdogFired = true;
+          autonomyState.watchdogTimeouts++;
+          console.warn('[Autonomy Watchdog] ROS 2 /cmd_vel timed out (500ms). Target forced to zero.');
+        }
+        resetAutonomyToSafe('Watchdog timeout exceeded (500ms)');
+        autonomyState.state = 'STALE';
+        broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+      }
+    }
 
     const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+    const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';
+
+    // Safety events bypass slew limiter and force immediate zero
+    if (!isArmed || isMaintenance) {
+      limitedLinear = 0.0;
+      limitedAngular = 0.0;
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+    } else if (cmdSource === 'ROS_AUTONOMY') {
+      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE') {
+        limitedLinear = 0.0;
+        limitedAngular = 0.0;
+        targetLinear = 0.0;
+        targetAngular = 0.0;
+      } else {
+        // Server-Side Slew Limiter for ROS Autonomy
+        const maxLinAccel = parseFloat(process.env.AUTONOMY_LINEAR_ACCEL_MPS2) || 0.30;
+        const maxLinDecel = parseFloat(process.env.AUTONOMY_LINEAR_DECEL_MPS2) || 0.60;
+        const maxAngAccel = parseFloat(process.env.AUTONOMY_ANGULAR_ACCEL_RADPS2) || 1.00;
+        const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
+
+        // Linear Slew
+        if (limitedLinear !== targetLinear) {
+          let rate = maxLinAccel;
+          if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
+            rate = maxLinDecel;
+          } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
+            rate = maxLinDecel;
+          }
+          const delta = rate * dt;
+          if (targetLinear > limitedLinear) {
+            limitedLinear = Math.min(targetLinear, limitedLinear + delta);
+          } else {
+            limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+          }
+        }
+
+        // Angular Slew
+        if (limitedAngular !== targetAngular) {
+          let rate = maxAngAccel;
+          if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
+            rate = maxAngDecel;
+          } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
+            rate = maxAngDecel;
+          }
+          const delta = rate * dt;
+          if (targetAngular > limitedAngular) {
+            limitedAngular = Math.min(targetAngular, limitedAngular + delta);
+          } else {
+            limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+          }
+        }
+      }
+    } else {
+      limitedLinear = targetLinear;
+      limitedAngular = targetAngular;
+    }
+
+    autonomyState.limitedLinear = limitedLinear;
+    autonomyState.limitedAngular = limitedAngular;
+
+    if (!serialPort || !serialPort.isOpen) return;
+
+    // Guard: Do not send conflicting background velocity commands during position/autotests or maintenance (including auto calibration)
+    const isPositionActive = positionMode.some(m => m === true) || (autoTestStep > 0);
+    if (isMaintenance || isPositionActive) return;
+
     if (!isArmed) return;
 
-    const vx = Math.round(targetLinear * 1000);
+    const vx = Math.round(limitedLinear * 1000);
     const vy = 0;
-    const vz = Math.round(targetAngular * 1000);
+    const vz = Math.round(limitedAngular * 1000);
     
     sendBinaryCommand(FUNC_MOTION, [
       ...int16ToLE(vx),
@@ -593,7 +827,21 @@ async function runMotorProofSequence() {
 // checksum = (sum of all bytes from extLen through last data byte) & 0xFF
 // data payload = extLen - 2 bytes (excl. extType and checksum)
 // ────────────────────────────────────────────────────────────
+// Telemetry Parser Instrumentation Counters
+const telemetryParserStats = {
+  bytesReceived: 0,
+  validFramesParsed: 0,
+  malformedLengthCount: 0,
+  checksumErrors: 0,
+  resyncCount: 0,
+  encoderPacketCount: 0,
+  imuPacketCount: 0
+};
+
 let rxBuf = Buffer.alloc(0);
+
+const MIN_VALID_EXT_LEN = 4;
+const MAX_VALID_EXT_LEN = 120;
 
 function processRxBuffer() {
   // Extract and print any ASCII debug lines from the serial stream
@@ -631,17 +879,26 @@ function processRxBuffer() {
     // We have the start of a potential packet at h1
     if (rxBuf.length < h1 + 3) break; // Need at least header + extLen
 
-    const extLen  = rxBuf[h1 + 2];
+    const extLen = rxBuf[h1 + 2];
+
+    // HARDENED LENGTH VALIDATION: Immediately reject invalid extLen
+    if (extLen < MIN_VALID_EXT_LEN || extLen > MAX_VALID_EXT_LEN) {
+      telemetryParserStats.malformedLengthCount++;
+      telemetryParserStats.resyncCount++;
+      rxBuf = rxBuf.subarray(h1 + 1);
+      continue;
+    }
+
     const totalLen = h1 + 2 + extLen; // header(2) + length byte(1) + extLen more bytes
 
-    if (rxBuf.length < totalLen) break; // Wait for more data
+    if (rxBuf.length < totalLen) break; // Wait for more data of a VALID length frame
 
     // Extract packet bytes
     const extType = rxBuf[h1 + 3];
-    // Data payload = bytes after extType, before checksum = extLen - 2 bytes
-    const dataLen = extLen - 2;
+    // Data payload = bytes after extType, before checksum = extLen - 3 bytes
+    const dataLen = extLen - 3;
     if (dataLen < 0) {
-      // Malformed – discard and advance
+      telemetryParserStats.resyncCount++;
       rxBuf = rxBuf.subarray(h1 + 1);
       continue;
     }
@@ -657,8 +914,13 @@ function processRxBuffer() {
     checksum = checksum & 0xFF;
 
     if (checksum === rxChecksum) {
+      telemetryParserStats.validFramesParsed++;
+      if (extType === TYPE_ENCODER) telemetryParserStats.encoderPacketCount++;
+      if (extType === TYPE_BNO08X_IMU) telemetryParserStats.imuPacketCount++;
       parseTelemetryPacket(extType, dataBytes);
     } else {
+      telemetryParserStats.checksumErrors++;
+      telemetryParserStats.resyncCount++;
       console.warn(`[Binary In] Checksum error! extType=0x${extType.toString(16)} calc=0x${checksum.toString(16)} recv=0x${rxChecksum.toString(16)}`);
       broadcast({ type: 'message', data: `[Checksum Error] type=0x${extType.toString(16)}` });
     }
@@ -671,18 +933,149 @@ function processRxBuffer() {
 // ────────────────────────────────────────────────────────────
 // Telemetry Packet Interpreter
 // ────────────────────────────────────────────────────────────
+let lastBatteryLogTime = 0;
+let lastLoggedVoltage = null;
+
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
+
   if (extType === TYPE_BATTERY) {
     // Observed packet: ff fb 0a 0a 00 00 00 00 00 00 VV CS
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
-      console.log(`[Battery] ${voltage.toFixed(1)} V`);
+      const now = Date.now();
+      // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
+      if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
+        lastBatteryLogTime = now;
+        lastLoggedVoltage = voltage;
+        if (process.env.VERBOSE_LOGGING === 'true') {
+          console.log(`[Battery] ${voltage.toFixed(1)} V`);
+        }
+      }
       broadcast({ type: 'battery', voltage });
     }
 
+  } else if (extType === TYPE_BNO08X_IMU) {
+    // Production 69-byte BNO08x IMU telemetry packet (0x3A)
+    if (data.length < 69) {
+      console.warn(`[BNO08x IMU] Packet payload too short: ${data.length} bytes (expected 69)`);
+      return;
+    }
+
+    const version = data[0];
+    if (version !== 0x01) {
+      console.warn(`[BNO08x IMU] Unknown protocol version 0x${version.toString(16)}`);
+      return;
+    }
+
+    const statusFlags = data.readUInt16LE(1);
+    const sequenceNum = data.readUInt32LE(3);
+    const resetCount = data.readUInt32LE(7);
+
+    // 64-bit ESP32 timestamp in microseconds
+    const espTimestampUsBig = data.readBigUInt64LE(11);
+    const espTimestampUs = Number(espTimestampUsBig);
+
+    const rotVecAgeMs = data.readUInt16LE(19);
+    const gyroAgeMs = data.readUInt16LE(21);
+    const accelAgeMs = data.readUInt16LE(23);
+
+    // Read floats (LE)
+    let qw = data.readFloatLE(25);
+    let qx = data.readFloatLE(29);
+    let qy = data.readFloatLE(33);
+    let qz = data.readFloatLE(37);
+
+    let gx = data.readFloatLE(41);
+    let gy = data.readFloatLE(45);
+    let gz = data.readFloatLE(49);
+
+    let ax = data.readFloatLE(53); // Specific force (gravity included, REP-145)
+    let ay = data.readFloatLE(57);
+    let az = data.readFloatLE(61);
+
+    let quatAccuracyRad = data.readFloatLE(65);
+
+    // Sanitize non-finite values
+    if (!Number.isFinite(qw) || !Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) {
+      qw = 1.0; qx = 0.0; qy = 0.0; qz = 0.0;
+    }
+    if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(gz)) {
+      gx = 0.0; gy = 0.0; gz = 0.0;
+    }
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(az)) {
+      ax = 0.0; ay = 0.0; az = 0.0;
+    }
+    if (!Number.isFinite(quatAccuracyRad)) {
+      quatAccuracyRad = 0.0;
+    }
+
+    // Sequence gap detection
+    if (lastBnoSeq !== null) {
+      const expectedSeq = (lastBnoSeq + 1) >>> 0;
+      if (sequenceNum !== expectedSeq) {
+        const gap = (sequenceNum - expectedSeq) >>> 0;
+        bnoSequenceGaps += gap;
+      }
+    }
+    lastBnoSeq = sequenceNum;
+
+    // Status bit decoding
+    const hardwareInitialized = (statusFlags & (1 << 0)) !== 0;
+    const inResetRecovery     = (statusFlags & (1 << 1)) !== 0;
+    const rotVecValid        = (statusFlags & (1 << 2)) !== 0;
+    const gyroValid          = (statusFlags & (1 << 3)) !== 0;
+    const accelValid         = (statusFlags & (1 << 4)) !== 0;
+    const calibrationStatus  = (statusFlags >> 6) & 0x03;
+
+    const now = Date.now();
+    lastBno3ATimeMs = now;
+
+    latestBnoImuState = {
+      ok: true,
+      timestamp: now,
+      espTimestampUs,
+      sequence: sequenceNum,
+      sequenceGaps: bnoSequenceGaps,
+      resetCount,
+      flags: statusFlags,
+      hardwareInitialized,
+      inResetRecovery,
+      rotVecValid,
+      gyroValid,
+      accelValid,
+      calibrationStatus,
+      rotVecAgeMs,
+      gyroAgeMs,
+      accelAgeMs,
+      orientation: { w: qw, x: qx, y: qy, z: qz },
+      gyro: { x: gx, y: gy, z: gz },
+      accel: { x: ax, y: ay, z: az },
+      quatAccuracyRad
+    };
+
+    // Broadcast to WebSocket clients with explicit backpressure safety check
+    const imuWsMsg = JSON.stringify({
+      type: 'bno08x_imu',
+      ...latestBnoImuState
+    });
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        // Backpressure check: skip sending if client queue exceeds 4096 bytes
+        if (client.bufferedAmount !== undefined && client.bufferedAmount > 4096) {
+          return;
+        }
+        client.send(imuWsMsg);
+      }
+    });
+
   } else if (extType === TYPE_IMU) {
+    // If production 0x3A telemetry is active, ignore legacy placeholder packet
+    if (Date.now() - lastBno3ATimeMs < 2000) {
+      return;
+    }
     // Observed packet: ff fb 15 0e GX GX GY GY GZ GZ AX AX AY AY AZ AZ MX MX MY MY MZ MZ CS
     // Total=21 bytes → extLen=0x15=21 → data = extLen-2 = 19 bytes
     // Layout (little-endian int16):
@@ -787,7 +1180,7 @@ function parseTelemetryPacket(extType, data) {
         const dLeftTicks = (dm1 + dm3) / 2.0;
         const dRightTicks = (dm2 + dm4) / 2.0;
 
-        const TICKS_PER_REV = 937.2;
+        const TICKS_PER_REV = 1974.1666666667;
         const M_PER_TICK = (2.0 * Math.PI * WHEEL_RADIUS) / TICKS_PER_REV;
 
         const dLeftDist = dLeftTicks * M_PER_TICK;
@@ -1167,15 +1560,39 @@ function parseTelemetryPacket(extType, data) {
       const maxDurationUs = data.readUInt32LE(12);
       const missedDeadlines = data.readUInt32LE(16);
       const totalIterations = data.readUInt32LE(20);
-      
-      broadcast({
-        type: 'loop_timing',
+
+      const schedulingMetricsAvailable = (data.length >= 40);
+
+      let lastStartLatenessUs = 0;
+      let maxStartLatenessUs = 0;
+      let missedControlPeriods = 0;
+      let maxConsecutiveMissedPeriods = 0;
+
+      if (schedulingMetricsAvailable) {
+        lastStartLatenessUs = data.readUInt32LE(24);
+        maxStartLatenessUs = data.readUInt32LE(28);
+        missedControlPeriods = data.readUInt32LE(32);
+        maxConsecutiveMissedPeriods = data.readUInt32LE(36);
+      }
+
+      latestLoopTiming = {
         lastDurationUs,
         minDurationUs,
         avgDurationUs,
         maxDurationUs,
         missedDeadlines,
-        totalIterations
+        totalIterations,
+        schedulingMetricsAvailable,
+        lastStartLatenessUs,
+        maxStartLatenessUs,
+        missedControlPeriods,
+        maxConsecutiveMissedPeriods,
+        updatedAt: Date.now()
+      };
+
+      broadcast({
+        type: 'loop_timing',
+        ...latestLoopTiming
       });
     }
 
@@ -1219,6 +1636,8 @@ function parseTelemetryPacket(extType, data) {
         type: 'normal_drive_status',
         ...latestNormalDriveStatus
       });
+      // Propagate ESP32-confirmed armed state changes to calibration-status WS consumers.
+      broadcastAutoCalibStatus();
     }
 
   } else if (extType === 0x37) { // TYPE_ROVER_PARAMS
@@ -1226,9 +1645,25 @@ function parseTelemetryPacket(extType, data) {
       const diameter = data.readFloatLE(0);
       const separation = data.readFloatLE(4);
       WHEEL_RADIUS = diameter / 2.0;
-      TRACK_WIDTH = separation;
-      console.log(`[Config Sync] ESP32 reported wheel diameter = ${diameter.toFixed(4)} m, effective track width = ${separation.toFixed(4)} m`);
-      broadcast({ type: 'rover_params_sync', diameter, separation });
+
+      const targetTrackWidth = (calibrationDb && calibrationDb.currentConfig && typeof calibrationDb.currentConfig.effectiveTrackWidth === 'number')
+        ? calibrationDb.currentConfig.effectiveTrackWidth
+        : 0.3408575433;
+
+      if (Math.abs(separation - targetTrackWidth) > 0.005) {
+        console.log(`[Config Sync] ESP32 reported separation ${separation.toFixed(4)}m; syncing to active calibrated track width ${targetTrackWidth.toFixed(4)}m...`);
+        TRACK_WIDTH = targetTrackWidth;
+        trackWidthSource = 'CALIBRATION_DB';
+        const diaBytes = floatToLEBytes(diameter || (WHEEL_RADIUS * 2.0));
+        const sepBytes = floatToLEBytes(targetTrackWidth);
+        sendBinaryCommand(0x37, [...diaBytes, ...sepBytes], { dualChecksum: true });
+      } else {
+        TRACK_WIDTH = separation;
+        trackWidthSource = 'CALIBRATION_DB';
+      }
+
+      console.log(`[Config Sync] ESP32 reported wheel diameter = ${diameter.toFixed(4)} m, effective track width = ${TRACK_WIDTH.toFixed(4)} m`);
+      broadcast({ type: 'rover_params_sync', diameter, separation: TRACK_WIDTH });
     }
 
   } else if (extType === 0x38) { // TYPE_ROVER_TRIMS (Forward)
@@ -1363,6 +1798,7 @@ function initSerial(portName = COM_PORT) {
 
   let rawLogCounter = 0;
   serialPort.on('data', (chunk) => {
+    telemetryParserStats.bytesReceived += chunk.length;
     rxBuf = Buffer.concat([rxBuf, chunk]);
     // Only log raw bytes occasionally to avoid flooding the UI
     rawLogCounter++;
@@ -1404,8 +1840,10 @@ function scheduleReconnect() {
 // ────────────────────────────────────────────────────────────
 // WebSocket Message Handlers
 // ────────────────────────────────────────────────────────────
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   console.log('Web client connected.');
+  const clientIp = (req && req.socket) ? (req.socket.remoteAddress || '') : '';
+  ws.isOperatorAuthenticated = false;
 
   // Send current serial connection state
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
@@ -1426,6 +1864,29 @@ wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
       const msg = JSON.parse(message);
+
+      if (msg.type === 'auth') {
+        if (msg.token && typeof msg.token === 'string') {
+          const reqBuf = Buffer.from(String(msg.token));
+          const expBuf = Buffer.from(String(ROVER_OPERATOR_TOKEN));
+          if (reqBuf.length === expBuf.length && crypto.timingSafeEqual(reqBuf, expBuf)) {
+            ws.isOperatorAuthenticated = true;
+            return ws.send(JSON.stringify({ type: 'auth_result', ok: true }));
+          }
+        }
+        return ws.send(JSON.stringify({ type: 'auth_result', ok: false, error: 'Invalid operator token' }));
+      }
+
+      if (msg.type === 'deauth') {
+        ws.isOperatorAuthenticated = false;
+        return ws.send(JSON.stringify({ type: 'deauth_result', ok: true }));
+      }
+
+      if (['joystick', 'set_speed', 'set_pwm', 'drive', 'run_motor_proof', 'set_position', 'start_auto_test', 'abort_auto_test', 'start_calibration', 'cancel_calibration', 'clear_faults', 'enter_maintenance', 'maintenance_set_output', 'exit_maintenance', 'emergency_stop', 'arm_normal_drive', 'disarm_normal_drive'].includes(msg.type)) {
+        if (!ws.isOperatorAuthenticated) {
+          return ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized operator connection' }));
+        }
+      }
 
       switch (msg.type) {
         case 'set_speed':
@@ -1462,6 +1923,18 @@ wss.on('connection', (ws) => {
                 stopAutoCalibration('user_abort', 'Joystick override during automatic calibration test');
               }
               return;
+            }
+
+            if ((autonomyState.enabled || cmdSource === 'ROS_AUTONOMY') && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
+              autonomyState.enabled = false;
+              autonomyState.active = false;
+              autonomyState.lastRejectionReason = 'Manual joystick override';
+              if (cmdSource === 'ROS_AUTONOMY') {
+                targetLinear = 0.0;
+                targetAngular = 0.0;
+                cmdSource = 'NONE';
+              }
+              broadcast({ type: 'autonomy_status', status: autonomyState });
             }
 
             if (autoTestStep > 0 && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
@@ -1555,8 +2028,8 @@ wss.on('connection', (ws) => {
           }
           lidarTestMode = 'correct'; // always correct+learn
           fwdAngleOffset = parseFloat(msg.frontAngleOffset || 0.0);
-          lidarXOffset = parseFloat(msg.lidarXOffset || 0.0127);
-          lidarYOffset = parseFloat(msg.lidarYOffset || 0.034925);
+          lidarXOffset = parseFloat(msg.lidarXOffset || 0.03175);
+          lidarYOffset = parseFloat(msg.lidarYOffset || 0.0);
           lidarYawOffset = parseFloat(msg.lidarYawOffset || 0.0);
           maxCalibRange = parseFloat(msg.maxRange || 4.0);
           chassisMargin = parseFloat(msg.chassisMargin || 0.02);
@@ -1881,6 +2354,14 @@ app.get('/api/motor', (req, res) => {
 
 app.get('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
+  autonomyState.enabled = false;
+  autonomyState.active = false;
+  autonomyState.lastRejectionReason = 'E-Stop triggered';
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  broadcast({ type: 'autonomy_status', status: autonomyState });
+
   if (typeof autoCalibState !== 'undefined' && autoCalibState.active) {
     stopAutoCalibration('estop', 'Emergency stop triggered');
   }
@@ -2287,41 +2768,92 @@ let autoCalibState = {
 };
 
 let autoCalibTimer = null;
+let lastAutoCalibLogTime = 0;
+let odomFetchPromise = null;
+let lastOdomSuccessTime = 0;
+let odomConsecutiveErrors = 0;
 
 function fetchRosOdometry() {
-  return new Promise((resolve) => {
+  if (odomFetchPromise) {
+    return odomFetchPromise;
+  }
+
+  odomFetchPromise = new Promise((resolve) => {
+    let handled = false;
+
+    function finish(result) {
+      if (handled) return;
+      handled = true;
+      resolve(result);
+    }
+
     const req = http.get('http://127.0.0.1:3003/api/odom', { timeout: 250 }, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
+        if (handled) return;
         try {
           if (res.statusCode === 200) {
             const parsed = JSON.parse(data);
-            latestRosOdom = {
-              ...parsed,
-              fetchedAt: Date.now(),
-              valid: parsed.ok === true && (parsed.odometry_age_ms || 0) < 2000
-            };
-            return resolve(latestRosOdom);
+            const isSourceFresh = parsed && parsed.ok === true &&
+              typeof parsed.odometry_age_ms === 'number' &&
+              Number.isFinite(parsed.odometry_age_ms) &&
+              parsed.odometry_age_ms < 2000;
+
+            if (isSourceFresh) {
+              const fetchTime = Date.now();
+              if (fetchTime >= lastOdomSuccessTime) {
+                lastOdomSuccessTime = fetchTime;
+                odomConsecutiveErrors = 0;
+                latestRosOdom = {
+                  ...parsed,
+                  fetchedAt: fetchTime,
+                  valid: true,
+                  odometry_age_ms: parsed.odometry_age_ms
+                };
+              }
+              return finish(latestRosOdom);
+            }
           }
         } catch (e) {}
-        latestRosOdom.valid = false;
-        resolve(latestRosOdom);
+        handleOdomError('Invalid JSON, HTTP non-200, or stale source odometry');
+        finish(latestRosOdom);
       });
     });
-    req.on('error', () => {
-      latestRosOdom.valid = false;
-      resolve(latestRosOdom);
+
+    req.on('error', (err) => {
+      if (handled) return;
+      handleOdomError(err.message || 'HTTP request error');
+      finish(latestRosOdom);
     });
+
     req.on('timeout', () => {
+      if (handled) return;
       req.destroy();
-      latestRosOdom.valid = false;
-      resolve(latestRosOdom);
+      handleOdomError('Request timeout (250ms)');
+      finish(latestRosOdom);
     });
+
+    function handleOdomError(msg) {
+      if (handled) return;
+      odomConsecutiveErrors++;
+      const now = Date.now();
+      const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+      latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);
+      latestRosOdom.odometry_age_ms = sampleAge;
+      latestRosOdom.consecutive_errors = odomConsecutiveErrors;
+    }
+  }).finally(() => {
+    odomFetchPromise = null;
   });
+
+  return odomFetchPromise;
 }
 
 function broadcastAutoCalibStatus() {
+  // Synchronize armed field from the authoritative normal-drive status before broadcasting.
+  // autoCalibState.armed must never drift from latestNormalDriveStatus.armed.
+  autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed);
   broadcast({
     type: 'auto_calib_status',
     status: autoCalibState
@@ -2446,11 +2978,19 @@ function computeRepeatabilityStats(logs = []) {
 }
 
 function stopAutoCalibration(reason, detail) {
-  if (!autoCalibState.active && autoCalibState.phase !== 'RUNNING') return;
+  if (!autoCalibState.active && autoCalibState.phase !== 'RUNNING' && autoCalibState.phase !== 'ARMING') return;
 
-  // 1. Immediately set zero motor speeds and send disarm command
+  const completedTest = autoCalibState.test;
+
+  // 1. Immediately set zero linear/angular targets & send zero FUNC_MOTION and disarm commands
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
   sendMotorSpeeds(0, 0, 0, 0);
   if (serialPort && serialPort.isOpen) {
+    const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+    serialPort.write(motionPkt);
     const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
     serialPort.write(disarmPkt);
   }
@@ -2459,8 +2999,12 @@ function stopAutoCalibration(reason, detail) {
   cmdSource = 'NONE';
 
   // 3. Mark inactive & calculate phase/errors
+  // Note: autoCalibState.armed is NOT set here. It is synchronized from
+  // latestNormalDriveStatus by broadcastAutoCalibStatus() and the status endpoint.
+  // After the disarm packet above, the ESP32 confirms disarm via telemetry which
+  // updates latestNormalDriveStatus; the broadcast at the end of this function
+  // will reflect the correct armed state.
   autoCalibState.active = false;
-  autoCalibState.armed = false;
   autoCalibState.phase = (reason === 'target_reached') ? 'COMPLETE' : 'FAULT';
   autoCalibState.stopReason = reason;
   autoCalibState.fault = (reason !== 'target_reached') ? (detail || reason) : null;
@@ -2472,26 +3016,26 @@ function stopAutoCalibration(reason, detail) {
     autoCalibState.finalPose = { x: 0, y: 0, yaw: 0, yawDeg: 0 };
   }
 
-  if (autoCalibState.test === 'forward_1m') {
+  if (completedTest === 'forward_1m') {
     autoCalibState.distanceError = parseFloat((autoCalibState.reportedDistance - 1.000).toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat(autoCalibState.reportedYawDegrees.toFixed(2));
-  } else if (autoCalibState.test === 'turn_left_90') {
+  } else if (completedTest === 'turn_left_90') {
     autoCalibState.distanceError = parseFloat(autoCalibState.reportedDistance.toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat((autoCalibState.reportedYawDegrees - 90.0).toFixed(2));
-  } else if (autoCalibState.test === 'turn_right_90') {
+  } else if (completedTest === 'turn_right_90') {
     autoCalibState.distanceError = parseFloat(autoCalibState.reportedDistance.toFixed(4));
     autoCalibState.yawErrorDegrees = parseFloat((autoCalibState.reportedYawDegrees - (-90.0)).toFixed(2));
   }
 
   let passed = false;
   if (reason === 'target_reached') {
-    if (autoCalibState.test === 'forward_1m') {
+    if (completedTest === 'forward_1m') {
       passed = (autoCalibState.reportedDistance >= 0.97 && autoCalibState.reportedDistance <= 1.03) &&
                (Math.abs(autoCalibState.reportedYawDegrees) <= 5.0);
-    } else if (autoCalibState.test === 'turn_left_90') {
+    } else if (completedTest === 'turn_left_90') {
       passed = (autoCalibState.reportedYawDegrees >= 87.0 && autoCalibState.reportedYawDegrees <= 93.0) &&
                (autoCalibState.reportedDistance <= 0.10);
-    } else if (autoCalibState.test === 'turn_right_90') {
+    } else if (completedTest === 'turn_right_90') {
       passed = (autoCalibState.reportedYawDegrees >= -93.0 && autoCalibState.reportedYawDegrees <= -87.0) &&
                (autoCalibState.reportedDistance <= 0.10);
     }
@@ -2500,7 +3044,7 @@ function stopAutoCalibration(reason, detail) {
 
   // 4. Save lastResult for UI
   autoCalibState.lastResult = {
-    test: autoCalibState.test,
+    test: completedTest,
     phase: autoCalibState.phase,
     stopReason: autoCalibState.stopReason,
     fault: autoCalibState.fault,
@@ -2522,8 +3066,8 @@ function stopAutoCalibration(reason, detail) {
     id: `run-${nowTs}-${Math.floor(Math.random() * 1000)}`,
     timestamp: nowTs,
     isoDate: new Date(nowTs).toISOString(),
-    test: autoCalibState.test,
-    testType: autoCalibState.test,
+    test: completedTest,
+    testType: completedTest,
     phase: autoCalibState.phase,
     stopReason: autoCalibState.stopReason,
     fault: autoCalibState.fault,
@@ -2557,167 +3101,232 @@ function stopAutoCalibration(reason, detail) {
     clearInterval(autoCalibTimer);
     autoCalibTimer = null;
   }
+  autoCalibTickInFlight = false;
 
-  console.log(`[Auto Calib] Test '${autoCalibState.test}' stopped. Reason: ${reason}. Pass: ${passed}`);
+  console.log(`[Auto Calib] Test '${completedTest}' stopped. Reason: ${reason}. Pass: ${passed}`);
   broadcastAutoCalibStatus();
 }
 
+const AUTO_CALIB_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_FORWARD_MPS) || 0.15;
+const AUTO_CALIB_MIN_FORWARD_MPS = parseFloat(process.env.AUTO_CALIB_MIN_FORWARD_MPS) || 0.05;
+const AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;
+const AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;
+
+let autoCalibTickInFlight = false;
+
 async function runAutoCalibTick() {
   if (!autoCalibState.active) return;
+  if (autoCalibTickInFlight) return;
 
-  const now = Date.now();
-  autoCalibState.elapsedMs = now - autoCalibState.startedAt;
+  autoCalibTickInFlight = true;
+  try {
+    cmdSource = 'AUTO_CALIB';
+    const now = Date.now();
+    autoCalibState.elapsedMs = now - autoCalibState.startedAt;
 
-  const encSnap = getEncoderSnapshot();
-  await fetchRosOdometry();
+    const encSnap = getEncoderSnapshot();
+    await fetchRosOdometry();
 
-  autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
-  autoCalibState.odomAgeMs = latestRosOdom.odometry_age_ms || 99999;
+    const odomAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+    const isOdomFresh = (lastOdomSuccessTime > 0 && odomAge < 2000);
 
-  autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
-  autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
-  autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
+    autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
+    autoCalibState.odomAgeMs = odomAge;
 
-  if (!autoCalibState.safetyChecks.serialConnected) {
-    stopAutoCalibration('serial_disconnected', 'Serial connection lost');
-    return;
-  }
-  if (!autoCalibState.safetyChecks.telemetryValid) {
-    stopAutoCalibration('telemetry_stale', 'Encoder telemetry stale or lost');
-    return;
-  }
-  if (!autoCalibState.safetyChecks.odomValid) {
-    stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
-    return;
-  }
+    autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
+    autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
+    autoCalibState.safetyChecks.odomValid = isOdomFresh;
 
-  const start = autoCalibState.startPose;
-  const curX = latestRosOdom.x;
-  const curY = latestRosOdom.y;
-  const curYaw = latestRosOdom.yaw;
-  const curYawDeg = latestRosOdom.yaw_deg;
-
-  autoCalibState.currentPose = { x: curX, y: curY, yaw: curYaw, yawDeg: curYawDeg };
-
-  const dx = curX - start.x;
-  const dy = curY - start.y;
-  const distMoved = Math.sqrt(dx * dx + dy * dy);
-
-  let yawDiffRad = curYaw - start.yaw;
-  while (yawDiffRad > Math.PI) yawDiffRad -= 2 * Math.PI;
-  while (yawDiffRad < -Math.PI) yawDiffRad += 2 * Math.PI;
-  const yawDiffDeg = yawDiffRad * (180.0 / Math.PI);
-
-  const testType = autoCalibState.test;
-
-  if (testType === 'forward_1m') {
-    const forwardDist = dx * Math.cos(start.yaw) + dy * Math.sin(start.yaw);
-    autoCalibState.reportedDistance = forwardDist;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: forwardDist, yawDeg: yawDiffDeg };
-
-    if (autoCalibState.elapsedMs > 12000) {
-      stopAutoCalibration('timeout', 'Forward 1m test exceeded 12s timeout');
+    if (!autoCalibState.safetyChecks.serialConnected) {
+      stopAutoCalibration('serial_disconnected', 'Serial connection lost');
       return;
     }
-    if (Math.abs(yawDiffDeg) > 15.0) {
-      stopAutoCalibration('yaw_limit', `Yaw deviation (${yawDiffDeg.toFixed(1)}°) exceeded 15° limit`);
-      return;
-    }
-    if (forwardDist < -0.05) {
-      stopAutoCalibration('unexpected_direction', 'Rover moving backward unexpectedly');
-      return;
-    }
-    if (forwardDist >= 1.050) {
-      stopAutoCalibration('target_reached', '1.050m hard stop reached');
+    if (!autoCalibState.safetyChecks.telemetryValid) {
+      stopAutoCalibration('telemetry_stale', 'Encoder telemetry stale or lost');
       return;
     }
 
-    const rem = 1.000 - forwardDist;
-    if (rem <= 0 || forwardDist >= 1.000) {
-      stopAutoCalibration('target_reached', 'Target 1.000m reached');
+    const isArmed = Boolean(latestNormalDriveStatus?.armed);
+    autoCalibState.armed = isArmed;
+
+    if (autoCalibState.phase === 'ARMING') {
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+      limitedLinear = 0.0;
+      limitedAngular = 0.0;
+      autoCalibState.motorCommand = [0, 0, 0, 0];
+
+      if (isArmed && isOdomFresh) {
+        autoCalibState.phase = 'RUNNING';
+        autoCalibState.startedAt = now;
+        autoCalibState.elapsedMs = 0;
+        autoCalibState.startPose = {
+          x: latestRosOdom.x,
+          y: latestRosOdom.y,
+          yaw: latestRosOdom.yaw,
+          yawDeg: latestRosOdom.yaw_deg
+        };
+        autoCalibState.currentPose = { ...autoCalibState.startPose };
+      } else {
+        if (autoCalibState.elapsedMs > 2000) {
+          if (!isArmed) {
+            stopAutoCalibration('arm_timeout', 'Failed to confirm Normal Drive armed state within 2.0s');
+          } else {
+            stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable during arming');
+          }
+          return;
+        }
+        broadcastAutoCalibStatus();
+        return;
+      }
+    }
+
+    if (!isArmed) {
+      stopAutoCalibration('armed_lost', 'Normal Drive disarmed during active test');
       return;
     }
 
-    let spd = 18;
-    if (rem < 0.25) {
-      spd = Math.max(10, Math.round(18 * (rem / 0.25)));
-    }
-    autoCalibState.motorCommand = [spd, spd, spd, spd];
-    sendMotorSpeeds(spd, spd, spd, spd);
-
-  } else if (testType === 'turn_left_90') {
-    autoCalibState.reportedDistance = distMoved;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
-
-    if (autoCalibState.elapsedMs > 8000) {
-      stopAutoCalibration('timeout', 'Turn Left 90° test exceeded 8s timeout');
-      return;
-    }
-    if (distMoved > 0.20) {
-      stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
-      return;
-    }
-    if (yawDiffDeg < -5.0) {
-      stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
-      return;
-    }
-    if (yawDiffDeg >= 95.0) {
-      stopAutoCalibration('target_reached', '95° hard angle stop reached');
+    if (!isOdomFresh) {
+      stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');
       return;
     }
 
-    const rem = 90.0 - yawDiffDeg;
-    if (rem <= 0 || yawDiffDeg >= 90.0) {
-      stopAutoCalibration('target_reached', 'Target +90° angle reached');
-      return;
-    }
+    const start = autoCalibState.startPose;
+    const curX = latestRosOdom.x;
+    const curY = latestRosOdom.y;
+    const curYaw = latestRosOdom.yaw;
+    const curYawDeg = latestRosOdom.yaw_deg;
 
-    let spd = 18;
-    if (rem < 20.0) {
-      spd = Math.max(10, Math.round(18 * (rem / 20.0)));
-    }
-    autoCalibState.motorCommand = [-spd, spd, -spd, spd];
-    sendMotorSpeeds(-spd, spd, -spd, spd);
+    autoCalibState.currentPose = { x: curX, y: curY, yaw: curYaw, yawDeg: curYawDeg };
 
-  } else if (testType === 'turn_right_90') {
-    autoCalibState.reportedDistance = distMoved;
-    autoCalibState.reportedYawDegrees = yawDiffDeg;
-    autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
+    const dx = curX - start.x;
+    const dy = curY - start.y;
+    const distMoved = Math.sqrt(dx * dx + dy * dy);
 
-    if (autoCalibState.elapsedMs > 8000) {
-      stopAutoCalibration('timeout', 'Turn Right 90° test exceeded 8s timeout');
-      return;
-    }
-    if (distMoved > 0.20) {
-      stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
-      return;
-    }
-    if (yawDiffDeg > 5.0) {
-      stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
-      return;
-    }
-    if (yawDiffDeg <= -95.0) {
-      stopAutoCalibration('target_reached', '-95° hard angle stop reached');
-      return;
-    }
+    let yawDiffRad = curYaw - start.yaw;
+    while (yawDiffRad > Math.PI) yawDiffRad -= 2 * Math.PI;
+    while (yawDiffRad < -Math.PI) yawDiffRad += 2 * Math.PI;
+    const yawDiffDeg = yawDiffRad * (180.0 / Math.PI);
 
-    const rem = 90.0 - Math.abs(yawDiffDeg);
-    if (rem <= 0 || yawDiffDeg <= -90.0) {
-      stopAutoCalibration('target_reached', 'Target -90° angle reached');
-      return;
-    }
+    const testType = autoCalibState.test;
 
-    let spd = 18;
-    if (rem < 20.0) {
-      spd = Math.max(10, Math.round(18 * (rem / 20.0)));
+    if (testType === 'forward_1m') {
+      const forwardDist = dx * Math.cos(start.yaw) + dy * Math.sin(start.yaw);
+      autoCalibState.reportedDistance = forwardDist;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: forwardDist, yawDeg: yawDiffDeg };
+
+      if (autoCalibState.elapsedMs > 12000) {
+        stopAutoCalibration('timeout', 'Forward 1m test exceeded 12s timeout');
+        return;
+      }
+      if (Math.abs(yawDiffDeg) > 15.0) {
+        stopAutoCalibration('yaw_limit', `Yaw deviation (${yawDiffDeg.toFixed(1)}°) exceeded 15° limit`);
+        return;
+      }
+      if (forwardDist < -0.05) {
+        stopAutoCalibration('unexpected_direction', 'Rover moving backward unexpectedly');
+        return;
+      }
+      if (forwardDist >= 1.050) {
+        stopAutoCalibration('target_reached', '1.050m hard stop reached');
+        return;
+      }
+
+      const rem = 1.000 - forwardDist;
+      if (rem <= 0 || forwardDist >= 1.000) {
+        stopAutoCalibration('target_reached', 'Target 1.000m reached');
+        return;
+      }
+
+      let lin = AUTO_CALIB_FORWARD_MPS;
+      if (rem < 0.25) {
+        lin = Math.max(AUTO_CALIB_MIN_FORWARD_MPS, AUTO_CALIB_FORWARD_MPS * (rem / 0.25));
+      }
+      targetLinear = parseFloat(lin.toFixed(3));
+      targetAngular = 0.0;
+      const vx = Math.round(targetLinear * 1000);
+      autoCalibState.motorCommand = [vx, 0, 0, 0];
+
+    } else if (testType === 'turn_left_90') {
+      autoCalibState.reportedDistance = distMoved;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
+
+      if (autoCalibState.elapsedMs > 8000) {
+        stopAutoCalibration('timeout', 'Turn Left 90° test exceeded 8s timeout');
+        return;
+      }
+      if (distMoved > 0.20) {
+        stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
+        return;
+      }
+      if (yawDiffDeg < -5.0) {
+        stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
+        return;
+      }
+      if (yawDiffDeg >= 95.0) {
+        stopAutoCalibration('target_reached', '95° hard angle stop reached');
+        return;
+      }
+
+      const rem = 90.0 - yawDiffDeg;
+      if (rem <= 0 || yawDiffDeg >= 90.0) {
+        stopAutoCalibration('target_reached', 'Target +90° angle reached');
+        return;
+      }
+
+      let ang = AUTO_CALIB_TURN_RADPS;
+      if (rem < 20.0) {
+        ang = Math.max(AUTO_CALIB_MIN_TURN_RADPS, AUTO_CALIB_TURN_RADPS * (rem / 20.0));
+      }
+      targetLinear = 0.0;
+      targetAngular = parseFloat(ang.toFixed(3));
+      const vz = Math.round(targetAngular * 1000);
+      autoCalibState.motorCommand = [0, 0, vz, 0];
+
+    } else if (testType === 'turn_right_90') {
+      autoCalibState.reportedDistance = distMoved;
+      autoCalibState.reportedYawDegrees = yawDiffDeg;
+      autoCalibState.currentProgress = { distanceM: distMoved, yawDeg: yawDiffDeg };
+
+      if (autoCalibState.elapsedMs > 8000) {
+        stopAutoCalibration('timeout', 'Turn Right 90° test exceeded 8s timeout');
+        return;
+      }
+      if (distMoved > 0.20) {
+        stopAutoCalibration('translation_limit', `Translation (${distMoved.toFixed(2)}m) exceeded 0.20m limit`);
+        return;
+      }
+      if (yawDiffDeg > 5.0) {
+        stopAutoCalibration('unexpected_direction', 'Rover rotated in wrong direction');
+        return;
+      }
+      if (yawDiffDeg <= -95.0) {
+        stopAutoCalibration('target_reached', '-95° hard angle stop reached');
+        return;
+      }
+
+      const rem = 90.0 - Math.abs(yawDiffDeg);
+      if (rem <= 0 || yawDiffDeg <= -90.0) {
+        stopAutoCalibration('target_reached', 'Target -90° angle reached');
+        return;
+      }
+
+      let ang = AUTO_CALIB_TURN_RADPS;
+      if (rem < 20.0) {
+        ang = Math.max(AUTO_CALIB_MIN_TURN_RADPS, AUTO_CALIB_TURN_RADPS * (rem / 20.0));
+      }
+      targetLinear = 0.0;
+      targetAngular = parseFloat((-ang).toFixed(3));
+      const vz = Math.round(targetAngular * 1000);
+      autoCalibState.motorCommand = [0, 0, vz, 0];
     }
-    autoCalibState.motorCommand = [spd, -spd, spd, -spd];
-    sendMotorSpeeds(spd, -spd, spd, -spd);
-  }
 
   broadcastAutoCalibStatus();
+  } finally {
+    autoCalibTickInFlight = false;
+  }
 }
 
 app.post('/api/calibration/auto/start', async (req, res) => {
@@ -2761,11 +3370,17 @@ app.post('/api/calibration/auto/start', async (req, res) => {
     yawDeg: latestRosOdom.yaw_deg
   };
 
+  cmdSource = 'AUTO_CALIB';
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
+
   autoCalibState = {
     lastResult: null,
     active: true,
     test: test,
-    phase: 'RUNNING',
+    phase: 'ARMING',
     startedAt: Date.now(),
     elapsedMs: 0,
     target: test === 'forward_1m' ? { distanceM: 1.000, yawDeg: 0 } : (test === 'turn_left_90' ? { distanceM: 0, yawDeg: 90.0 } : { distanceM: 0, yawDeg: -90.0 }),
@@ -2782,7 +3397,9 @@ app.post('/api/calibration/auto/start', async (req, res) => {
     fault: null,
     telemetryAgeMs: encSnap.ageMs || 0,
     odomAgeMs: latestRosOdom.odometry_age_ms || 0,
-    armed: true,
+    // armed is not stored here; it is always derived from latestNormalDriveStatus
+    // by broadcastAutoCalibStatus() and the /api/calibration/auto/status endpoint.
+    armed: Boolean(latestNormalDriveStatus?.armed),
     motorCommand: [0, 0, 0, 0],
     safetyChecks: {
       serialConnected: true,
@@ -2815,13 +3432,21 @@ app.post('/api/calibration/auto/clear_result', (req, res) => {
 });
 
 app.get('/api/calibration/auto/status', async (req, res) => {
-  await fetchRosOdometry();
+  if (!autoCalibState.active) {
+    await fetchRosOdometry();
+  }
   const encSnap = getEncoderSnapshot();
+  const now = Date.now();
+  const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+  const isOdomFresh = (lastOdomSuccessTime > 0 && sampleAge < 2000);
+
   autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
-  autoCalibState.odomAgeMs = latestRosOdom.odometry_age_ms || 99999;
+  autoCalibState.odomAgeMs = sampleAge;
   autoCalibState.safetyChecks.serialConnected = (serialPort && serialPort.isOpen) === true;
   autoCalibState.safetyChecks.telemetryValid = encSnap.valid === true;
-  autoCalibState.safetyChecks.odomValid = latestRosOdom.valid === true;
+  autoCalibState.safetyChecks.odomValid = isOdomFresh;
+  // Synchronize armed from the authoritative normal-drive status before responding.
+  autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed);
   res.json({ ok: true, status: autoCalibState });
 });
 
@@ -2958,33 +3583,64 @@ app.get('/api/firmware', (req, res) => {
   }
 });
 
-app.post('/api/drive/arm', (req, res) => {
+function requireOperatorAuth(req, res, next) {
+  const tokenHeader = req.headers['x-rover-operator-token'] || req.query.operator_token;
+  const forwardedIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : '';
+  const rawIp = req.socket ? (req.socket.remoteAddress || '') : '';
+  const clientIp = forwardedIp || rawIp;
+  const isLoopback = (clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1');
+
+  if (isLoopback && !tokenHeader) {
+    return next();
+  }
+
+  if (!tokenHeader) {
+    return res.status(401).json({ ok: false, error: 'Cannot arm rover: Operator token is missing. Enter the operator token and authenticate first.' });
+  }
+
+  const reqBuf = Buffer.from(String(tokenHeader));
+  const expBuf = Buffer.from(String(ROVER_OPERATOR_TOKEN));
+  if (reqBuf.length !== expBuf.length || !crypto.timingSafeEqual(reqBuf, expBuf)) {
+    return res.status(403).json({ ok: false, error: 'Cannot arm rover: Operator token is invalid. Re-enter the token and authenticate.' });
+  }
+
+  next();
+}
+
+app.post('/api/drive/arm', requireOperatorAuth, (req, res) => {
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
   targetAngular = 0.0;
+  latestNormalDriveStatus = { armed: true };
+  // Propagate the updated armed state to calibration-status consumers immediately.
+  broadcastAutoCalibStatus();
+  if (autonomyState.state === 'READY_DISARMED') {
+    autonomyState.state = 'READY_ARMED';
+    console.log('[Autonomy] Rover armed by operator. State set to READY_ARMED.');
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  }
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
     serialPort.write(pkt);
     console.log(`[DEBUG] Sent FUNC_ARM_NORMAL_DRIVE (0x2C) to ESP32.`);
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm] arm command sent` });
-    res.json({ ok: true, message: 'Normal drive arm command sent.' });
-  } else {
-    console.log(`[DEBUG] /api/drive/arm failed: serial port not open.`);
-    res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
+  res.json({ ok: true, message: 'Normal drive arm command sent.' });
 });
 
-app.post('/api/drive/disarm', (req, res) => {
+app.post('/api/drive/disarm', requireOperatorAuth, (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
+  latestNormalDriveStatus = { armed: false };
+  // Propagate the updated armed state to calibration-status consumers immediately.
+  broadcastAutoCalibStatus();
+  resetAutonomyToSafe('Operator disarmed normal drive');
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
     serialPort.write(pkt);
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/disarm] disarm command sent` });
-    res.json({ ok: true, message: 'Normal drive disarm command sent.' });
-  } else {
-    res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
+  res.json({ ok: true, message: 'Normal drive disarm command sent.' });
 });
 
 app.get('/api/status', (req, res) => {
@@ -2993,8 +3649,308 @@ app.get('/api/status', (req, res) => {
     serialConnected: (serialPort && serialPort.isOpen) === true,
     port: COM_PORT,
     lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
-    armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false
+    armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false,
+    autonomyEnabled: autonomyState.enabled,
+    autonomyState: autonomyState.state,
+    cmdSource: cmdSource,
+    loopTiming: latestLoopTiming
   });
+});
+
+// ────────────────────────────────────────────────────────────
+// ROS 2 Autonomy Endpoints (Public Listener 0.0.0.0 Controls)
+// ────────────────────────────────────────────────────────────
+app.post('/api/autonomy/enable', requireOperatorAuth, (req, res) => {
+  if (!isCmdTokenValid) {
+    return res.status(409).json({ ok: false, error: 'Internal command configuration fault: Invalid or missing ROVER_CMD_VEL_TOKEN (must be at least 64 hex characters)' });
+  }
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  if (isArmed) {
+    return res.status(409).json({ ok: false, error: 'Cannot enable autonomy while rover is armed. Disarm first.' });
+  }
+  if (typeof autoCalibState !== 'undefined' && autoCalibState.active) {
+    return res.status(429).json({ ok: false, error: 'Automatic calibration is currently running.' });
+  }
+  if (activeTestInProgress) {
+    return res.status(429).json({ ok: false, error: 'Maintenance test is currently in progress.' });
+  }
+
+  autonomyGeneration++;
+  zeroHandshakeCount = 0;
+  autonomyState.enabled = true;
+  autonomyState.active = false;
+  autonomyState.state = 'WAITING_FOR_ZERO';
+  autonomyState.generation = autonomyGeneration;
+  autonomyState.zeroHandshakeCount = 0;
+  autonomyState.lastCmdTime = 0;
+  autonomyState.rawLinear = 0.0;
+  autonomyState.rawAngular = 0.0;
+  autonomyState.clampedLinear = 0.0;
+  autonomyState.clampedAngular = 0.0;
+  autonomyState.limitedLinear = 0.0;
+  autonomyState.limitedAngular = 0.0;
+  autonomyState.lastRejectionReason = '';
+  cmdSource = 'NONE';
+  sendZeroMotionPacket();
+
+  console.log('[Autonomy] Operator ENABLED ROS 2 command acceptance (WAITING_FOR_ZERO).');
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  res.json({ ok: true, message: 'ROS 2 Autonomy enabled. Waiting for zero handshake.', status: getAutonomyStatusObject() });
+});
+
+app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
+  resetAutonomyToSafe('Disabled by operator');
+  console.log('[Autonomy] Operator DISABLED ROS 2 command acceptance.');
+  res.json({ ok: true, message: 'ROS 2 Autonomy command intake disabled.', status: getAutonomyStatusObject() });
+});
+
+app.get('/api/autonomy/status', (req, res) => {
+  res.json(getAutonomyStatusObject());
+});
+
+// SLAM lifecycle & status endpoints
+app.get('/api/slam/status', async (req, res) => {
+  try {
+    const status = await slamManager.getStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
+});
+
+app.post('/api/slam/start', async (req, res) => {
+  try {
+    const result = await slamManager.startSlam();
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
+});
+
+app.post('/api/slam/stop', async (req, res) => {
+  try {
+    const result = await slamManager.stopSlam();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, state: 'ERROR', error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// ROS 2 Internal Command Listener (127.0.0.1:3003 Isolation)
+// ────────────────────────────────────────────────────────────
+internalCmdApp.use(express.json({ limit: '1kb' }));
+
+internalCmdApp.use((req, res, next) => {
+  const now = Date.now();
+  if (now - reqRateWindowStart > 1000) {
+    reqRateWindowStart = now;
+    reqRateCount = 0;
+  }
+  reqRateCount++;
+  if (reqRateCount > 50) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Request rate limit exceeded (max 50/s)';
+    return res.status(429).json({ ok: false, error: 'Rate limit exceeded' });
+  }
+
+  const tokenHeader = req.headers['x-rover-bridge-token'];
+  if (!tokenHeader) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Missing bridge token';
+    return res.status(401).json({ ok: false, error: 'Missing token' });
+  }
+
+  const reqBuf = Buffer.from(String(tokenHeader));
+  const expBuf = Buffer.from(String(ROVER_CMD_VEL_TOKEN));
+  if (reqBuf.length !== expBuf.length || !crypto.timingSafeEqual(reqBuf, expBuf)) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Invalid bridge token';
+    return res.status(403).json({ ok: false, error: 'Invalid token' });
+  }
+
+  next();
+});
+
+function computeCmdVelDiagnostics(rawLin, rawAng, limLin, limAng) {
+  const sep = 0.197; // Physical wheel separation in meters (7.75 inches)
+  const rad = 0.0325; // Physical wheel radius in meters
+  const leftVelMps = limLin - (limAng * sep / 2.0);
+  const rightVelMps = limLin + (limAng * sep / 2.0);
+  const leftTargetRadps = leftVelMps / rad;
+  const rightTargetRadps = rightVelMps / rad;
+
+  const vx = Math.round(limLin * 1000);
+  const vy = 0;
+  const vz = Math.round(limAng * 1000);
+
+  const payload = [
+    vx & 0xFF, (vx >> 8) & 0xFF,
+    vy & 0xFF, (vy >> 8) & 0xFF,
+    vz & 0xFF, (vz >> 8) & 0xFF
+  ];
+  const hexPayload = payload.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join(' ');
+
+  return {
+    raw: { linear: rawLin, angular: rawAng },
+    limited: { linear: limLin, angular: limAng },
+    wheelTargetsRadps: { left: leftTargetRadps, right: rightTargetRadps },
+    channels: {
+      m1_left_front: leftTargetRadps,
+      m2_right_front: rightTargetRadps,
+      m3_left_rear: leftTargetRadps,
+      m4_right_rear: rightTargetRadps
+    },
+    packet: { vx, vy, vz, hexPayload }
+  };
+}
+
+internalCmdApp.post('/api/cmd_vel', (req, res) => {
+  const now = Date.now();
+  autonomyState.lastBridgeHeartbeat = now;
+
+  if (!autonomyState.enabled || autonomyState.state === 'DISABLED' || autonomyState.state === 'STALE' || autonomyState.state === 'FAULT') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Autonomy is disabled';
+    return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
+  }
+
+  // Check maintenance / calibration active
+  if ((typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Maintenance or calibration mode active';
+    return res.status(429).json({ ok: false, error: 'Maintenance or calibration active' });
+  }
+
+  const body = req.body || {};
+  if (body.generation !== undefined && Number(body.generation) !== autonomyGeneration) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Stale autonomy generation command';
+    return res.status(400).json({ ok: false, error: 'Generation mismatch' });
+  }
+
+  let rawLin = undefined;
+  let rawAng = undefined;
+
+  if (body.linear && typeof body.linear === 'object') {
+    rawLin = body.linear.x;
+    if ((body.linear.y !== undefined && body.linear.y !== null && Math.abs(Number(body.linear.y)) > 1e-4) ||
+        (body.linear.z !== undefined && body.linear.z !== null && Math.abs(Number(body.linear.z)) > 1e-4)) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Unsupported linear axis requested (y or z)';
+      return res.status(400).json({ ok: false, error: 'Unsupported linear axis requested' });
+    }
+  } else if (body.v !== undefined) {
+    rawLin = body.v;
+  }
+
+  if (body.angular && typeof body.angular === 'object') {
+    rawAng = body.angular.z;
+    if ((body.angular.x !== undefined && body.angular.x !== null && Math.abs(Number(body.angular.x)) > 1e-4) ||
+        (body.angular.y !== undefined && body.angular.y !== null && Math.abs(Number(body.angular.y)) > 1e-4)) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Unsupported angular axis requested (x or y)';
+      return res.status(400).json({ ok: false, error: 'Unsupported angular axis requested' });
+    }
+  } else if (body.w !== undefined) {
+    rawAng = body.w;
+  }
+
+  if (rawLin === undefined || rawLin === null || rawAng === undefined || rawAng === null || typeof rawLin === 'boolean' || typeof rawAng === 'boolean') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Missing or invalid velocity payload type';
+    return res.status(400).json({ ok: false, error: 'Missing or invalid velocity payload' });
+  }
+
+  rawLin = Number(rawLin);
+  rawAng = Number(rawAng);
+
+  if (!Number.isFinite(rawLin) || Number.isNaN(rawLin) || !Number.isFinite(rawAng) || Number.isNaN(rawAng)) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Invalid NaN or Infinite velocity value';
+    return res.status(400).json({ ok: false, error: 'Invalid numeric velocity payload' });
+  }
+
+  const isZeroCmd = Math.abs(rawLin) <= 1e-4 && Math.abs(rawAng) <= 1e-4;
+
+  // Handle State Machine
+  if (autonomyState.state === 'WAITING_FOR_ZERO') {
+    if (!isZeroCmd) {
+      zeroHandshakeCount = 0;
+      autonomyState.zeroHandshakeCount = 0;
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Nonzero command received during WAITING_FOR_ZERO handshake';
+      return res.status(400).json({ ok: false, error: 'Waiting for zero handshake' });
+    }
+    zeroHandshakeCount++;
+    autonomyState.zeroHandshakeCount = zeroHandshakeCount;
+    if (zeroHandshakeCount >= 3) {
+      autonomyState.state = 'READY_DISARMED';
+      console.log('[Autonomy] Zero handshake complete (3/3). State set to READY_DISARMED.');
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+    return res.json({ ok: true, state: autonomyState.state, zeroCount: zeroHandshakeCount });
+  }
+
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  if (!isArmed) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Rover is disarmed';
+    return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
+  }
+
+  if (autonomyState.state === 'READY_DISARMED') {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Rover is disarmed';
+    return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
+  }
+
+  // Clamping
+  const maxLin = parseFloat(process.env.AUTONOMY_MAX_LINEAR_MPS) || (floorTesting ? 0.17 : 0.80);
+  const maxAng = parseFloat(process.env.AUTONOMY_MAX_ANGULAR_RADPS) || (floorTesting ? 0.90 : 3.00);
+  const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
+  const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
+
+  if (autonomyState.state === 'READY_ARMED') {
+    if (isZeroCmd) {
+      return res.json({ ok: true, state: 'READY_ARMED', linear: 0.0, angular: 0.0 });
+    }
+    autonomyState.state = 'ACTIVE';
+    autonomyState.active = true;
+    watchdogFired = false;
+    if (cmdSource !== 'ROS_AUTONOMY') {
+      sendZeroMotionPacket();
+      cmdSource = 'ROS_AUTONOMY';
+    }
+    console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  }
+
+  if (cmdSource !== 'ROS_AUTONOMY') {
+    sendZeroMotionPacket();
+    cmdSource = 'ROS_AUTONOMY';
+  }
+
+  autonomyState.rawLinear = rawLin;
+  autonomyState.rawAngular = rawAng;
+  autonomyState.clampedLinear = clampedLin;
+  autonomyState.clampedAngular = clampedAng;
+  autonomyState.lastCmdTime = now;
+  watchdogFired = false;
+
+  targetLinear = clampedLin;
+  targetAngular = clampedAng;
+  startDriveKeepaliveLoop();
+
+  const diag = computeCmdVelDiagnostics(rawLin, rawAng, clampedLin, clampedAng);
+  if (process.env.VERBOSE_LOGGING === 'true') {
+    console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
+  }
+
+  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
 });
 
 app.get('/api/encoders', (req, res) => {
@@ -3009,6 +3965,7 @@ app.get('/api/encoders', (req, res) => {
     timestamp: lastTelemetryReceivedTime || null,
     lastPacketAgeMs,
     sequence: encoderPacketCount,
+    parserStats: telemetryParserStats,
     encoders: {
       m1: currentTicks[0],
       m2: currentTicks[1],
@@ -3018,12 +3975,39 @@ app.get('/api/encoders', (req, res) => {
   });
 });
 
+app.get('/api/imu', (req, res) => {
+  const serialConnected = (serialPort && serialPort.isOpen) === true;
+  const now = Date.now();
+  const ageMs = lastBno3ATimeMs ? (now - lastBno3ATimeMs) : null;
+  const isStale = (ageMs === null || ageMs > 200);
+
+  if (!latestBnoImuState) {
+    return res.json({
+      ok: false,
+      stale: true,
+      serialConnected,
+      parserStats: telemetryParserStats,
+      message: 'No production 0x3A BNO08x IMU telemetry received yet'
+    });
+  }
+
+  res.json({
+    ...latestBnoImuState,
+    serialConnected,
+    dataAgeMs: ageMs,
+    stale: isStale,
+    parserStats: telemetryParserStats
+  });
+});
+
 app.get('/api/drive/status', (req, res) => {
   const statusObj = latestNormalDriveStatus ? { ...latestNormalDriveStatus, cmdSource: cmdSource } : { armed: false, cmdSource: cmdSource };
   res.json({
     ok: true,
     status: statusObj,
     cmdSource: cmdSource,
+    trackWidthM: TRACK_WIDTH,
+    trackWidthSource: trackWidthSource,
     floorTesting,
     backtracking,
     recording,
@@ -3584,7 +4568,7 @@ function updatePathController() {
   }
   
   // Estimate motor power output (PWM magnitude percentage)
-  const L_width = 0.382; // track width (m)
+  const L_width = TRACK_WIDTH; // track width (m)
   const r_wheel = 0.0325; // wheel radius (m)
   const kV_approx = 45.0; // kV parameter approx
   const fwd_breakaway_approx = 45.0; // breakaway PWM approx
@@ -3631,9 +4615,10 @@ function updatePathController() {
     totalPasses: AUTO_CALIB_SPEEDS.length * AUTO_CALIB_PASSES_PER_TIER
   });
 
-  // 6. 1Hz rate console logging for calibration diagnostics
+  // 6. 1Hz rate console logging for calibration diagnostics (when VERBOSE_LOGGING is set)
   const elapsed = Date.now() - calibLegStartTime;
-  if (elapsed % 1000 < 100) { 
+  if (process.env.VERBOSE_LOGGING === 'true' && elapsed - lastAutoCalibLogTime >= 1000) { 
+    lastAutoCalibLogTime = elapsed;
     console.log(`[Auto Calib Debug] State: ${lidarTestState} | X: ${lidarPose.x.toFixed(3)}m, Y: ${lidarPose.y.toFixed(4)}m, Yaw: ${lidarPose.yaw.toFixed(4)}rad | Cmd: V_lin=${targetLinear.toFixed(3)}m/s, W_ang=${targetAngular.toFixed(3)}rad/s | Boost: ${calibSpeedBoost.toFixed(3)}m/s | Integrator: ${lateralErrorSum.toFixed(4)}`);
   }
 }
@@ -4127,11 +5112,28 @@ loadCalibrationDb();
 startMotorKeepaliveLoop();
 initSerial(COM_PORT);
 
-server.listen(PORT, () => {
-  console.log(`Maker ESP32 Pro Cockpit running at http://localhost:${PORT}`);
-  console.log(`Binary protocol on ${COM_PORT} @ ${BAUD_RATE} baud`);
-  console.log(`Motor test: http://localhost:${PORT}/api/motor?m1=50&m2=0&m3=0&m4=0`);
-  console.log(`Stop:       http://localhost:${PORT}/api/stop`);
-  console.log(`Beep:       http://localhost:${PORT}/api/beep`);
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Maker ESP32 Pro Cockpit running at http://localhost:${PORT}`);
+    console.log(`Binary protocol on ${COM_PORT} @ ${BAUD_RATE} baud`);
+    console.log(`Motor test: http://localhost:${PORT}/api/motor?m1=50&m2=0&m3=0&m4=0`);
+    console.log(`Stop:       http://localhost:${PORT}/api/stop`);
+    console.log(`Beep:       http://localhost:${PORT}/api/beep`);
+  });
 
-});
+  internalCmdServer.listen(ROVER_INTERNAL_CMD_PORT, ROVER_INTERNAL_CMD_HOST, () => {
+    console.log(`Internal ROS /cmd_vel listener bound to http://${ROVER_INTERNAL_CMD_HOST}:${ROVER_INTERNAL_CMD_PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  internalCmdApp,
+  internalCmdServer,
+  autonomyState,
+  getAutonomyStatusObject,
+  resetAutonomyToSafe,
+  computeCmdVelDiagnostics,
+  getLatestLoopTiming: () => latestLoopTiming
+};

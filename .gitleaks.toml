@@ -1,0 +1,9 @@
+# Gitleaks configuration file
+title = "gitleaks config"
+
+[allowlist]
+description = "Allow example tokens in test files and template envs"
+paths = [
+    '''ros2/\.env\.example''',
+    '''test_cmd_vel_behavior\.js'''
+]

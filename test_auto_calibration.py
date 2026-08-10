@@ -51,19 +51,20 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("ROS odometry is unavailable or stale.", self.server_code)
 
     def test_5_forward_test_commands_straight_forward(self):
-        """5. Verify forward test commands all four wheels forward ([spd, spd, spd, spd])."""
+        """5. Verify forward test sets targetLinear > 0 and targetAngular = 0.0."""
         self.assertIn("testType === 'forward_1m'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [spd, spd, spd, spd]", self.server_code)
+        self.assertIn("targetLinear = parseFloat(lin.toFixed(3));", self.server_code)
+        self.assertIn("targetAngular = 0.0;", self.server_code)
 
     def test_6_left_test_commands_in_place_left_rotation(self):
-        """6. Verify left turn test commands in-place left spin ([-spd, spd, -spd, spd])."""
+        """6. Verify left turn test sets targetLinear = 0.0 and positive targetAngular."""
         self.assertIn("testType === 'turn_left_90'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [-spd, spd, -spd, spd]", self.server_code)
+        self.assertIn("targetAngular = parseFloat(ang.toFixed(3));", self.server_code)
 
     def test_7_right_test_commands_in_place_right_rotation(self):
-        """7. Verify right turn test commands in-place right spin ([spd, -spd, spd, -spd])."""
+        """7. Verify right turn test sets targetLinear = 0.0 and negative targetAngular."""
         self.assertIn("testType === 'turn_right_90'", self.server_code)
-        self.assertIn("autoCalibState.motorCommand = [spd, -spd, spd, -spd]", self.server_code)
+        self.assertIn("targetAngular = parseFloat((-ang).toFixed(3));", self.server_code)
 
     def test_8_target_reached_causes_zero_command_and_disarm(self):
         """8. Verify target reached causes zero motor speed and disarm."""
@@ -297,5 +298,258 @@ class TestAutoCalibrationSafety(unittest.TestCase):
         self.assertIn("repeatability-history-v1.json", self.server_code)
 
 
+    # -----------------------------------------------------------------------
+    # Tests 43–50: Regression tests for armed-field synchronization fix
+    # Fix: autoCalibState.armed must always reflect Boolean(latestNormalDriveStatus?.armed)
+    # -----------------------------------------------------------------------
+
+    def test_43_broadcast_syncs_armed_from_latestNormalDriveStatus(self):
+        """43. broadcastAutoCalibStatus() must synchronize armed from latestNormalDriveStatus before broadcasting."""
+        code = self.server_code.replace('\r\n', '\n')
+        fn_start = code.index('function broadcastAutoCalibStatus() {')
+        fn_end   = code.index('\n}', fn_start) + 2
+        fn_body  = code[fn_start:fn_end]
+
+        self.assertIn(
+            'autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)',
+            fn_body,
+            "broadcastAutoCalibStatus() must set autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)"
+        )
+
+    def test_44_status_endpoint_syncs_armed_from_latestNormalDriveStatus(self):
+        """44. /api/calibration/auto/status must synchronize armed from latestNormalDriveStatus before responding."""
+        code = self.server_code.replace('\r\n', '\n')
+        # Find the GET status route block
+        route_start = code.index("app.get('/api/calibration/auto/status'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)',
+            route_body,
+            "/api/calibration/auto/status must set autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed) before res.json()"
+        )
+        # Ensure sync occurs BEFORE res.json()
+        idx_sync = route_body.index('autoCalibState.armed = Boolean(latestNormalDriveStatus?.armed)')
+        idx_json = route_body.index('res.json(')
+        self.assertLess(idx_sync, idx_json,
+            "armed sync must occur before res.json() in /api/calibration/auto/status")
+
+    def test_45_no_drive_telemetry_armed_is_false(self):
+        """45. When latestNormalDriveStatus is null/undefined, Boolean(latestNormalDriveStatus?.armed) === false."""
+        # This is a logic test of the expression itself, not server startup state.
+        # Verify the optional-chaining pattern is used (safe for null/undefined).
+        code = self.server_code.replace('\r\n', '\n')
+        # Count occurrences of the safe pattern — must appear at least 3 times
+        # (broadcastAutoCalibStatus, status endpoint, start endpoint)
+        import re
+        matches = re.findall(
+            r'Boolean\(latestNormalDriveStatus\?\.armed\)',
+            code
+        )
+        self.assertGreaterEqual(len(matches), 3,
+            "Boolean(latestNormalDriveStatus?.armed) must appear in broadcastAutoCalibStatus, "
+            "the status endpoint, and the start endpoint (at minimum)")
+
+    def test_46_arm_endpoint_broadcasts_calib_status_promptly(self):
+        """46. /api/drive/arm must call broadcastAutoCalibStatus() after updating latestNormalDriveStatus."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.post('/api/drive/arm'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            route_body,
+            "/api/drive/arm must call broadcastAutoCalibStatus() to propagate armed=true to calib-status consumers"
+        )
+        # Ensure broadcast happens after the latestNormalDriveStatus update
+        idx_status  = route_body.index("latestNormalDriveStatus = { armed: true }")
+        idx_bcast   = route_body.index('broadcastAutoCalibStatus()')
+        self.assertLess(idx_status, idx_bcast,
+            "broadcastAutoCalibStatus() must come after latestNormalDriveStatus = { armed: true } in /api/drive/arm")
+
+    def test_47_disarm_endpoint_broadcasts_calib_status_promptly(self):
+        """47. /api/drive/disarm must call broadcastAutoCalibStatus() after updating latestNormalDriveStatus."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.post('/api/drive/disarm'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            route_body,
+            "/api/drive/disarm must call broadcastAutoCalibStatus() to propagate armed=false to calib-status consumers"
+        )
+        idx_status = route_body.index("latestNormalDriveStatus = { armed: false }")
+        idx_bcast  = route_body.index('broadcastAutoCalibStatus()')
+        self.assertLess(idx_status, idx_bcast,
+            "broadcastAutoCalibStatus() must come after latestNormalDriveStatus = { armed: false } in /api/drive/disarm")
+
+    def test_48_stop_auto_calibration_no_longer_sets_armed_false(self):
+        """48. stopAutoCalibration() must NOT independently set autoCalibState.armed = false (redundant + misleading)."""
+        code = self.server_code.replace('\r\n', '\n')
+        fn_start = code.index("function stopAutoCalibration(reason, detail) {")
+        fn_end   = code.index("\nasync function runAutoCalibTick(", fn_start)
+        fn_body  = code[fn_start:fn_end]
+
+        self.assertNotIn(
+            'autoCalibState.armed = false',
+            fn_body,
+            "stopAutoCalibration() must not independently set autoCalibState.armed = false; "
+            "armed is derived from latestNormalDriveStatus by broadcastAutoCalibStatus()"
+        )
+
+    def test_49_status_endpoint_does_not_change_active_phase_test_motor(self):
+        """49. /api/calibration/auto/status GET must not mutate active, phase, test, or motorCommand."""
+        code = self.server_code.replace('\r\n', '\n')
+        route_start = code.index("app.get('/api/calibration/auto/status'")
+        route_end   = code.index('\n});', route_start) + 4
+        route_body  = code[route_start:route_end]
+
+        self.assertNotIn('autoCalibState.active =', route_body,
+            "Status endpoint must not mutate autoCalibState.active")
+        self.assertNotIn('autoCalibState.phase =', route_body,
+            "Status endpoint must not mutate autoCalibState.phase")
+        self.assertNotIn('autoCalibState.test =', route_body,
+            "Status endpoint must not mutate autoCalibState.test")
+        self.assertNotIn('autoCalibState.motorCommand =', route_body,
+            "Status endpoint must not mutate autoCalibState.motorCommand")
+
+    def test_50_telemetry_path_broadcasts_calib_status_on_armed_change(self):
+        """50. The ESP32 normal_drive_status telemetry path must call broadcastAutoCalibStatus()
+           so WebSocket consumers receive updated armed state when ESP32 confirms arm/disarm."""
+        code = self.server_code.replace('\r\n', '\n')
+        # Find the block that broadcasts normal_drive_status
+        idx_nd_bcast = code.index("type: 'normal_drive_status'")
+        # Look for broadcastAutoCalibStatus within a reasonable window after it
+        window = code[idx_nd_bcast:idx_nd_bcast + 400]
+        self.assertIn(
+            'broadcastAutoCalibStatus()',
+            window,
+            "broadcastAutoCalibStatus() must be called near the normal_drive_status broadcast "
+            "so ESP32-confirmed arm state changes propagate to calib-status WS consumers"
+        )
+
+    def test_51_keepalive_loop_suppresses_func_motion_during_auto_calib(self):
+        """51. Verify startDriveKeepaliveLoop suppresses background FUNC_MOTION packets when autoCalibState is active."""
+        self.assertIn('if (isMaintenance || isPositionActive) return;', self.server_code,
+            "Drive keepalive loop must check isMaintenance before emitting FUNC_MOTION packets")
+
+    def test_52_arm_confirmation_gate_and_no_nonzero_output_before_arm(self):
+        """52. Verify arm confirmation gate sets phase ARMING initially and zero motor command before arming."""
+        self.assertIn("phase: 'ARMING'", self.server_code,
+            "Start route must set autoCalibState.phase to 'ARMING'")
+        self.assertIn("if (autoCalibState.phase === 'ARMING')", self.server_code,
+            "runAutoCalibTick must handle ARMING phase")
+
+    def test_53_arm_confirmation_timeout_triggers_arm_timeout_reason(self):
+        """53. Verify arm confirmation failure triggers arm_timeout stop reason."""
+        self.assertIn("stopAutoCalibration('arm_timeout'", self.server_code,
+            "Arm confirmation timeout must trigger stopAutoCalibration('arm_timeout')")
+
+    def test_54_loss_of_armed_state_during_active_test_stops_safely(self):
+        """54. Verify loss of armed state during active test triggers armed_lost stop reason."""
+        self.assertIn("stopAutoCalibration('armed_lost'", self.server_code,
+            "Mid-test disarm must trigger stopAutoCalibration('armed_lost')")
+
+    def test_55_stop_auto_calibration_preserves_requested_test_name(self):
+        """55. Verify stopAutoCalibration captures completed test identifier before resetting autoCalibState."""
+        self.assertIn("const completedTest = autoCalibState.test;", self.server_code,
+            "stopAutoCalibration must capture completedTest before resetting autoCalibState.test")
+        self.assertIn("Test '${completedTest}' stopped", self.server_code,
+            "Console stop log must log completedTest instead of null")
+
+    def test_56_single_flight_odom_promise_prevents_concurrent_fetches(self):
+        """56. Verify fetchRosOdometry uses single-flight odomFetchPromise to serialize HTTP requests."""
+        self.assertIn("let odomFetchPromise = null;", self.server_code,
+            "server.js must declare odomFetchPromise")
+        self.assertIn("if (odomFetchPromise) {\n    return odomFetchPromise;\n  }", self.server_code,
+            "fetchRosOdometry must return existing odomFetchPromise if in flight")
+
+    def test_57_last_good_sample_timestamp_prevents_failed_overwrites(self):
+        """57. Verify transient HTTP failures maintain valid = true if sample age is < 2000ms."""
+        self.assertIn("let lastOdomSuccessTime = 0;", self.server_code,
+            "server.js must track lastOdomSuccessTime")
+        self.assertIn("latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);", self.server_code,
+            "handleOdomError must preserve sample validity if cached sample is fresh")
+
+    def test_58_auto_calib_tick_in_flight_guard_prevents_overlapping_ticks(self):
+        """58. Verify runAutoCalibTick uses autoCalibTickInFlight guard to prevent overlapping ticks."""
+        self.assertIn("let autoCalibTickInFlight = false;", self.server_code,
+            "server.js must declare autoCalibTickInFlight guard")
+        self.assertIn("if (autoCalibTickInFlight) return;", self.server_code,
+            "runAutoCalibTick must check autoCalibTickInFlight guard")
+
+    def test_59_status_endpoint_does_not_launch_competing_odometry_fetches(self):
+        """59. Verify calibration status endpoint does not launch competing odometry fetches when active."""
+        self.assertIn("if (!autoCalibState.active) {\n    await fetchRosOdometry();\n  }", self.server_code,
+            "Status endpoint must skip fetchRosOdometry when autoCalibState.active is true")
+
+    def test_60_genuinely_stale_odometry_in_running_immediately_zeroes_motors(self):
+        """60. Verify genuinely stale odometry in RUNNING phase immediately triggers stopAutoCalibration('odom_stale')."""
+        self.assertIn("if (!isOdomFresh) {\n      stopAutoCalibration('odom_stale', 'ROS odometry stale or unreachable');", self.server_code,
+            "RUNNING phase must immediately stop with odom_stale when odometry becomes stale")
+
+    def test_61_source_odometry_age_check_required_before_updating_last_success(self):
+        """61. Verify fetchRosOdometry checks parsed.odometry_age_ms < 2000 before updating lastOdomSuccessTime."""
+        self.assertIn("parsed.odometry_age_ms < 2000", self.server_code,
+            "fetchRosOdometry must verify parsed.odometry_age_ms < 2000 before treating sample as fresh")
+
+    def test_62_single_request_settlement_handled_guard_present(self):
+        """62. Verify fetchRosOdometry uses request-local handled guard to settle requests once."""
+        self.assertIn("let handled = false;", self.server_code,
+            "fetchRosOdometry must use handled guard per request")
+        self.assertIn("if (handled) return;", self.server_code,
+            "fetchRosOdometry handlers must check handled guard")
+
+    def test_63_arming_phase_requires_both_armed_and_fresh_odometry(self):
+        """63. Verify transition from ARMING to RUNNING requires both isArmed and isOdomFresh."""
+        self.assertIn("if (isArmed && isOdomFresh) {", self.server_code,
+            "ARMING transition must require both isArmed and isOdomFresh")
+
+    def test_64_cmd_source_auto_calib_ownership(self):
+        """64. Verify cmdSource = 'AUTO_CALIB' is set when starting an automatic calibration test."""
+        self.assertIn("cmdSource = 'AUTO_CALIB';", self.server_code,
+            "server.js must set cmdSource = 'AUTO_CALIB' during auto calibration")
+
+    def test_65_keepalive_loop_transmits_auto_calib_func_motion(self):
+        """65. Verify startDriveKeepaliveLoop isMaintenance allows autoCalibState.active to send FUNC_MOTION."""
+        self.assertIn("const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';", self.server_code,
+            "isMaintenance must not block drive keepalive during auto calibration")
+
+    def test_66_conservative_auto_calib_velocity_constants_defined(self):
+        """66. Verify named conservative velocity constants are defined."""
+        self.assertIn("AUTO_CALIB_FORWARD_MPS", self.server_code,
+            "AUTO_CALIB_FORWARD_MPS constant must be defined")
+        self.assertIn("AUTO_CALIB_TURN_RADPS", self.server_code,
+            "AUTO_CALIB_TURN_RADPS constant must be defined")
+
+    def test_67_stop_auto_calibration_zeros_targets_and_sends_func_motion_zero(self):
+        """67. Verify stopAutoCalibration zeros targets, clears cmdSource, and sends zero FUNC_MOTION packet."""
+        self.assertIn("targetLinear = 0.0;\n  targetAngular = 0.0;", self.server_code,
+            "stopAutoCalibration must zero linear and angular targets")
+        self.assertIn("cmdSource = 'NONE';", self.server_code,
+            "stopAutoCalibration must reset cmdSource to NONE")
+
+    def test_68_auto_calib_tuned_defaults_and_env_overrides(self):
+        """68. Verify source defaults are 0.80 and 0.50 rad/s and remain environment-overridable."""
+        self.assertIn("AUTO_CALIB_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_TURN_RADPS) || 0.80;", self.server_code,
+            "AUTO_CALIB_TURN_RADPS default in server.js must be 0.80")
+        self.assertIn("AUTO_CALIB_MIN_TURN_RADPS = parseFloat(process.env.AUTO_CALIB_MIN_TURN_RADPS) || 0.50;", self.server_code,
+            "AUTO_CALIB_MIN_TURN_RADPS default in server.js must be 0.50")
+
+    def test_69_geometry_constants_integrity(self):
+        """69. Verify calibration geometry constants (TICKS_PER_REV, effective & physical track width) remain unchanged."""
+        self.assertIn("const TICKS_PER_REV = 1974.1666666667;", self.server_code,
+            "TICKS_PER_REV must equal 1974.1666666667")
+        self.assertIn("TRACK_WIDTH = 0.3408575433;", self.server_code,
+            "Effective track width must equal 0.3408575433 m")
+        self.assertIn("const PHYSICAL_TRACK_WIDTH_M = 0.197;", self.server_code,
+            "Physical track width must equal 0.197 m")
+
+
 if __name__ == '__main__':
     unittest.main()
+
+

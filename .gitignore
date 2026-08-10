@@ -21,7 +21,6 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
-deploy_yahboom.py
 
 # Private rover documentation and credentials
 private/
@@ -37,6 +36,50 @@ autotest_report.md
 # Python cache
 __pycache__/
 *.pyc
+
+# Python virtual environments & generated ROS artifacts
+.venv/
+ros2/ros2_ws/build/
+ros2/ros2_ws/install/
+ros2/ros2_ws/log/
+ros2/volumes/
+
+# Test data & logs
+public/autotest_data.*
+public/lidar_test_*
+
+# Diagnostic scratch scripts
+backups/
+delete_old_phase3.py
+diff.patch
+diff_utf8.patch
+experimental.html
+experimental_block.txt
+extract_*.py
+find_unclosed_divs.py
+fix_*.py
+get_server_logs.js
+handle_server_message.js
+inject*.py
+live_app*.js
+live_index*.html
+new_phase3.html
+rebuild_index.py
+refactor_app_js.py
+release_*.tar.gz
+test_auto_calib_ui.js
+test_out*.txt
+test_ws_handler.js
+verify_deployment.py
+yahboom_i2c.py
+configure_imx*.js
+deploy_via_ssh*.js
+run_deploy_transcript.ps1
+*.before_*
+ros2/ros2_ws/core
+ros2/maps/
+serialize_map_service.py
+ros2/ros2_ws/src/rover_bringup/rover_bringup/measure_tf_lag.py
 
 
 

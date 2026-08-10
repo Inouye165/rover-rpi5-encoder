@@ -1,0 +1,106 @@
+{
+  "configById": {
+    "Map!3d_rover_view": {
+      "cameraState": {
+        "perspective": false,
+        "distance": 8,
+        "phi": 0,
+        "thetaOffset": 0,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "focalDistance": 8,
+        "fov": 45,
+        "near": 0.01,
+        "far": 1000
+      },
+      "followMode": "follow-pose",
+      "followFrameId": "base_link",
+      "scene": {
+        "transforms": {
+          "showLabel": false,
+          "enableFrameLabels": false,
+          "axisScale": 0,
+          "size": 0
+        },
+        "labelScaleFactor": 0,
+        "showLegend": false,
+        "legend": {
+          "display": "none",
+          "show": false
+        }
+      },
+      "transforms": {
+        "frame:base_link": {
+          "visible": true,
+          "showLabel": false
+        },
+        "frame:laser_frame": {
+          "visible": false,
+          "showLabel": false
+        },
+        "frame:odom": {
+          "visible": false,
+          "showLabel": false
+        },
+        "frame:map": {
+          "visible": false,
+          "showLabel": false
+        }
+      },
+      "topics": {
+        "/rover_footprint_marker": {
+          "visible": true
+        },
+        "/visualization_marker": {
+          "visible": true
+        },
+        "/footprint": {
+          "visible": true,
+          "color": "#00f2fe",
+          "thickness": 0.02
+        },
+        "/scan": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMap": "turbo",
+          "pointSize": 3.0
+        },
+        "/map": {
+          "visible": true,
+          "alpha": 0.8
+        },
+        "/odom": {
+          "visible": true,
+          "showBranch": false
+        }
+      },
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "size": 10,
+          "divisions": 10,
+          "lineWidth": 1,
+          "color": "#1e293b",
+          "position": [0, 0, 0],
+          "orientation": [0, 0, 0, 1],
+          "frameId": "map"
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/goal_pose",
+        "pointTopic": "/clicked_point"
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": "Map!3d_rover_view"
+  }
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Rover Persistent Health & Crash Recorder Service
+After=network.target docker.service
+Wants=rover-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ron/yahboom-encoder
+ExecStart=/usr/bin/python3 /home/ron/yahboom-encoder/rover_health_recorder.py
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

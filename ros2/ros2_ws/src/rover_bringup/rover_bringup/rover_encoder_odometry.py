@@ -16,10 +16,13 @@ import math
 import os
 import threading
 import time
+from typing import Optional, Tuple, List
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
+from visualization_msgs.msg import Marker, MarkerArray
 import rclpy
 from rclpy.node import Node
 import requests
@@ -70,6 +73,19 @@ class OdomAPIHandler(BaseHTTPRequestHandler):
                     "odometry_age_ms": odom_age_ms,
                     "node_health": health,
                     "consecutive_errors": consec_errs,
+                    "slip_gate_active": bool(getattr(node.kinematics, 'slip_gate_active', False)),
+                    "slip_event_count": int(getattr(node.kinematics, 'slip_event_count', 0)),
+                    "raw_d_left_m": float(getattr(node.kinematics, 'last_raw_d_left_m', 0.0)),
+                    "raw_d_right_m": float(getattr(node.kinematics, 'last_raw_d_right_m', 0.0)),
+                    "wheel_disparity_m": float(getattr(node.kinematics, 'last_wheel_disparity_m', 0.0)),
+                    "d_yaw_wheel_rad": float(getattr(node.kinematics, 'last_d_yaw_wheel_rad', 0.0)),
+                    "external_d_yaw_rad": getattr(node.kinematics, 'last_external_d_yaw_rad', None),
+                    "yaw_disagreement_rad": float(getattr(node.kinematics, 'last_yaw_disagreement_rad', 0.0)),
+                    "imu_yaw_valid": bool(getattr(node.kinematics, 'last_imu_yaw_valid', False)),
+                    "ratio_fallback_used": bool(getattr(node.kinematics, 'last_ratio_fallback_used', False)),
+                    "ungated_d_center_m": float(getattr(node.kinematics, 'last_ungated_d_center_m', 0.0)),
+                    "gated_d_center_m": float(getattr(node.kinematics, 'last_gated_d_center_m', 0.0)),
+                    "slip_reason": str(getattr(node.kinematics, 'last_slip_reason', '')),
                 }
                 body = json.dumps(data).encode('utf-8')
                 self.send_response(200)
@@ -98,7 +114,8 @@ class OdomAPIHandler(BaseHTTPRequestHandler):
 class RoverEncoderOdometry(Node):
     """
     ROS 2 node that polls read-only encoder telemetry from the host Cockpit API,
-    integrates skid-steer odometry, publishes /odom, and broadcasts odom -> base_link TF.
+    integrates skid-steer odometry, subscribes to /imu/data to integrate gyro Z,
+    publishes /odom, and broadcasts odom -> base_link TF.
     """
 
     def __init__(self):
@@ -110,12 +127,14 @@ class RoverEncoderOdometry(Node):
 
         # Parameters
         self.declare_parameter('telemetry_url', default_telemetry_url)
+        self.declare_parameter('imu_topic', '/imu/data')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('wheel_diameter_m', 0.065)
-        self.declare_parameter('track_width_m', 0.382)
-        self.declare_parameter('ticks_per_revolution', 1894.0)
+        self.declare_parameter('track_width_m', 0.3408575433)
+        self.declare_parameter('physical_track_width_m', 0.197)
+        self.declare_parameter('ticks_per_revolution', 1974.1666666667)
         self.declare_parameter('m1_sign', 1.0)
         self.declare_parameter('m2_sign', 1.0)
         self.declare_parameter('m3_sign', 1.0)
@@ -128,6 +147,7 @@ class RoverEncoderOdometry(Node):
 
         # Retrieve parameter values
         self.telemetry_url = self.get_parameter('telemetry_url').get_parameter_value().string_value
+        self.imu_topic = self.get_parameter('imu_topic').get_parameter_value().string_value
         self.odom_frame = self.get_parameter('odom_frame').get_parameter_value().string_value
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.publish_rate_hz = self.get_parameter('publish_rate_hz').get_parameter_value().double_value
@@ -169,7 +189,19 @@ class RoverEncoderOdometry(Node):
 
         # Publishers & TF broadcaster
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.footprint_pub = self.create_publisher(PolygonStamped, '/footprint', 10)
+        self.marker_pub = self.create_publisher(MarkerArray, '/rover_footprint_marker', 10)
+        self.vis_marker_pub = self.create_publisher(MarkerArray, '/visualization_marker', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+
+        # IMU subscription and gyro integration state
+        self._imu_gyro_buffer = []  # List of (timestamp_sec: float, gz_rad_per_sec: float)
+        self._imu_lock = threading.Lock()
+        self._last_imu_recv_time_sec = 0.0
+
+        self.imu_sub = self.create_subscription(
+            Imu, self.imu_topic, self._imu_callback, 10
+        )
 
         # HTTP session setup
         self.http_session = requests.Session()
@@ -187,8 +219,8 @@ class RoverEncoderOdometry(Node):
 
         self.get_logger().info(
             f"rover_encoder_odometry initialized. Polling '{self.telemetry_url}' at {self.publish_rate_hz} Hz. "
-            f"HTTP Odom API serving on port {self.odom_api_port}. "
-            f"Wheel diameter: {wheel_diameter}m, track width: {track_width}m, ticks/rev: {ticks_per_rev} (provisional)."
+            f"Subscribed to IMU topic '{self.imu_topic}'. "
+            f"HTTP Odom API serving on port {self.odom_api_port}."
         )
 
     def _start_http_server(self, port: int):
@@ -200,6 +232,89 @@ class RoverEncoderOdometry(Node):
         except Exception as err:
             self.get_logger().error(f"Failed to start Odom HTTP API server on port {port}: {err}")
 
+    def _imu_callback(self, msg: Imu):
+        """Receive incoming BNO08x 50Hz sensor_msgs/Imu and buffer gyro Z samples."""
+        now_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        gz = msg.angular_velocity.z
+
+        if math.isfinite(now_sec) and math.isfinite(gz):
+            with self._imu_lock:
+                self._last_imu_recv_time_sec = time.time()
+                self._imu_gyro_buffer.append((now_sec, gz))
+
+                # Keep up to 5.0 seconds of gyro data in buffer
+                cutoff = now_sec - 5.0
+                while self._imu_gyro_buffer and self._imu_gyro_buffer[0][0] < cutoff:
+                    self._imu_gyro_buffer.pop(0)
+
+    def _compute_integrated_gyro_yaw(self, t_prev: Optional[float], t_curr: float) -> Optional[float]:
+        """
+        Integrate gyro Z (angular_velocity.z in rad/s) over interval [t_prev, t_curr].
+        Returns float (radians) if valid IMU samples cover [t_prev, t_curr], else None.
+        """
+        if t_prev is None or t_curr is None or t_curr <= t_prev:
+            return None
+
+        now_wall = time.time()
+        with self._imu_lock:
+            # Check staleness: if no IMU msg received in last 0.5s
+            if self._last_imu_recv_time_sec == 0.0 or (now_wall - self._last_imu_recv_time_sec > 0.5):
+                return None
+
+            if len(self._imu_gyro_buffer) < 2:
+                return None
+
+            buf = self._imu_gyro_buffer
+            # If buffer newest is older than t_prev or buffer oldest is newer than t_curr
+            if buf[-1][0] < t_prev or buf[0][0] > t_curr:
+                return None
+
+            # Extract samples within 0.2s padding of the encoder window
+            samples = [s for s in buf if (t_prev - 0.2) <= s[0] <= (t_curr + 0.2)]
+            if len(samples) < 2:
+                return None
+
+            def interp_gz(target_t: float) -> Optional[float]:
+                for t, gz in samples:
+                    if abs(t - target_t) < 1e-9:
+                        return gz
+                for i in range(len(samples) - 1):
+                    t0, g0 = samples[i]
+                    t1, g1 = samples[i + 1]
+                    if t0 <= target_t <= t1:
+                        if t1 == t0:
+                            return g0
+                        ratio = (target_t - t0) / (t1 - t0)
+                        return g0 + ratio * (g1 - g0)
+                if target_t < samples[0][0] and (samples[0][0] - target_t) <= 0.05:
+                    return samples[0][1]
+                if target_t > samples[-1][0] and (target_t - samples[-1][0]) <= 0.05:
+                    return samples[-1][1]
+                return None
+
+            g_start = interp_gz(t_prev)
+            g_end = interp_gz(t_curr)
+            if g_start is None or g_end is None:
+                return None
+
+            pts = [(t_prev, g_start)]
+            for t, gz in samples:
+                if t_prev < t < t_curr:
+                    pts.append((t, gz))
+            pts.append((t_curr, g_end))
+
+            pts.sort(key=lambda x: x[0])
+
+            d_yaw = 0.0
+            for i in range(len(pts) - 1):
+                dt = pts[i + 1][0] - pts[i][0]
+                if dt <= 0:
+                    continue
+                if dt > 0.2:  # Data gap inside interval > 200ms
+                    return None
+                d_yaw += 0.5 * (pts[i][1] + pts[i + 1][1]) * dt
+
+            return d_yaw
 
     def _poll_and_publish(self):
         """Timer callback: poll GET /api/encoders, update kinematics, publish /odom & TF."""
@@ -238,15 +353,26 @@ class RoverEncoderOdometry(Node):
             else:
                 sample_time_sec = timestamp_sec
 
+            # Calculate integrated gyro yaw over [last_fresh_timestamp_sec, sample_time_sec]
+            t_prev = self.kinematics.last_fresh_timestamp_sec
+            external_d_yaw = self._compute_integrated_gyro_yaw(t_prev, sample_time_sec)
+
             # Update kinematics
-            success, msg = self.kinematics.update(ticks, sample_time_sec, sequence)
+            success, msg = self.kinematics.update(ticks, sample_time_sec, sequence, external_d_yaw=external_d_yaw)
             if not success:
                 self._handle_degraded(f"Kinematics update rejected sample: {msg}")
                 return
 
             # Check wheel disagreement warning
             if self.kinematics.disagreement_warning:
-                self.get_logger().warn(f"Wheel encoder disagreement: {self.kinematics.disagreement_details}")
+                self.get_logger().warn(f"Wheel encoder disagreement: {self.kinematics.disagreement_details}", throttle_duration_sec=1.0)
+
+            # Check slip gate active warning
+            if self.kinematics.slip_gate_active:
+                self.get_logger().warn(
+                    f"TRANSLATION SLIP GATE ACTIVE (Event #{self.kinematics.slip_event_count}): {self.kinematics.last_slip_reason}",
+                    throttle_duration_sec=1.0
+                )
 
             self.consecutive_errors = 0
 
@@ -338,6 +464,90 @@ class RoverEncoderOdometry(Node):
         t.transform.rotation.w = float(qw)
 
         self.tf_broadcaster.sendTransform(t)
+
+        # 3. Footprint Polygon Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        footprint_msg = PolygonStamped()
+        footprint_msg.header.stamp = stamp_msg
+        footprint_msg.header.frame_id = self.base_frame
+        half_l = 0.254 / 2.0   # 0.127 m
+        half_w = 0.2286 / 2.0  # 0.1143 m
+        footprint_msg.polygon.points = [
+            Point32(x=half_l, y=half_w, z=0.0),    # Front Left
+            Point32(x=half_l, y=-half_w, z=0.0),   # Front Right
+            Point32(x=-half_l, y=-half_w, z=0.0),  # Rear Right
+            Point32(x=-half_l, y=half_w, z=0.0),   # Rear Left
+        ]
+        self.footprint_pub.publish(footprint_msg)
+
+        # 4. Rover Footprint MarkerArray Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        marker_array = MarkerArray()
+
+        # 4a. Semi-transparent Cyan Body (CUBE)
+        m_body = Marker()
+        m_body.header.stamp = stamp_msg
+        m_body.header.frame_id = self.base_frame
+        m_body.ns = "footprint_body"
+        m_body.id = 0
+        m_body.type = Marker.CUBE
+        m_body.action = Marker.ADD
+        m_body.pose.position.x = 0.0
+        m_body.pose.position.y = 0.0
+        m_body.pose.position.z = 0.0
+        m_body.pose.orientation.w = 1.0
+        m_body.scale.x = 0.254   # 10 inches (length)
+        m_body.scale.y = 0.2286  # 9 inches (width)
+        m_body.scale.z = 0.01    # thin chassis slab
+        m_body.color.r = 0.0
+        m_body.color.g = 0.95
+        m_body.color.b = 1.0
+        m_body.color.a = 0.20    # light semi-transparent cyan fill
+        marker_array.markers.append(m_body)
+
+        # 4b. Thin Cyan Outline (LINE_STRIP)
+        m_outline = Marker()
+        m_outline.header.stamp = stamp_msg
+        m_outline.header.frame_id = self.base_frame
+        m_outline.ns = "footprint_outline"
+        m_outline.id = 1
+        m_outline.type = Marker.LINE_STRIP
+        m_outline.action = Marker.ADD
+        m_outline.scale.x = 0.012  # line thickness
+        m_outline.color.r = 0.0
+        m_outline.color.g = 0.95
+        m_outline.color.b = 1.0
+        m_outline.color.a = 0.90   # bright cyan outline
+        m_outline.points = [
+            Point(x=half_l, y=half_w, z=0.01),
+            Point(x=half_l, y=-half_w, z=0.01),
+            Point(x=-half_l, y=-half_w, z=0.01),
+            Point(x=-half_l, y=half_w, z=0.01),
+            Point(x=half_l, y=half_w, z=0.01),
+        ]
+        marker_array.markers.append(m_outline)
+
+        # 4c. Red Front/Nose Indicator (ARROW)
+        m_nose = Marker()
+        m_nose.header.stamp = stamp_msg
+        m_nose.header.frame_id = self.base_frame
+        m_nose.ns = "footprint_nose"
+        m_nose.id = 2
+        m_nose.type = Marker.ARROW
+        m_nose.action = Marker.ADD
+        m_nose.scale.x = 0.015  # shaft diameter
+        m_nose.scale.y = 0.035  # head diameter
+        m_nose.scale.z = 0.030  # head length
+        m_nose.color.r = 1.0
+        m_nose.color.g = 0.0
+        m_nose.color.b = 0.33
+        m_nose.color.a = 1.0    # solid red
+        m_nose.points = [
+            Point(x=0.04, y=0.0, z=0.015),
+            Point(x=0.15, y=0.0, z=0.015),
+        ]
+        marker_array.markers.append(m_nose)
+
+        self.marker_pub.publish(marker_array)
+        self.vis_marker_pub.publish(marker_array)
 
 
 def main(args=None):

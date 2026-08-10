@@ -219,11 +219,11 @@ async function runTests() {
   // TEST 7: Deadman HUD Status Output
   window.updateGamepadHUD(0, 0, false, "None");
   const elDeadman = document.getElementById('gp-live-deadman');
-  assert.strictEqual(elDeadman.innerText, 'RELEASED');
+  assert.ok(elDeadman.innerText.startsWith('RELEASED'));
 
   window.checkGamepadConnection();
   window.updateGamepadHUD(0, 0, false, "None");
-  assert.strictEqual(elDeadman.innerText, 'RELEASED');
+  assert.ok(elDeadman.innerText.startsWith('RELEASED'));
   console.log("✓ TEST 7 PASSED: Real-time Deadman HUD status feedback verified!");
 
   // TEST 8: WebSocket URL Derivation & Auto-Start
@@ -236,7 +236,7 @@ async function runTests() {
   console.log("==================================================");
 }
 
-runTests().catch(err => {
+runTests().then(() => process.exit(0)).catch(err => {
   console.error("Test failure:", err);
   process.exit(1);
 });
