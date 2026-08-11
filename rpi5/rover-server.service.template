@@ -9,6 +9,7 @@ User={{USER}}
 SupplementaryGroups=dialout
 WorkingDirectory={{WORKING_DIR}}
 EnvironmentFile={{WORKING_DIR}}/.env
+EnvironmentFile=-/etc/rover/rover.env
 ExecStart={{NODE_PATH}} server.js
 Restart=always
 RestartSec=5
