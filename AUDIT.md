@@ -614,6 +614,31 @@ Update default value in `navigation.launch.py` (line 23):
 - **Status**: **PASS / VERIFIED**
 - **Recommendation**: System is verified ready for a **MANUAL localization movement test** (teleop driving while observing AMCL particle cloud convergence and `map -> odom` stability).
 
+---
+
+## TARGETED FIX — FOXGLOVE CLIENT-PUBLISH CAPABILITY
+
+### Audit Metadata
+- **Timestamp:** 2026-08-11 18:48:00 -07:00 (2026-08-12 01:48:00 UTC)
+- **Auditor:** Antigravity AI Coding Assistant (Google DeepMind)
+- **Model:** Gemini 3.6 Flash (High)
+- **Fix Type:** TARGETED CONFIGURATION FIX / FOXGLOVE WEBSOCKET CAPABILITY
+- **Target File:** `ros2/ros2_ws/src/rover_bringup/launch/foundation.launch.py`
+- **Branch:** `main` (Local Workspace) / `main` (RPi5 Host)
+- **Resolution Status:** `FIXED / VERIFIED_AFTER_FIX`
+
+### 1. Configuration Changes
+- **Old Capabilities**: `['connectionGraph', 'assets']`
+- **New Capabilities**: `['clientPublish', 'connectionGraph', 'assets']`
+- **Client Topic Whitelist**: Restricted strictly to `['/initialpose']` (Disallows arbitrary publishing to `/cmd_vel`, `/goal_pose`, or other topics).
+
+### 2. Runtime Verification & Safety Status
+- **`foxglove_bridge` Runtime Parameter**: `capabilities` verified as `['clientPublish', 'connectionGraph', 'assets']`.
+- **Client Whitelist Parameter**: `client_topic_whitelist` verified as `['/initialpose']`.
+- **Operator Interface Impact**: Foxglove Studio connected to `ws://10.0.0.246:8765` exposes the 2D Pose Estimate tool for publishing `/initialpose`.
+- **Safety State**: Disarmed (`armed: false`), Autonomy DISABLED (`autonomyState: DISABLED`), zero motor commands issued.
+
+
 
 
 

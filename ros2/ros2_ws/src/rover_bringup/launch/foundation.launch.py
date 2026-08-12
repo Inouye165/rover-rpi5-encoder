@@ -85,8 +85,9 @@ def generate_launch_description():
             parameters=[{
                 'port': 8765,
                 'address': '0.0.0.0',
-                'capabilities': ['connectionGraph', 'assets'],
+                'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
                 'topic_whitelist': ['.*'],
+                'client_topic_whitelist': ['/initialpose'],
             }],
         ),
     ])
