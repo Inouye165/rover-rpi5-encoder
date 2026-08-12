@@ -465,12 +465,12 @@ class RoverEncoderOdometry(Node):
 
         self.tf_broadcaster.sendTransform(t)
 
-        # 3. Footprint Polygon Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        # 3. Footprint Polygon Message (9 1/8 in x 8 5/8 in = 0.231775m x 0.219075m in base_link frame)
         footprint_msg = PolygonStamped()
         footprint_msg.header.stamp = stamp_msg
         footprint_msg.header.frame_id = self.base_frame
-        half_l = 0.254 / 2.0   # 0.127 m
-        half_w = 0.2286 / 2.0  # 0.1143 m
+        half_l = 0.231775 / 2.0  # 0.1158875 m
+        half_w = 0.219075 / 2.0  # 0.1095375 m
         footprint_msg.polygon.points = [
             Point32(x=half_l, y=half_w, z=0.0),    # Front Left
             Point32(x=half_l, y=-half_w, z=0.0),   # Front Right
@@ -479,7 +479,7 @@ class RoverEncoderOdometry(Node):
         ]
         self.footprint_pub.publish(footprint_msg)
 
-        # 4. Rover Footprint MarkerArray Message (10 in x 9 in = 0.254m x 0.2286m in base_link frame)
+        # 4. Rover Footprint MarkerArray Message (9 1/8 in x 8 5/8 in = 0.231775m x 0.219075m in base_link frame)
         marker_array = MarkerArray()
 
         # 4a. Semi-transparent Cyan Body (CUBE)
@@ -494,8 +494,8 @@ class RoverEncoderOdometry(Node):
         m_body.pose.position.y = 0.0
         m_body.pose.position.z = 0.0
         m_body.pose.orientation.w = 1.0
-        m_body.scale.x = 0.254   # 10 inches (length)
-        m_body.scale.y = 0.2286  # 9 inches (width)
+        m_body.scale.x = 0.231775  # 9 1/8 inches (length)
+        m_body.scale.y = 0.219075  # 8 5/8 inches (width)
         m_body.scale.z = 0.01    # thin chassis slab
         m_body.color.r = 0.0
         m_body.color.g = 0.95
