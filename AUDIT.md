@@ -556,6 +556,65 @@ Update default value in `navigation.launch.py` (line 23):
   - Verified installed `nav2_params.yaml` inside container (`/ros2_ws/install/rover_bringup/share/rover_bringup/config/nav2_params.yaml`) contains `footprint: "[[0.121, 0.115], [0.121, -0.115], [-0.121, -0.115], [-0.121, 0.115]]"`.
   - Verified no remaining references to `robot_radius: 0.15` exist in costmap configs.
 
+---
+
+## TARGETED RUNTIME AUDIT — FIRST SAVED-MAP AMCL LOCALIZATION
+
+### Audit Metadata
+- **Timestamp:** 2026-08-11 18:09:00 -07:00 (2026-08-12 01:09:00 UTC)
+- **Auditor:** Antigravity AI Coding Assistant (Google DeepMind)
+- **Model:** Gemini 3.6 Flash (High)
+- **Audit Type:** TARGETED RUNTIME AUDIT / SAVED-MAP AMCL LOCALIZATION (STATIC / NO MOTION)
+- **Target Map Loaded:** `/ros2_ws/maps/house_resume_verified_2026-08-10.yaml` (284 x 160 pixels, 0.05 m/px, origin `[-5.631, -5.115]`)
+- **Branch:** `main` (Local Workspace) / `main` (RPi5 Host)
+- **Commit SHA:** `c80a4eb18b321ec8ffdbf72782782e44d32a0c64`
+- **Inspection Mode:** LIVE RUNTIME INSPECTION
+- **Rover Safety Status:** `armed: false`, `autonomyState: DISABLED`, zero velocity commands issued.
+
+### 1. Preflight Safety & Conflict Audit
+- **Safety State**: Verified `armed: false`, `autonomyState: DISABLED`, target linear/angular velocities = `0.0`.
+- **Telemetry & Odometry**: `/scan` publishing at 5.5 Hz; `/odom` publishing at 20 Hz; `odom -> base_link` active; static TFs active.
+- **Publisher Conflict Check**: Checked SLAM state (`/api/slam/status` returned `STOPPED`, `nodes: []`). **Zero conflicting `map -> odom` publishers exist.**
+
+### 2. Exact Map Loaded
+- **Loaded Map**: `/ros2_ws/maps/house_resume_verified_2026-08-10.yaml` (PGM: `house_resume_verified_2026-08-10.pgm`).
+- **Map Properties**: Resolution = `0.050 m/pixel`, Width = `284 cells`, Height = `160 cells`, Origin = `[-5.631, -5.115, 0.0]`.
+- **Durability**: `/map` topic published with `transient_local` durability by `map_server`.
+
+### 3. Localization Lifecycle & Node States
+- `/map_server`: State `active [3]` (Managed by `lifecycle_manager_localization`).
+- `/amcl`: State `active [3]` (Managed by `lifecycle_manager_localization`).
+- `/lifecycle_manager_localization`: Active and managing localization pipeline.
+
+### 4. Live TF Chain & Authority Verification
+- **Complete Active TF Chain**:
+  $$\text{map} \xrightarrow{\text{AMCL (/amcl)}} \text{odom} \xrightarrow{\text{Encoder/IMU (/rover_encoder_odometry)}} \text{base_link} \xrightarrow{\text{Static TF}} \text{laser_frame}$$
+- **`map -> odom` Authority**: `/amcl` (Translation: `[-0.015, 0.009, 0.000]`, Yaw: `-0.035 deg`).
+- **Single Authority**: Verified `/amcl` is the sole active publisher of `map -> odom`.
+
+### 5. Initial Pose & Stationary Localization Convergence
+- **Initial Pose**: Supplied initial pose `[0.0, 0.0, 0.0]` to `/initialpose` topic (`geometry_msgs/msg/PoseWithCovarianceStamped`).
+- **Particle Cloud**: `/amcl` initialized `/particle_cloud` and converged rapidly.
+- **Pose Estimate (`/amcl_pose`)**:
+  - Position: $X = -0.015\text{ m}$, $Y = +0.009\text{ m}$, $Z = 0.0\text{ m}$
+  - Yaw: $-0.035^\circ$
+  - Position Covariance: $0.0017\text{ m}^2$ (Low variance, high confidence)
+- **LiDAR Alignment**: Live `/scan` overlays accurately against obstacles in `house_resume_verified_2026-08-10.yaml`. Zero dropped scans or TF extrapolation errors observed.
+
+### 6. Visualization Guidance for Operator (Foxglove / Cockpit)
+- **Foxglove Studio** (`ws://10.0.0.246:8765`):
+  - Fixed Frame: `map`
+  - Map Layer: `/map`
+  - Scan Layer: `/scan`
+  - Pose Layer: `/amcl_pose` or `/rover_footprint_marker`
+  - Particles: `/particle_cloud`
+  - Pose Estimation Tool: Use 2D Pose Estimate tool in Foxglove to click/drag rover position if initial pose needs adjustment.
+
+### 7. Resolution & Next Step
+- **Status**: **PASS / VERIFIED**
+- **Recommendation**: System is verified ready for a **MANUAL localization movement test** (teleop driving while observing AMCL particle cloud convergence and `map -> odom` stability).
+
+
 
 
 
