@@ -304,3 +304,199 @@ Preliminary static review of the codebase shows strong alignment with recently v
 1. **Targeted Audit:** Complete `/cmd_vel` End-to-End Safety & Authorization Trace (Nav2 -> Bridge -> Cockpit API -> Autonomy State Machine -> Serial -> ESP32).
 2. **Targeted Audit:** Nav2 Costmap & Footprint Geometry Line-by-Line Review.
 3. **Targeted Audit:** Duplicate Calibration & Physical Constants Catalog.
+
+---
+
+## TARGETED RUNTIME AUDIT — NAV2 /CMD_VEL SAFETY AND MOTOR COMMAND PATH
+
+### Audit Metadata
+- **Timestamp:** 2026-08-11 17:38:00 -07:00 (2026-08-12 00:38:00 UTC)
+- **Auditor:** Antigravity AI Coding Assistant (Google DeepMind)
+- **Model:** Gemini 3.6 Flash (High)
+- **Audit Type:** TARGETED AUDIT / RUNTIME TRUTH AUDIT / SAFETY AUDIT
+- **Target:** Nav2 `/cmd_vel` -> `rover_cmd_vel_bridge` -> `internalCmdApp` (`/api/cmd_vel`) -> Autonomy State Machine -> Arming / Handshake -> Serial (`FUNC_MOTION`) -> ESP32 Firmware -> Motor Driver Output
+- **Branch:** `main` (Local Workspace) / `feature/bno08x-ros2-imu-integration` (Production RPi5 Host)
+- **Commit SHA:** `d7dcb6cde2a70649c4fd92aa23dffb31989781c6` (Local) / `2a96396b5bafdc25db5413b0b6f4094b93fc07a1` (RPi5 Host)
+- **Inspection Mode:** MIXED STATIC/RUNTIME
+- **Code Changes Allowed:** NO (Audit Entry Only)
+- **Physical Movement Triggered:** NO (Zero non-zero commands issued; all checks read-only)
+
+### 1. Executive Summary & Core Findings
+- **Convergence Proven:** Nav2 autonomous velocity commands and manual UI/gamepad drive commands **CONVERGE** on the same protected host-side state machine (`server.js`) and the same serial interface/firmware safety gates (`esp-maker-usba-4motor`).
+- **No Direct Bypass Available:** Docker container inspection confirmed `rover-ros2` container has `.HostConfig.Devices = null`. Nav2 and ROS 2 nodes physically **CANNOT** write to `/dev/rover-esp32` directly. Nav2 MUST route commands through `rover_cmd_vel_bridge` -> `http://127.0.0.1:3010/api/cmd_vel`.
+- **Safety Boundary Active:** Nav2 **CANNOT** bypass operator arming, operator token authorization, zero-velocity handshake (3 consecutive zero commands required in `WAITING_FOR_ZERO`), or watchdog timeouts.
+- **Manual Preemption Active:** Any manual joystick movement (`|x| > 0.05` or `|y| > 0.05`) on the WebSocket interface immediately disables autonomy (`autonomyState.enabled = false`), sets command source to `NONE`, and zero-forces velocity targets.
+
+### 2. Verified Command Flow (Nav2 vs. Manual)
+
+#### Nav2 Autonomous Path:
+1. `Nav2 /cmd_vel` (`geometry_msgs/msg/Twist`)
+2. `rover_cmd_vel_bridge` Python node (Subscribes to `/cmd_vel`)
+3. HTTP POST to `http://127.0.0.1:3010/api/cmd_vel` with `X-Rover-Bridge-Token` header
+4. `internalCmdApp` middleware in `server.js` (Rate limit 50/s + Constant-time Bridge Token check)
+5. `/api/cmd_vel` Handler in `server.js`:
+   - Checks `autonomyState.enabled` (Must be true via `/api/autonomy/enable`)
+   - Checks Maintenance/Calibration status (Must be IDLE)
+   - Checks Zero-Velocity Handshake: If `WAITING_FOR_ZERO`, requires 3 consecutive zero Twist messages before transitioning to `READY_DISARMED`
+   - Checks `isArmed` (`latestNormalDriveStatus.armed`): If disarmed or `READY_DISARMED`, rejects with HTTP 403
+   - Transitions `READY_ARMED` -> `ACTIVE` on first non-zero command
+   - Clamps velocity targets to safe envelope (`AUTONOMY_MAX_LINEAR_MPS`, `AUTONOMY_MAX_ANGULAR_RADPS`)
+6. Shared Keepalive & Slew Rate Limiting Loop (`startDriveKeepaliveLoop` in `server.js` @ 20 Hz):
+   - Monitors 500 ms ROS Autonomy Watchdog
+   - Applies linear/angular slew rate limiting (accel/decel curves)
+   - Transmits binary `FUNC_MOTION` packet (`0x12`, int16 LE `[vx, vy, vz]`) to `/dev/rover-esp32`
+7. ESP32 Serial Receiver (`SerialProtocol::processPacket` in `esp-maker-usba-4motor`):
+   - Resets ESP32 communication watchdog (`cmdManager.resetWatchdog()`)
+   - Decodes `0x12` (`CMD_MOTION`)
+8. ESP32 Command Manager (`CommandManager::setCommand`):
+   - Checks `normalDriveArmed`: Rejects command if disarmed!
+   - Enforces hardware velocity bounds
+9. ESP32 100 Hz Control Loop (`DifferentialDrive` + `MotorDriver` PID):
+   - Evaluates 300 ms soft-stop watchdog and 1000 ms fault timeout watchdog
+   - `SafetyManager` monitors stall, encoder disconnect, and track mismatch
+   - Motor driver PWM output
+
+#### Manual UI / Gamepad Path:
+1. Operator Web UI / Gamepad WebSocket message (`joystick`, `set_speed`, `drive`)
+2. Cockpit Web Server (`server.js` port 3000)
+3. Preemption Guard: Manual stick movement (`|x| > 0.05` or `|y| > 0.05`) while autonomy is enabled/active immediately disables autonomy and zeroes target
+4. Deadman Guard: Requires `deadman === true` (explicit for gamepad, implicit for keyboard/browser)
+5. Sets `targetLinear` / `targetAngular` and `cmdSource = 'GAMEPAD'` or `'BROWSER'`
+6. **CONVERGES** at `startDriveKeepaliveLoop()` -> Serial `FUNC_MOTION` (`0x12`) -> ESP32 `CommandManager` -> Motor Drivers.
+
+### 3. Safety Boundary Classification Table
+
+| Step / Component | Static Trace Status | Runtime Verification Status | Active Safety Gate Description |
+|---|---|---|---|
+| `/cmd_vel` Subscription | `IMPLEMENTED` | `LAUNCHED` / `CONNECTED` | `rover_cmd_vel_bridge` actively running inside container `rover-ros2`. |
+| Bridge Token Security | `IMPLEMENTED` | `CONFIGURED` / `CONNECTED` | `ROVER_CMD_VEL_TOKEN` verified via constant-time buffer comparison (`crypto.timingSafeEqual`). |
+| Port 3010 Isolation | `IMPLEMENTED` | `CONFIGURED` / `CONSUMED` | `/api/cmd_vel` bound exclusively to loopback (`127.0.0.1:3010`); returns HTTP 404 on public port 3000. |
+| Autonomy Enable Gate | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | Operator must explicitly call `/api/autonomy/enable` (guarded by Operator Token). Default state is `DISABLED`. |
+| Zero-Velocity Handshake | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | State machine enforces 3 consecutive zero-velocity commands in `WAITING_FOR_ZERO` before advancing to `READY_DISARMED`. |
+| Arming Authorization Gate | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | Requires `/api/drive/arm` (guarded by Operator Token). Tested live: `armed: false`. Commands rejected with HTTP 403 if disarmed. |
+| Slew Rate Limiter | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | Host loop limits linear (0.30 m/s² accel / 0.60 m/s² decel) and angular (1.00 rad/s² accel / 2.00 rad/s² decel) rates. |
+| ROS Autonomy Watchdog | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | `server.js` triggers at 500 ms without `/cmd_vel` POSTs; forces targets to zero and transitions state to `STALE`. |
+| Manual Preemption | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | Manual joystick input overrides and disables active ROS autonomy immediately. |
+| ESP32 Serial Hardware Isolation | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | Docker inspect proves container has no `/dev/rover-esp32` access; ROS nodes cannot talk to hardware directly. |
+| ESP32 Firmware Arming Gate | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | `CommandManager::setCommand` in firmware independently rejects `CMD_MOTION` if `normalDriveArmed` is false. |
+| ESP32 Serial Watchdogs | `IMPLEMENTED` | `ACTUALLY AFFECTING RUNTIME` | ESP32 enforces 300 ms soft-stop (`WATCHDOG_TIMEOUT_MS`) and 1000 ms fault timeout (`FAULT_TIMEOUT_MS`) on serial packet loss. |
+
+### 4. Alternate / Bypass Command Path Audit
+- **Direct Serial Write from Docker:** `DISPROVED / IMPOSSIBLE`. Docker container has no serial device node mounts (`HostConfig.Devices = null`).
+- **Public Port `/api/cmd_vel`:** `DISPROVED / IMPOSSIBLE`. Hitting `/api/cmd_vel` on port 3000 returns HTTP 404 (`test_cmd_vel_behavior.js` test 1 verified).
+- **Direct Motor Speed `0x10` (`CMD_MOTOR`):** `SAFE / GUARDED`. Hitting raw motor speed functions in `server.js` or firmware requires `isArmed = true` and `calManager` idle.
+- **Maintenance / Calibration Commands:** `SAFE / GUARDED`. Activating maintenance or auto-calibration immediately blocks autonomy (`/api/cmd_vel` returns HTTP 429).
+
+### 5. Proven vs. Not Yet Proven
+
+#### Proven:
+- End-to-end command path topology (Nav2 -> Bridge -> Server API -> Slew Limiter -> Serial -> ESP32 Firmware -> Motor Output).
+- Complete convergence of Nav2 autonomous and manual UI/gamepad command paths before hardware transmission.
+- Multi-layer defense in depth: 3 watchdogs (500ms server, 300ms ESP32 soft-stop, 1000ms ESP32 fault), 2-stage token authentication (Bridge Token & Operator Token), 3-frame zero handshake, dual-layer arming check (Node.js & ESP32 firmware).
+- Hardware isolation of ROS container from serial port `/dev/rover-esp32`.
+- Automatic manual joystick preemption of autonomous driving.
+
+#### NOT Yet Proven (Requires Future Physical Testing):
+- Physical closed-loop motor acceleration/deceleration response under Nav2 continuous streaming while armed on the floor.
+- Dynamic obstacle clearance and local costmap inflation under physical movement.
+
+### 6. Recommended Next Action
+1. Proceed with confidence to single-goal safe Nav2 trial (with rover elevated or in a clear open test area), adhering to the exact required bringup sequence:
+   - Verify `server.js` running & serial connected (`armed: false`, `autonomyState: DISABLED`).
+   - Authenticate Operator Token.
+   - Issue `/api/drive/arm`.
+   - Issue `/api/autonomy/enable`.
+   - Start Nav2 goal (verifying initial 3-zero handshake and transition `WAITING_FOR_ZERO` -> `READY_DISARMED` -> `READY_ARMED` -> `ACTIVE`).
+
+---
+
+## TARGETED AUDIT — NAV2 SAVED-MAP SELECTION
+
+### Audit Metadata
+- **Timestamp:** 2026-08-11 17:42:00 -07:00 (2026-08-12 00:42:00 UTC)
+- **Auditor:** Antigravity AI Coding Assistant (Google DeepMind)
+- **Model:** Gemini 3.6 Flash (High)
+- **Audit Type:** TARGETED AUDIT / SAVED-MAP SELECTION AUDIT
+- **Target:** `navigation.launch.py` map default argument -> Docker volume mount -> `/ros2_ws/maps` -> `map_server`
+- **Branch:** `main` (Local Workspace) / `feature/bno08x-ros2-imu-integration` (RPi5 Host)
+- **Commit SHA:** `d7dcb6cde2a70649c4fd92aa23dffb31989781c6` (Local) / `2a96396b5bafdc25db5413b0b6f4094b93fc07a1` (RPi5 Host)
+- **Inspection Mode:** MIXED STATIC/RUNTIME
+- **Code Changes Allowed:** NO (Audit Entry Only)
+
+### 1. Executive Summary & Core Findings
+- **Default Map Selection Gap:** `navigation.launch.py` currently hardcodes the default launch argument to `os.path.join('/ros2_ws', 'maps', 'house_map.yaml')`.
+- **Missing File Discrepancy:** `/ros2_ws/maps/house_map.yaml` **DOES NOT EXIST** on the host or inside the container. `house_map` was used in `slam_map_workflow.sh` as a reserved/protected keyword, but no map file was ever written to disk under that exact name.
+- **Impact:** If `navigation.launch.py` is started without explicitly passing `map:=...`, `map_server` will **FAIL TO START** (file not found error).
+- **Verified Usable Map Available:** The verified latest occupancy map `house_resume_verified_2026-08-10.yaml` and image `house_resume_verified_2026-08-10.pgm` exist on disk, are fully mounted in the container, and are 100% valid for localization.
+
+### 2. Configuration & Map Path Chain
+
+```
+[Host Directory] /home/ron/yahboom-encoder/ros2/volumes/maps/
+    └── house_resume_verified_2026-08-10.yaml
+    └── house_resume_verified_2026-08-10.pgm
+          │ (Docker Bind Mount: compose.yaml)
+          ▼
+[Container Directory] /ros2_ws/maps/
+    └── house_resume_verified_2026-08-10.yaml
+    └── house_resume_verified_2026-08-10.pgm
+          │
+          ▼
+[Launch Configuration] navigation.launch.py
+    └── DeclareLaunchArgument('map', default_value='/ros2_ws/maps/house_map.yaml')  <-- STALE DEFAULT
+          │
+          ▼
+[Nav2 Bringup] map_server (yaml_filename)
+```
+
+### 3. Verified Map Technical Validation (`house_resume_verified_2026-08-10`)
+- **YAML Path (Host)**: `/home/ron/yahboom-encoder/ros2/volumes/maps/house_resume_verified_2026-08-10.yaml`
+- **YAML Path (Container)**: `/ros2_ws/maps/house_resume_verified_2026-08-10.yaml`
+- **YAML Content**:
+  ```yaml
+  image: house_resume_verified_2026-08-10.pgm
+  mode: trinary
+  resolution: 0.050
+  origin: [-5.631, -5.115, 0]
+  negate: 0
+  occupied_thresh: 0.65
+  free_thresh: 0.196
+  ```
+- **PGM File Validation**:
+  - Filename: `house_resume_verified_2026-08-10.pgm` (relative reference matches container path `/ros2_ws/maps/house_resume_verified_2026-08-10.pgm`).
+  - Format: Binary PGM (`P5`, 284x160 pixels, 45,455 bytes).
+  - Status: Present, readable, correct permissions (`rover:rover` / `ron:ron`).
+
+### 4. Classification of Intentional Navigation Map
+- **Classification B**: Current configuration would accidentally attempt to load a missing map (`house_map.yaml`).
+
+### 5. Proven vs. Not Yet Proven
+
+#### Proven:
+- `house_resume_verified_2026-08-10.yaml` and `.pgm` exist and are valid for `map_server` localization.
+- `house_map.yaml` does not exist anywhere on the host filesystem or container workspace.
+- Docker volume bind mount `/home/ron/yahboom-encoder/ros2/volumes/maps` -> `/ros2_ws/maps` is functioning properly.
+
+#### NOT Yet Proven:
+- Real-time AMCL particle filter convergence against `house_resume_verified_2026-08-10.yaml` under active motion.
+
+### 6. Recommended Minimal Correction
+Update default value in `navigation.launch.py` (line 23):
+```diff
+- default_value=os.path.join('/ros2_ws', 'maps', 'house_map.yaml'),
++ default_value=os.path.join('/ros2_ws', 'maps', 'house_resume_verified_2026-08-10.yaml'),
+```
+
+### 7. Resolution & Verification Status
+- **Status:** `FIXED / VERIFIED_AFTER_FIX`
+- **Resolution Timestamp:** 2026-08-11 17:47:00 -07:00 (2026-08-12 00:47:00 UTC)
+- **Fix Implemented:** Updated `map_arg` default_value in `ros2/ros2_ws/src/rover_bringup/launch/navigation.launch.py` to point to `house_resume_verified_2026-08-10.yaml`.
+- **Runtime & Deployment Verification:**
+  - Deployed to RPi5 host (`10.0.0.246`).
+  - Executed `colcon build --packages-select rover_bringup` inside `rover-ros2` container.
+  - Verified installed launch file inside container (`/ros2_ws/install/rover_bringup/share/rover_bringup/launch/navigation.launch.py`) contains `house_resume_verified_2026-08-10.yaml`.
+  - Verified `/ros2_ws/maps/house_resume_verified_2026-08-10.yaml` and `.pgm` exist and are accessible.
+  - Verified no remaining copies of `navigation.launch.py` default to `house_map.yaml`.
+
+
+

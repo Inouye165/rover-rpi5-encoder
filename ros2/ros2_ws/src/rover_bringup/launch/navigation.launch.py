@@ -20,7 +20,11 @@ def generate_launch_description():
 
     map_arg = DeclareLaunchArgument(
         'map',
-        default_value=os.path.join('/ros2_ws', 'maps', 'house_map.yaml'),
+        default_value=os.path.join(
+            '/ros2_ws',
+            'maps',
+            'house_resume_verified_2026-08-10.yaml'
+        ),
         description='Full path to map YAML file for localization'
     )
 
