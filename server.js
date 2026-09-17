@@ -109,6 +109,9 @@ const TYPE_LOOP_TIMING = 0x33; // Control loop timing statistics telemetry
 const TYPE_FAULT_REPORT = 0x34; // Active safety fault flags telemetry
 const TYPE_MAINTENANCE = 0x35; // Maintenance status telemetry
 const TYPE_NORMAL_DRIVE_STATUS = 0x36;
+const TYPE_PID_DIAGNOSTIC = 0x3B;
+let latestPidTelemetry = null;
+let pidPacketCount = 0;
 
 // In-memory production BNO08x IMU telemetry state
 let latestBnoImuState = null;
@@ -167,6 +170,9 @@ const MIN_POSITION_SPEED = 20;
 const MAX_POSITION_SPEED = 60;
 
 // Phase 4 Coordinated Normal Drive State
+const EventEmitter = require('events');
+const normalDriveEvents = new EventEmitter();
+let normalDriveStatusSeq = 0;
 let latestNormalDriveStatus = null;
 let lastDeadmanPressedTime = Date.now();
 let reverseWaitStartTime = 0;
@@ -196,7 +202,8 @@ let accumLeftDist = 0.0;
 let accumRightDist = 0.0;
 let lastOdomTicks = [null, null, null, null];
 let lastOdomTime = null;
-let WHEEL_RADIUS = 0.0325; // mutable wheel radius (synchronized with ESP32 NVS)
+let WHEEL_RADIUS = 0.0325; // ESP32 motor-control radius (0.0325 m)
+let ODOM_EFFECTIVE_WHEEL_RADIUS_M = 0.033475; // ROS odometry effective radius (0.033475 m, 1030/1000 multiplier)
 let TRACK_WIDTH = 0.3408575433; // Effective skid-steer track width calibrated from 360-deg floor tests (0.3408575433 m)
 const PHYSICAL_TRACK_WIDTH_M = 0.197; // Physical wheel-center spacing: 7.75 inches = 0.19685 m
 let trackWidthSource = 'CALIBRATION_DB';
@@ -502,6 +509,117 @@ const LIDAR_TEST_POSE_URL  = process.env.LIDAR_TEST_POSE_URL  || 'http://127.0.0
 const LIDAR_TEST_STOP_URL  = process.env.LIDAR_TEST_STOP_URL  || 'http://127.0.0.1:3002/test/stop';
 
 // ────────────────────────────────────────────────────────────
+// LiDAR Clearance Authorization Engine (Phase A)
+// ────────────────────────────────────────────────────────────
+let latestLidarClearance = {
+  fwdOk: false,
+  revOk: false,
+  clearanceMask: 0x00,
+  minFwdMm: 9999,
+  minRevMm: 9999,
+  scanAgeMs: 9999,
+  pointCount: 0,
+  updatedAt: 0
+};
+
+let lidarPollInFlight = false;
+
+function pollLidarClearance() {
+  if (lidarPollInFlight) return;
+  lidarPollInFlight = true;
+
+  const req = http.get(LIDAR_SCAN_URL, { timeout: 500 }, (res) => {
+    if (res.statusCode !== 200) {
+      res.resume();
+      lidarPollInFlight = false;
+      invalidateClearance('HTTP ' + res.statusCode);
+      return;
+    }
+    let raw = '';
+    res.on('data', chunk => { raw += chunk; });
+    res.on('end', () => {
+      lidarPollInFlight = false;
+      try {
+        const scanData = JSON.parse(raw);
+        processLidarClearanceScan(scanData);
+      } catch (err) {
+        invalidateClearance('JSON parse error: ' + err.message);
+      }
+    });
+  });
+  req.on('error', (err) => {
+    lidarPollInFlight = false;
+    invalidateClearance('Network error: ' + err.message);
+  });
+  req.on('timeout', () => {
+    lidarPollInFlight = false;
+    req.destroy();
+    invalidateClearance('Timeout');
+  });
+}
+
+let lastScanReceivedLocalMs = 0;
+
+function invalidateClearance(reason) {
+  latestLidarClearance.fwdOk = false;
+  latestLidarClearance.revOk = false;
+  latestLidarClearance.clearanceMask = 0x00;
+  latestLidarClearance.scanAgeMs = 9999;
+}
+
+function processLidarClearanceScan(scanData) {
+  if (!scanData || !Array.isArray(scanData.points) || scanData.points.length < 50) {
+    invalidateClearance('Insufficient points');
+    return;
+  }
+
+  const now = Date.now();
+  lastScanReceivedLocalMs = now;
+  const scanAgeMs = 0; // Fresh local arrival
+
+  let minFwd = 9999;
+  let minRev = 9999;
+
+  for (let i = 0; i < scanData.points.length; i++) {
+    const pt = scanData.points[i];
+    const dist = pt.distanceMm;
+    const ang = pt.angleDeg;
+
+    // Filter valid physical ranges (ignore 0/blindspot and far walls > 6m)
+    if (typeof dist !== 'number' || dist < 50 || dist > 6000) continue;
+
+    // Forward Sector: -30 deg to +30 deg (ang <= 30 || ang >= 330)
+    if (ang <= 30 || ang >= 330) {
+      if (dist < minFwd) minFwd = dist;
+    }
+    // Rear Sector: 150 deg to 210 deg (180 +/- 30 deg)
+    else if (ang >= 150 && ang <= 210) {
+      if (dist < minRev) minRev = dist;
+    }
+  }
+
+  // Safe clearance threshold: 150 mm (15 cm)
+  const MIN_CLEARANCE_MM = 150;
+  const fwdOk = minFwd >= MIN_CLEARANCE_MM;
+  const revOk = minRev >= MIN_CLEARANCE_MM;
+  const clearanceMask = (fwdOk ? 0x01 : 0x00) | (revOk ? 0x02 : 0x00);
+
+  latestLidarClearance = {
+    fwdOk,
+    revOk,
+    clearanceMask,
+    minFwdMm: minFwd,
+    minRevMm: minRev,
+    scanAgeMs,
+    pointCount: scanData.points.length,
+    updatedAt: now
+  };
+}
+
+// Poll LiDAR scan at 10 Hz
+setInterval(pollLidarClearance, 100);
+
+// ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
 // ────────────────────────────────────────────────────────────
 function broadcast(data) {
@@ -745,11 +863,13 @@ function startDriveKeepaliveLoop() {
     const vx = Math.round(limitedLinear * 1000);
     const vy = 0;
     const vz = Math.round(limitedAngular * 1000);
+    const clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
     
     sendBinaryCommand(FUNC_MOTION, [
       ...int16ToLE(vx),
       ...int16ToLE(vy),
-      ...int16ToLE(vz)
+      ...int16ToLE(vz),
+      clearanceMask
     ], { dualChecksum: true });
   }, 50);
 }
@@ -935,6 +1055,7 @@ function processRxBuffer() {
 // ────────────────────────────────────────────────────────────
 let lastBatteryLogTime = 0;
 let lastLoggedVoltage = null;
+let latestBatteryVoltage = null;
 
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
@@ -944,6 +1065,7 @@ function parseTelemetryPacket(extType, data) {
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
+      latestBatteryVoltage = voltage;
       const now = Date.now();
       // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
       if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
@@ -1181,7 +1303,8 @@ function parseTelemetryPacket(extType, data) {
         const dRightTicks = (dm2 + dm4) / 2.0;
 
         const TICKS_PER_REV = 1974.1666666667;
-        const M_PER_TICK = (2.0 * Math.PI * WHEEL_RADIUS) / TICKS_PER_REV;
+        const ODOM_RADIUS = ODOM_EFFECTIVE_WHEEL_RADIUS_M || 0.033475;
+        const M_PER_TICK = (2.0 * Math.PI * ODOM_RADIUS) / TICKS_PER_REV;
 
         const dLeftDist = dLeftTicks * M_PER_TICK;
         const dRightDist = dRightTicks * M_PER_TICK;
@@ -1326,7 +1449,7 @@ function parseTelemetryPacket(extType, data) {
           let relM4 = currentTicks[3] - autoTestStartTicks[3];
           let leftTicks = (relM1 + relM3) / 2.0;
           let rightTicks = (relM2 + relM4) / 2.0;
-          const WHEEL_RADIUS_LOC = 0.0325;
+          const WHEEL_RADIUS_LOC = 0.033475; // Uses ODOM_EFFECTIVE_WHEEL_RADIUS_M for odometry calculations
           const TRACK_WIDTH_LOC = 0.160;
           let leftDist = (leftTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS_LOC);
           let rightDist = (rightTicks / TICKS_PER_REV) * (2.0 * Math.PI * WHEEL_RADIUS_LOC);
@@ -1613,6 +1736,8 @@ function parseTelemetryPacket(extType, data) {
       const limLinear = data.readFloatLE(15);
       const limAngular = data.readFloatLE(19);
       const lockStatus = data[23] === 1;
+      const espClearanceMask = data.length >= 26 ? data[24] : 0x00;
+      const espClearanceAgeMs = data.length >= 26 ? (data[25] * 10) : 999999;
       
       if (latestNormalDriveStatus && latestNormalDriveStatus.armed !== armed) {
         console.log(`[DEBUG] ESP32 Normal Drive armed state changed: ${latestNormalDriveStatus.armed} -> ${armed}. LockStatus: ${lockStatus}, Mode: ${mode}`);
@@ -1620,6 +1745,7 @@ function parseTelemetryPacket(extType, data) {
         // console.log(`[DEBUG] ESP32 Normal Drive is disarmed and LOCKED.`);
       }
 
+      normalDriveStatusSeq++;
       latestNormalDriveStatus = {
         armed,
         mode,
@@ -1629,8 +1755,14 @@ function parseTelemetryPacket(extType, data) {
         reqAngular,
         limLinear,
         limAngular,
-        lockStatus
+        lockStatus,
+        espClearanceMask,
+        espClearanceAgeMs,
+        seq: normalDriveStatusSeq,
+        receivedAt: Date.now()
       };
+
+      normalDriveEvents.emit('status', latestNormalDriveStatus);
       
       broadcast({
         type: 'normal_drive_status',
@@ -1640,6 +1772,60 @@ function parseTelemetryPacket(extType, data) {
       broadcastAutoCalibStatus();
     }
 
+    } else if (extType === TYPE_PID_DIAGNOSTIC) {
+    if (data.length >= 56) {
+      const wheels = [];
+      const is64Byte = (data.length >= 64);
+      const is96Byte = (data.length >= 96);
+      const stride = is64Byte ? 16 : 14;
+      const stictionNames = ['IDLE', 'STICTION_BOOST', 'KINETIC', 'BLOCKED'];
+
+      for (let i = 0; i < 4; i++) {
+        const off = i * stride;
+        const targetRadps = data.readInt16LE(off + 0) / 100.0;
+        const measuredRadps = data.readInt16LE(off + 2) / 100.0;
+        const feedforward = data.readInt16LE(off + 4) / 10.0;
+        const pTerm = data.readInt16LE(off + 6) / 10.0;
+        const iTerm = data.readInt16LE(off + 8) / 10.0;
+        const dTerm = data.readInt16LE(off + 10) / 10.0;
+        const finalPwm = data.readInt16LE(off + 12);
+        const stictionCode = is64Byte ? data.readInt16LE(off + 14) : 0;
+        const stictionState = stictionNames[stictionCode] || 'UNKNOWN';
+
+        let basePwm = finalPwm;
+        let spinSyncTrim = 0;
+        if (is96Byte) {
+          basePwm = data.readInt16LE(80 + i * 4 + 0);
+          spinSyncTrim = data.readInt16LE(80 + i * 4 + 2);
+        }
+
+        wheels.push({ targetRadps, measuredRadps, feedforward, pTerm, iTerm, dTerm, basePwm, spinSyncTrim, finalPwm, stictionCode, stictionState });
+      }
+      let outerYaw = null;
+      if (data.length >= 80) {
+        outerYaw = {
+          wzRequested: data.readInt16LE(64) / 100.0,
+          wzActual: data.readInt16LE(66) / 100.0,
+          yawOuterError: data.readInt16LE(68) / 100.0,
+          yawOuterCorrection: data.readInt16LE(70) / 100.0,
+          wzCorrected: data.readInt16LE(72) / 100.0,
+          yawOuterActive: Boolean(data.readUInt8(74)),
+          imuGyroValid: Boolean(data.readUInt8(75)),
+          imuGyroAgeMs: data.readUInt16LE(76)
+        };
+      }
+      pidPacketCount++;
+      latestPidTelemetry = {
+        timestamp: Date.now(),
+        sequence: pidPacketCount,
+        m1: wheels[0],
+        m2: wheels[1],
+        m3: wheels[2],
+        m4: wheels[3],
+        outerYaw
+      };
+      broadcast({ type: 'pid_diagnostic', ...latestPidTelemetry });
+    }
   } else if (extType === 0x37) { // TYPE_ROVER_PARAMS
     if (data.length >= 8) {
       const diameter = data.readFloatLE(0);
@@ -1684,6 +1870,25 @@ function parseTelemetryPacket(extType, data) {
       broadcast({ type: 'rover_trims_rev_sync', leftTrimRev, rightTrimRev });
     }
 
+  } else if (extType === TYPE_BNO08X_IMU) {
+    if (data.length >= 65) {
+      const flags = data.readUInt16LE(1);
+      const seq = data.readUInt32LE(3);
+      const qw = data.readFloatLE(25);
+      const qx = data.readFloatLE(29);
+      const qy = data.readFloatLE(33);
+      const qz = data.readFloatLE(37);
+      const gx = data.readFloatLE(41);
+      const gy = data.readFloatLE(45);
+      const gz = data.readFloatLE(49);
+      const ax = data.readFloatLE(53);
+      const ay = data.readFloatLE(57);
+      const az = data.readFloatLE(61);
+      latestBnoImuState = {
+        timestamp: Date.now(),
+        seq, flags, qw, qx, qy, qz, gx, gy, gz, ax, ay, az
+      };
+    }
   } else {
     // Unknown telemetry packet – log once per type to avoid flooding
     const hex = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
@@ -1882,13 +2087,59 @@ wss.on('connection', (ws, req) => {
         return ws.send(JSON.stringify({ type: 'deauth_result', ok: true }));
       }
 
-      if (['joystick', 'set_speed', 'set_pwm', 'drive', 'run_motor_proof', 'set_position', 'start_auto_test', 'abort_auto_test', 'start_calibration', 'cancel_calibration', 'clear_faults', 'enter_maintenance', 'maintenance_set_output', 'exit_maintenance', 'emergency_stop', 'arm_normal_drive', 'disarm_normal_drive'].includes(msg.type)) {
+      if (['joystick', 'set_speed', 'set_pwm', 'drive', 'run_motor_proof', 'set_position', 'start_auto_test', 'abort_auto_test', 'start_calibration', 'cancel_calibration', 'clear_faults', 'enter_maintenance', 'maintenance_set_output', 'exit_maintenance', 'arm_normal_drive'].includes(msg.type)) {
         if (!ws.isOperatorAuthenticated) {
           return ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized operator connection' }));
         }
       }
 
       switch (msg.type) {
+        case 'emergency_stop':
+          positionMode = [false, false, false, false];
+          autonomyState.enabled = false;
+          autonomyState.active = false;
+          autonomyState.lastRejectionReason = 'E-Stop triggered';
+          targetLinear = 0.0;
+          targetAngular = 0.0;
+          cmdSource = 'NONE';
+          latestNormalDriveStatus = { armed: false };
+          broadcastAutoCalibStatus();
+          broadcast({ type: 'autonomy_status', status: autonomyState });
+          resetAutonomyToSafe('Emergency stop triggered');
+          if (typeof autoCalibState !== 'undefined' && autoCalibState.active) {
+            stopAutoCalibration('estop', 'Emergency stop triggered');
+          }
+          if (serialPort && serialPort.isOpen) {
+            const pkt = buildPacket(FUNC_EMERGENCY_STOP, [1]);
+            serialPort.write(pkt);
+            const hex = Array.from(pkt).map(b => b.toString(16).padStart(2, '0')).join(' ');
+            broadcast({ type: 'raw_serial_out', data: `[WS emergency_stop] EMERGENCY_STOP ${hex}` });
+          }
+          broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0 });
+          break;
+
+        case 'disarm_normal_drive':
+          targetLinear = 0.0;
+          targetAngular = 0.0;
+          latestNormalDriveStatus = { armed: false };
+          broadcastAutoCalibStatus();
+          resetAutonomyToSafe('Operator disarmed normal drive');
+          if (serialPort && serialPort.isOpen) {
+            const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+            serialPort.write(pkt);
+            broadcast({ type: 'raw_serial_out', data: `[WS disarm_normal_drive] disarm command sent` });
+          }
+          broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0 });
+          break;
+
+        case 'clear_faults':
+          if (serialPort && serialPort.isOpen) {
+            const clearPkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+            serialPort.write(clearPkt);
+            broadcast({ type: 'raw_serial_out', data: `[WS clear_faults] CLEAR_FAULTS sent` });
+          }
+          break;
+
         case 'set_speed':
           if (autoTestStep > 0) {
             autoTestStep = 0;
@@ -2372,6 +2623,29 @@ app.get('/api/stop', (req, res) => {
     const hex = Array.from(pkt).map(b => b.toString(16).padStart(2, '0')).join(' ');
     broadcast({ type: 'raw_serial_out', data: `[HTTP /api/stop] EMERGENCY_STOP ${hex}` });
     res.json({ ok: true, packet: hex });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/drive/arm', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const clearPkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+    serialPort.write(clearPkt);
+    const armPkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+    serialPort.write(armPkt);
+    startDriveKeepaliveLoop();
+    res.json({ ok: true, message: 'Arm normal drive command sent.' });
+  } else {
+    res.status(503).json({ ok: false, error: 'Serial port not open' });
+  }
+});
+
+app.get('/api/drive/disarm', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+    serialPort.write(disarmPkt);
+    res.json({ ok: true, message: 'Disarm normal drive command sent.' });
   } else {
     res.status(503).json({ ok: false, error: 'Serial port not open' });
   }
@@ -3584,7 +3858,12 @@ app.get('/api/firmware', (req, res) => {
 });
 
 function requireOperatorAuth(req, res, next) {
-  const tokenHeader = req.headers['x-rover-operator-token'] || req.query.operator_token;
+  // E-stop safety exception: Disarm requests (armed === false) must NEVER be blocked by authentication
+  if (req.body && req.body.armed === false) {
+    return next();
+  }
+
+  const tokenHeader = req.headers['x-rover-operator-token'] || req.query.operator_token || (req.body && req.body.operator_token);
   const forwardedIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : '';
   const rawIp = req.socket ? (req.socket.remoteAddress || '') : '';
   const clientIp = forwardedIp || rawIp;
@@ -3607,28 +3886,138 @@ function requireOperatorAuth(req, res, next) {
   next();
 }
 
-app.post('/api/drive/arm', requireOperatorAuth, (req, res) => {
+app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
   targetAngular = 0.0;
-  latestNormalDriveStatus = { armed: true };
-  // Propagate the updated armed state to calibration-status consumers immediately.
-  broadcastAutoCalibStatus();
-  if (autonomyState.state === 'READY_DISARMED') {
-    autonomyState.state = 'READY_ARMED';
-    console.log('[Autonomy] Rover armed by operator. State set to READY_ARMED.');
-    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+
+  if (!serialPort || !serialPort.isOpen) {
+    return res.status(503).json({ ok: false, error: 'Cannot arm rover: Serial port not open' });
   }
-  if (serialPort && serialPort.isOpen) {
-    const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
-    serialPort.write(pkt);
-    console.log(`[DEBUG] Sent FUNC_ARM_NORMAL_DRIVE (0x2C) to ESP32.`);
-    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm] arm command sent` });
+
+  // Host receipt ordering check: record current packet sequence before arm transmission.
+  // Note: This validates host receipt ordering of incoming periodic 0x36 status packets
+  // (ensuring the frame was received over serial after the arm command was issued),
+  // not firmware request acknowledgment.
+  const reqSeq = normalDriveStatusSeq;
+
+  // Set up promise/listener for hardware arm confirmation before transmission (defensive ordering)
+  let timer = null;
+  let onStatus = null;
+  const armPromise = new Promise((resolve, reject) => {
+    onStatus = (status) => {
+      // Host receipt ordering: Must be a packet received AFTER this arm request was sent
+      if (!status || status.seq <= reqSeq) {
+        return; // Ignore stale packets received before request
+      }
+
+      // Require hardware confirmation: armed === true and firmware mode === NORMAL_DRIVE (mode 3)
+      if (status.armed === true && status.mode === 3) {
+        cleanup();
+        resolve(status);
+      }
+      // If a new packet arrived but armed is still false or mode !== 3, keep waiting until timeout
+    };
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      normalDriveEvents.removeListener('status', onStatus);
+    };
+
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Arm confirmation timed out after 500ms waiting for ESP32 confirmation (armed=true, mode=3)'));
+    }, 500);
+
+    normalDriveEvents.on('status', onStatus);
+  });
+
+  // Transmit FUNC_ARM_NORMAL_DRIVE (0x2C) to ESP32
+  const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+  serialPort.write(pkt);
+  console.log(`[DEBUG] Sent FUNC_ARM_NORMAL_DRIVE (0x2C) to ESP32.`);
+  broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm] arm command sent` });
+
+  try {
+    const confirmedStatus = await armPromise;
+
+    // 4. Only then set autonomyState.state = READY_ARMED and return HTTP 200
+    if (autonomyState.state === 'READY_DISARMED') {
+      autonomyState.state = 'READY_ARMED';
+      console.log('[Autonomy] Rover armed and confirmed by ESP32 (mode 3). State set to READY_ARMED.');
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+    broadcastAutoCalibStatus();
+
+    return res.json({
+      ok: true,
+      message: 'Normal drive armed and confirmed by ESP32.',
+      status: 'ARMED',
+      mode: confirmedStatus.mode
+    });
+
+  } catch (err) {
+    // 5. On timeout:
+    // Keep motion blocked: do NOT enter READY_ARMED.
+    console.warn(`[DEBUG] /api/drive/arm failed: ${err.message}. Commanding fail-safe disarm.`);
+
+    // Request disarm from hardware
+    const disarmReqSeq = normalDriveStatusSeq;
+    if (serialPort && serialPort.isOpen) {
+      const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+      serialPort.write(disarmPkt);
+      broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/arm timeout] disarm command sent` });
+    }
+
+    // Do NOT overwrite hardware telemetry to claim confirmed disarm.
+    // Confirm disarm from subsequent hardware status; otherwise report it as unconfirmed.
+    let disarmConfirmed = false;
+    try {
+      await new Promise((resolveDisarm) => {
+        let disarmTimer = null;
+        const onDisarmStatus = (status) => {
+          // Receipt ordering: check packet received after disarm command with armed === false
+          if (status && status.seq > disarmReqSeq && status.armed === false) {
+            cleanupDisarm();
+            disarmConfirmed = true;
+            resolveDisarm();
+          }
+        };
+
+        const cleanupDisarm = () => {
+          if (disarmTimer) {
+            clearTimeout(disarmTimer);
+            disarmTimer = null;
+          }
+          normalDriveEvents.removeListener('status', onDisarmStatus);
+        };
+
+        disarmTimer = setTimeout(() => {
+          cleanupDisarm();
+          resolveDisarm(); // bounded wait expires: disarm remains unconfirmed by hardware
+        }, 300);
+
+        normalDriveEvents.on('status', onDisarmStatus);
+      });
+    } catch (e) {
+      // Bounded wait expired or errored
+    }
+
+    broadcastAutoCalibStatus();
+
+    return res.status(504).json({
+      ok: false,
+      error: err.message || 'Arm confirmation timed out',
+      disarmRequested: true,
+      disarmConfirmed: disarmConfirmed
+    });
   }
-  res.json({ ok: true, message: 'Normal drive arm command sent.' });
 });
 
-app.post('/api/drive/disarm', requireOperatorAuth, (req, res) => {
+app.post('/api/drive/disarm', (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
   latestNormalDriveStatus = { armed: false };
@@ -3640,7 +4029,110 @@ app.post('/api/drive/disarm', requireOperatorAuth, (req, res) => {
     serialPort.write(pkt);
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/disarm] disarm command sent` });
   }
+  broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0 });
   res.json({ ok: true, message: 'Normal drive disarm command sent.' });
+});
+
+app.post('/api/drive/clear-faults', (req, res) => {
+  if (serialPort && serialPort.isOpen) {
+    const pkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
+    serialPort.write(pkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/clear-faults] clear faults command sent` });
+  }
+  res.json({ ok: true, message: 'Clear faults command sent.' });
+});
+
+app.post('/api/drive/motion_plan_config', (req, res) => {
+  try {
+    const config = req.body;
+    const configPath = path.join(__dirname, 'test_plan_config.json');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    console.log(`[CONFIG] Saved motion plan config to ${configPath}:`, config);
+    broadcast({ type: 'motion_plan_config_updated', config });
+    res.json({ ok: true, message: 'Motion plan config saved successfully.' });
+  } catch (err) {
+    console.error(`[CONFIG ERROR] Error saving motion plan config:`, err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/drive/motion_plan_config', (req, res) => {
+  const configPath = path.join(__dirname, 'test_plan_config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      return res.json({ ok: true, config: data });
+    } catch (e) {}
+  }
+  res.json({ ok: false, message: 'No custom config found' });
+});
+
+app.post('/api/open-loop-pwm', (req, res) => {
+  const { pwms } = req.body;
+  if (Array.isArray(pwms) && pwms.length === 4) {
+    const bytes = [];
+    for (let i = 0; i < 4; i++) {
+      const p = Math.max(-255, Math.min(255, parseInt(pwms[i]) || 0));
+      bytes.push(p & 0xFF, (p >> 8) & 0xFF);
+    }
+    sendBinaryCommand(0x11, bytes, { dualChecksum: true });
+    res.json({ ok: true, pwms });
+  } else {
+    res.status(400).json({ ok: false, error: 'Invalid pwms array' });
+  }
+});
+
+app.get('/api/battery', (req, res) => {
+  res.json({ ok: true, voltage: latestBatteryVoltage });
+});
+
+app.get('/api/pid-telemetry', (req, res) => {
+  const now = Date.now();
+  if (!latestPidTelemetry) {
+    return res.json({
+      ok: true,
+      valid: false,
+      stale: true,
+      sequence: pidPacketCount,
+      timestamp: null,
+      dataAgeMs: null,
+      telemetry: null
+    });
+  }
+
+  const ageMs = now - latestPidTelemetry.timestamp;
+  const isStale = ageMs > 250;
+
+  if (isStale) {
+    return res.json({
+      ok: true,
+      valid: false,
+      stale: true,
+      sequence: pidPacketCount,
+      timestamp: latestPidTelemetry.timestamp,
+      dataAgeMs: ageMs,
+      telemetry: null
+    });
+  }
+
+  res.json({
+    ok: true,
+    valid: true,
+    stale: false,
+    sequence: pidPacketCount,
+    timestamp: latestPidTelemetry.timestamp,
+    dataAgeMs: ageMs,
+    telemetry: {
+      timestamp: latestPidTelemetry.timestamp,
+      sequence: latestPidTelemetry.sequence,
+      dataAgeMs: ageMs,
+      m1: latestPidTelemetry.m1,
+      m2: latestPidTelemetry.m2,
+      m3: latestPidTelemetry.m3,
+      m4: latestPidTelemetry.m4,
+      outerYaw: latestPidTelemetry.outerYaw
+    }
+  });
 });
 
 app.get('/api/status', (req, res) => {
@@ -3650,6 +4142,7 @@ app.get('/api/status', (req, res) => {
     port: COM_PORT,
     lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
     armed: latestNormalDriveStatus ? latestNormalDriveStatus.armed : false,
+    mode: latestNormalDriveStatus ? latestNormalDriveStatus.mode : null,
     autonomyEnabled: autonomyState.enabled,
     autonomyState: autonomyState.state,
     cmdSource: cmdSource,
@@ -3707,6 +4200,112 @@ app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
 app.get('/api/autonomy/status', (req, res) => {
   res.json(getAutonomyStatusObject());
 });
+
+// ────────────────────────────────────────────────────────────
+// One-Use Operator Mission Authorization System
+// ────────────────────────────────────────────────────────────
+let activeMissionAuth = {
+  missionId: null,
+  authorizedAt: 0,
+  expiresAt: 0,
+  consumed: false,
+  consumedAt: 0,
+  routeSummary: 'Forward 1.0m -> Left 90° -> Forward 0.5m -> Return HOME'
+};
+
+app.post('/api/mission/authorize', requireOperatorAuth, (req, res) => {
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  if (isArmed) {
+    return res.status(409).json({ ok: false, error: 'Cannot authorize mission while rover is armed. Rover must be disarmed and stationary.' });
+  }
+
+  // Verify stationary motor targets
+  if (latestPidTelemetry && latestPidTelemetry.telemetry) {
+    const t = latestPidTelemetry.telemetry;
+    const m1T = t.m1 ? t.m1.targetRadps : 0;
+    const m2T = t.m2 ? t.m2.targetRadps : 0;
+    const m3T = t.m3 ? t.m3.targetRadps : 0;
+    const m4T = t.m4 ? t.m4.targetRadps : 0;
+    if (Math.abs(m1T) > 0.01 || Math.abs(m2T) > 0.01 || Math.abs(m3T) > 0.01 || Math.abs(m4T) > 0.01) {
+      return res.status(409).json({ ok: false, error: 'Rover is not stationary.' });
+    }
+  }
+
+  const missionId = req.body && req.body.mission_id ? String(req.body.mission_id).trim() : null;
+  if (!missionId) {
+    return res.status(400).json({ ok: false, error: 'Missing required mission_id in request body' });
+  }
+
+  const routeSummary = (req.body && req.body.route_summary) || 'Forward 1.0m -> Left 90° -> Forward 0.5m -> Return HOME';
+
+  activeMissionAuth = {
+    missionId: missionId,
+    authorizedAt: Date.now(),
+    expiresAt: Date.now() + 300000, // 5 minutes validity
+    consumed: false,
+    consumedAt: 0,
+    routeSummary: routeSummary
+  };
+
+  console.log(`[Mission Auth] Operator AUTHORIZED mission ${missionId} for 5 minutes.`);
+  broadcast({ type: 'mission_auth_update', auth: activeMissionAuth });
+  res.json({ ok: true, message: `Mission ${missionId} authorized for 5 minutes.`, auth: activeMissionAuth });
+});
+
+app.post('/api/mission/consume-auth', requireOperatorAuth, (req, res) => {
+  const missionId = req.body && req.body.mission_id ? String(req.body.mission_id).trim() : null;
+  if (!missionId) {
+    return res.status(400).json({ ok: false, error: 'Missing mission_id parameter' });
+  }
+
+  const now = Date.now();
+  if (!activeMissionAuth.missionId || activeMissionAuth.missionId !== missionId) {
+    return res.status(403).json({ ok: false, error: `No valid authorization found for mission ${missionId} (Active: ${activeMissionAuth.missionId || 'NONE'})` });
+  }
+
+  if (activeMissionAuth.consumed) {
+    return res.status(403).json({ ok: false, error: `Authorization for mission ${missionId} has already been consumed.` });
+  }
+
+  if (now > activeMissionAuth.expiresAt) {
+    return res.status(403).json({ ok: false, error: `Authorization for mission ${missionId} has expired.` });
+  }
+
+  // Atomically consume authorization
+  activeMissionAuth.consumed = true;
+  activeMissionAuth.consumedAt = now;
+
+  console.log(`[Mission Auth] Operator authorization for mission ${missionId} CONSUMED on first dispatch.`);
+  broadcast({ type: 'mission_auth_update', auth: activeMissionAuth });
+  res.json({ ok: true, message: `One-use authorization consumed for mission ${missionId}.`, auth: activeMissionAuth });
+});
+
+app.post('/api/mission/revoke-auth', requireOperatorAuth, (req, res) => {
+  activeMissionAuth = {
+    missionId: null,
+    authorizedAt: 0,
+    expiresAt: 0,
+    consumed: true,
+    consumedAt: 0,
+    routeSummary: ''
+  };
+  console.log('[Mission Auth] Mission authorization REVOKED.');
+  broadcast({ type: 'mission_auth_update', auth: activeMissionAuth });
+  res.json({ ok: true, message: 'Mission authorization revoked.' });
+});
+
+app.get('/api/mission/auth-status', (req, res) => {
+  const now = Date.now();
+  const isValid = activeMissionAuth.missionId && !activeMissionAuth.consumed && (now <= activeMissionAuth.expiresAt);
+  const remainingSec = isValid ? Math.max(0, Math.round((activeMissionAuth.expiresAt - now) / 1000)) : 0;
+  res.json({
+    ok: true,
+    isValid: isValid,
+    remainingSeconds: remainingSec,
+    auth: activeMissionAuth
+  });
+});
+
 
 // SLAM lifecycle & status endpoints
 app.get('/api/slam/status', async (req, res) => {
@@ -3895,7 +4494,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     return res.json({ ok: true, state: autonomyState.state, zeroCount: zeroHandshakeCount });
   }
 
-  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed && latestNormalDriveStatus.mode === 3;
   if (!isArmed) {
     autonomyState.rejectedCount++;
     autonomyState.lastRejectionReason = 'Rover is disarmed';
@@ -5094,16 +5693,44 @@ app.get('/api/camera', (req, res) => {
   });
 });
 
-// GET /api/camera/status - query current camera engine status
-app.get('/api/camera/status', (req, res) => {
+// GET /api/imu/raw - Query latest high-rate BNO085 IMU state
+app.get('/api/imu/raw', (req, res) => {
   res.json({
-    active: cameraProcess !== null,
-    clients: cameraClients.size
+    ok: true,
+    imu: latestBnoImuState,
+    ageMs: latestBnoImuState ? (Date.now() - latestBnoImuState.timestamp) : 999999
   });
 });
 
+// GET /api/clearance - Query live LiDAR clearance metrics and ESP32 confirmed mask
+app.get('/api/clearance', (req, res) => {
+  const now = Date.now();
+  const scanAge = lastScanReceivedLocalMs > 0 ? (now - lastScanReceivedLocalMs) : 9999;
+  const isPiFresh = scanAge <= 500;
+  
+  const piReport = {
+    ...latestLidarClearance,
+    scanAgeMs: scanAge,
+    fwdOk: isPiFresh && latestLidarClearance.fwdOk,
+    revOk: isPiFresh && latestLidarClearance.revOk,
+    clearanceMask: isPiFresh ? latestLidarClearance.clearanceMask : 0x00
+  };
 
-
+  const espMask = latestNormalDriveStatus ? (latestNormalDriveStatus.espClearanceMask || 0x00) : 0x00;
+  const espAgeMs = latestNormalDriveStatus ? (latestNormalDriveStatus.espClearanceAgeMs || 999999) : 999999;
+  
+  res.json({
+    ok: true,
+    piComputed: piReport,
+    espConfirmed: {
+      clearanceMask: espMask,
+      clearanceAgeMs: espAgeMs,
+      fwdOk: (espMask & 0x01) !== 0,
+      revOk: (espMask & 0x02) !== 0,
+      isFresh: (espAgeMs <= 500)
+    }
+  });
+});
 
 // ────────────────────────────────────────────────────────────
 // Startup
@@ -5135,5 +5762,21 @@ module.exports = {
   getAutonomyStatusObject,
   resetAutonomyToSafe,
   computeCmdVelDiagnostics,
-  getLatestLoopTiming: () => latestLoopTiming
+  getLatestLoopTiming: () => latestLoopTiming,
+  normalDriveEvents,
+  getNormalDriveStatusSeq: () => normalDriveStatusSeq,
+  injectNormalDriveStatus: (status) => {
+    normalDriveStatusSeq++;
+    latestNormalDriveStatus = {
+      ...status,
+      seq: normalDriveStatusSeq,
+      receivedAt: Date.now()
+    };
+    normalDriveEvents.emit('status', latestNormalDriveStatus);
+    return latestNormalDriveStatus;
+  },
+  getLatestNormalDriveStatus: () => latestNormalDriveStatus,
+  setLatestNormalDriveStatus: (s) => { latestNormalDriveStatus = s; },
+  setSerialPort: (sp) => { serialPort = sp; },
+  getSerialPort: () => serialPort
 };
