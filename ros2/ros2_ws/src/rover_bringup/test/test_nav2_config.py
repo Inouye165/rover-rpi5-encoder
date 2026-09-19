@@ -39,7 +39,7 @@ def test_goal_checker_and_rotatetogoal_tolerances():
     assert fp['RotateToGoal.trans_stopped_velocity'] <= 0.05, \
         f"RotateToGoal.trans_stopped_velocity too high: {fp['RotateToGoal.trans_stopped_velocity']}"
 
-def test_controller_speed_and_progress_checker():
+def test_controller_speed_sampling_and_progress_checker():
     path = find_nav2_params()
     with open(path, 'r', encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
@@ -51,6 +51,10 @@ def test_controller_speed_and_progress_checker():
     assert fp['max_vel_x'] <= 0.15, f"max_vel_x exceeds 0.15: {fp['max_vel_x']}"
     assert fp['max_vel_theta'] <= 0.50, f"max_vel_theta exceeds 0.50: {fp['max_vel_theta']}"
     assert fp['rotate_to_heading_angular_vel'] <= 0.50, f"rotate_to_heading_angular_vel exceeds 0.50: {fp['rotate_to_heading_angular_vel']}"
+
+    # Fine velocity discretization to avoid sub-goal quantization lock
+    assert fp['vx_samples'] >= 10, f"vx_samples ({fp['vx_samples']}) too coarse for micro-approach"
+    assert fp['sim_time'] <= 1.6, f"sim_time ({fp['sim_time']}) too long for terminal approach"
 
     # Progress checker must not prematurely abort micro-maneuvers near the goal
     assert pc['required_movement_radius'] <= 0.15, f"required_movement_radius too strict: {pc['required_movement_radius']}"
