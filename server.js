@@ -100,7 +100,7 @@ const FUNC_SET_DRIVE_CONFIG = 0x2E;
 
 let currentDriveConfig = {
   wheelBalancing: false,
-  dynamicBraking: false,
+  dynamicBraking: true,
   brakeDurationMs: 100,
   maxTriggerSpeed: 0.35
 };
