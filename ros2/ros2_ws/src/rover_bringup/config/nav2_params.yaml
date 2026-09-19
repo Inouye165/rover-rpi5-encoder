@@ -84,9 +84,9 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::PoseProgressChecker"
-      required_movement_radius: 0.2
-      required_movement_angle: 0.35
-      movement_time_allowance: 10.0
+      required_movement_radius: 0.1
+      required_movement_angle: 0.2
+      movement_time_allowance: 15.0
 
     general_goal_checker:
       stateful: True
@@ -144,6 +144,8 @@ controller_server:
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
+      RotateToGoal.xy_goal_tolerance: 0.04
+      RotateToGoal.trans_stopped_velocity: 0.05
 
 planner_server:
   ros__parameters:
