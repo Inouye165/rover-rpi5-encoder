@@ -122,6 +122,39 @@ const TYPE_PID_DIAGNOSTIC = 0x3B;
 let latestPidTelemetry = null;
 let pidPacketCount = 0;
 
+// ESP32 reset reason enumerations
+const ESP_RESET_REASONS = {
+  0: 'UNKNOWN',
+  1: 'POWERON_RESET',
+  2: 'EXT_PIN_RESET',
+  3: 'SW_RESET',
+  4: 'PANIC_RESET',
+  5: 'INT_WDT_RESET',
+  6: 'TASK_WDT_RESET',
+  7: 'WDT_RESET',
+  8: 'DEEPSLEEP_RESET',
+  9: 'BROWNOUT_RESET',
+  10: 'SDIO_RESET'
+};
+
+const RTC_RESET_REASONS = {
+  1: 'POWERON_RESET (0x1)',
+  3: 'SW_RESET (0x3)',
+  4: 'OWDT_RESET (0x4)',
+  5: 'DEEPSLEEP_RESET (0x5)',
+  6: 'SDIO_RESET (0x6)',
+  7: 'TG0WDT_SYS_RESET (0x7)',
+  8: 'TG1WDT_SYS_RESET (0x8)',
+  9: 'RTCWDT_SYS_RESET (0x9)',
+  10: 'INTRUSION_RESET (0xA)',
+  11: 'TGWDT_CPU_RESET (0xB)',
+  12: 'SW_CPU_RESET (0xC)',
+  13: 'RTCWDT_CPU_RESET (0xD)',
+  14: 'EXT_CPU_RESET (0xE)',
+  15: 'RTCWDT_BROWN_OUT_RESET (0xF)',
+  16: 'RTCWDT_RTC_RESET (0x10)'
+};
+
 // In-memory production BNO08x IMU telemetry state
 let latestBnoImuState = null;
 let lastBno3ATimeMs = 0;
@@ -1192,7 +1225,12 @@ function parseTelemetryPacket(extType, data) {
       orientation: { w: qw, x: qx, y: qy, z: qz },
       gyro: { x: gx, y: gy, z: gz },
       accel: { x: ax, y: ay, z: az },
-      quatAccuracyRad
+      quatAccuracyRad,
+      espBootCount: latestNormalDriveStatus ? latestNormalDriveStatus.bootCount : null,
+      espResetReason: latestNormalDriveStatus ? latestNormalDriveStatus.resetReason : null,
+      espResetReasonId: latestNormalDriveStatus ? latestNormalDriveStatus.resetReasonId : null,
+      espRtcResetReason: latestNormalDriveStatus ? latestNormalDriveStatus.rtcResetReason : null,
+      espRtcResetReasonId: latestNormalDriveStatus ? latestNormalDriveStatus.rtcResetReasonId : null
     };
 
     // Broadcast to WebSocket clients with explicit backpressure safety check
@@ -1758,6 +1796,9 @@ function parseTelemetryPacket(extType, data) {
       const lockStatus = data[23] === 1;
       const espClearanceMask = data.length >= 26 ? data[24] : 0x00;
       const espClearanceAgeMs = data.length >= 26 ? (data[25] * 10) : 999999;
+      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : 0;
+      const resetReasonId = data.length >= 31 ? data[30] : 0;
+      const rtcResetReasonId = data.length >= 32 ? data[31] : 0;
       
       if (latestNormalDriveStatus && latestNormalDriveStatus.armed !== armed) {
         console.log(`[DEBUG] ESP32 Normal Drive armed state changed: ${latestNormalDriveStatus.armed} -> ${armed}. LockStatus: ${lockStatus}, Mode: ${mode}`);
@@ -1778,6 +1819,11 @@ function parseTelemetryPacket(extType, data) {
         lockStatus,
         espClearanceMask,
         espClearanceAgeMs,
+        bootCount,
+        resetReasonId,
+        resetReason: ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`,
+        rtcResetReasonId,
+        rtcResetReason: RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`,
         seq: normalDriveStatusSeq,
         receivedAt: Date.now()
       };
@@ -4213,7 +4259,12 @@ app.get('/api/status', (req, res) => {
     autonomyEnabled: autonomyState.enabled,
     autonomyState: autonomyState.state,
     cmdSource: cmdSource,
-    loopTiming: latestLoopTiming
+    loopTiming: latestLoopTiming,
+    bootCount: latestNormalDriveStatus ? latestNormalDriveStatus.bootCount : null,
+    resetReason: latestNormalDriveStatus ? latestNormalDriveStatus.resetReason : null,
+    resetReasonId: latestNormalDriveStatus ? latestNormalDriveStatus.resetReasonId : null,
+    rtcResetReason: latestNormalDriveStatus ? latestNormalDriveStatus.rtcResetReason : null,
+    rtcResetReasonId: latestNormalDriveStatus ? latestNormalDriveStatus.rtcResetReasonId : null
   });
 });
 
