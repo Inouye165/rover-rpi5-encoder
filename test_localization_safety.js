@@ -22,7 +22,8 @@ const internalServer = serverModule.internalCmdServer;
 
 const PUBLIC_PORT = 3820;
 const INTERNAL_PORT = 3830;
-const OPERATOR_TOKEN = 'test_operator_token_12345678901234567890123456789012';
+const OPERATOR_TOKEN = process.env.ROVER_OPERATOR_TOKEN || 'test_operator_token_12345678901234567890123456789012';
+const CMD_TOKEN = process.env.ROVER_CMD_VEL_TOKEN || VALID_TOKEN;
 
 function httpRequest(options, postData) {
   return new Promise((resolve, reject) => {
@@ -103,7 +104,7 @@ async function runTests() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Rover-Bridge-Token': VALID_TOKEN
+          'X-Rover-Bridge-Token': CMD_TOKEN
         }
       }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
       assert.strictEqual(cmdRes.statusCode, 403, 'Forward commands must be rejected with 403');
@@ -147,24 +148,27 @@ async function runTests() {
           'X-Operator-Token': OPERATOR_TOKEN
         }
       }, {});
-      assert.strictEqual(enableRes.statusCode, 200, 'Enabling autonomy must succeed when LOCALIZED');
+      assert.strictEqual(enableRes.statusCode, 200, `Enabling autonomy must succeed when LOCALIZED: ${enableRes.data}`);
       assert.strictEqual(serverModule.autonomyState.state, 'WAITING_FOR_ZERO');
       console.log('  ✓ Autonomy enabled (entered WAITING_FOR_ZERO)');
 
       // Complete zero handshake (3 zero packets)
       for (let i = 0; i < 3; i++) {
-        await httpRequest({
+        const hsRes = await httpRequest({
           hostname: '127.0.0.1',
           port: INTERNAL_PORT,
           path: '/api/cmd_vel',
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Rover-Bridge-Token': VALID_TOKEN
+            'X-Rover-Bridge-Token': CMD_TOKEN
           }
         }, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+        if (hsRes.statusCode !== 200) {
+          console.error(`Handshake #${i+1} failed: HTTP ${hsRes.statusCode}: ${hsRes.data}`);
+        }
       }
-      assert.strictEqual(serverModule.autonomyState.state, 'READY_DISARMED');
+      assert.strictEqual(serverModule.autonomyState.state, 'READY_DISARMED', `Expected READY_DISARMED, got: ${serverModule.autonomyState.state}`);
       console.log('  ✓ Zero velocity handshake complete (READY_DISARMED)');
     }
 
@@ -207,7 +211,7 @@ async function runTests() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Rover-Bridge-Token': VALID_TOKEN
+          'X-Rover-Bridge-Token': CMD_TOKEN
         }
       }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
       assert.strictEqual(cmdRes.statusCode, 403);
