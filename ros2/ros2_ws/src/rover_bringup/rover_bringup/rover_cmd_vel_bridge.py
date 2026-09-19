@@ -97,7 +97,8 @@ class RoverCmdVelBridgeNode(Node):
 
         payload = {
             "linear": {"x": float(lin_x), "y": 0.0, "z": 0.0},
-            "angular": {"x": 0.0, "y": 0.0, "z": float(ang_z)}
+            "angular": {"x": 0.0, "y": 0.0, "z": float(ang_z)},
+            "source": "ROS_AUTONOMY"
         }
 
         try:
@@ -135,7 +136,8 @@ class RoverCmdVelBridgeNode(Node):
         try:
             payload = {
                 "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
-                "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+                "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "source": "ROS_AUTONOMY"
             }
             self.session.post(self.cmd_endpoint, json=payload, timeout=(0.2, 0.5))
             self.get_logger().info("Sent best-effort safe zero command on node shutdown.")

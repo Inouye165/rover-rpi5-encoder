@@ -4032,14 +4032,13 @@ function requireOperatorAuth(req, res, next) {
 }
 
 app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
-  if (autonomyState.enabled || cmdSource === 'ROS_AUTONOMY' || (req.body && req.body.autonomy === true)) {
-    if (!localizationState.localized) {
-      return res.status(409).json({
-        ok: false,
-        error: 'Cannot arm rover for autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
-        localization: localizationState
-      });
-    }
+  const isAutonomyArm = (req.body && req.body.autonomy === true) || (cmdSource === 'ROS_AUTONOMY');
+  if (isAutonomyArm && !localizationState.localized) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot arm rover for autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
+      localization: localizationState
+    });
   }
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
@@ -4359,13 +4358,7 @@ app.post('/api/autonomy/enable', requireOperatorAuth, (req, res) => {
   if (!isCmdTokenValid) {
     return res.status(409).json({ ok: false, error: 'Internal command configuration fault: Invalid or missing ROVER_CMD_VEL_TOKEN (must be at least 64 hex characters)' });
   }
-  if (!localizationState.localized) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Cannot enable autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
-      localization: localizationState
-    });
-  }
+
   const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
   if (isArmed) {
     return res.status(409).json({ ok: false, error: 'Cannot enable autonomy while rover is armed. Disarm first.' });
@@ -4637,31 +4630,8 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const now = Date.now();
   autonomyState.lastBridgeHeartbeat = now;
 
-  if (!autonomyState.enabled || autonomyState.state === 'DISABLED' || autonomyState.state === 'STALE' || autonomyState.state === 'FAULT') {
-    autonomyState.rejectedCount++;
-    autonomyState.lastRejectionReason = 'Autonomy is disabled';
-    return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
-  }
-
-  if (!localizationState.localized) {
-    autonomyState.rejectedCount++;
-    autonomyState.lastRejectionReason = 'Vehicle is NOT LOCALIZED';
-    return res.status(403).json({ ok: false, error: 'Autonomy rejected: Vehicle is NOT LOCALIZED', state: autonomyState.state, localization: localizationState });
-  }
-
-  // Check maintenance / calibration active
-  if ((typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE') {
-    autonomyState.rejectedCount++;
-    autonomyState.lastRejectionReason = 'Maintenance or calibration mode active';
-    return res.status(429).json({ ok: false, error: 'Maintenance or calibration active' });
-  }
-
   const body = req.body || {};
-  if (body.generation !== undefined && Number(body.generation) !== autonomyGeneration) {
-    autonomyState.rejectedCount++;
-    autonomyState.lastRejectionReason = 'Stale autonomy generation command';
-    return res.status(400).json({ ok: false, error: 'Generation mismatch' });
-  }
+  const cmdReqSource = (body.source && typeof body.source === 'string') ? body.source.toUpperCase() : 'ROS_AUTONOMY';
 
   let rawLin = undefined;
   let rawAng = undefined;
@@ -4707,39 +4677,94 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
 
   const isZeroCmd = Math.abs(rawLin) <= 1e-4 && Math.abs(rawAng) <= 1e-4;
 
-  // Handle State Machine
-  if (autonomyState.state === 'WAITING_FOR_ZERO') {
-    if (!isZeroCmd) {
+  // 1. RULE: Zero commands and E-stops must ALWAYS pass regardless of localization or state
+  if (isZeroCmd) {
+    // If waiting for zero handshake, advance state machine
+    if (autonomyState.state === 'WAITING_FOR_ZERO') {
+      zeroHandshakeCount++;
+      autonomyState.zeroHandshakeCount = zeroHandshakeCount;
+      if (zeroHandshakeCount >= 3) {
+        autonomyState.state = 'READY_DISARMED';
+        console.log('[Autonomy] Zero handshake complete (3/3). State set to READY_DISARMED.');
+        broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+      }
+      return res.json({ ok: true, state: autonomyState.state, zeroCount: zeroHandshakeCount, linear: 0.0, angular: 0.0 });
+    }
+
+    // Unconditional safe zeroing for any subsystem / shutdown
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+    autonomyState.rawLinear = 0.0;
+    autonomyState.rawAngular = 0.0;
+    autonomyState.clampedLinear = 0.0;
+    autonomyState.clampedAngular = 0.0;
+    autonomyState.limitedLinear = 0.0;
+    autonomyState.limitedAngular = 0.0;
+    autonomyState.lastCmdTime = now;
+    sendZeroMotionPacket();
+    return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+  }
+
+  // 2. Non-zero command checks:
+  // Command source discrimination: Autonomy-specific gates (enabled check, localization check, generation check, handshake reset) ONLY apply to ROS_AUTONOMY
+  if (cmdReqSource === 'ROS_AUTONOMY') {
+    if (!autonomyState.enabled || autonomyState.state === 'DISABLED' || autonomyState.state === 'STALE' || autonomyState.state === 'FAULT') {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Autonomy is disabled';
+      return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
+    }
+
+    if (!localizationState.localized) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Vehicle is NOT LOCALIZED';
+      return res.status(403).json({
+        ok: false,
+        error: 'Autonomy motion rejected: Vehicle is NOT LOCALIZED',
+        state: autonomyState.state,
+        localization: localizationState
+      });
+    }
+
+    if (body.generation !== undefined && Number(body.generation) !== autonomyGeneration) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Stale autonomy generation command';
+      return res.status(400).json({ ok: false, error: 'Generation mismatch' });
+    }
+
+    if (autonomyState.state === 'WAITING_FOR_ZERO') {
       zeroHandshakeCount = 0;
       autonomyState.zeroHandshakeCount = 0;
       autonomyState.rejectedCount++;
       autonomyState.lastRejectionReason = 'Nonzero command received during WAITING_FOR_ZERO handshake';
       return res.status(400).json({ ok: false, error: 'Waiting for zero handshake' });
     }
-    zeroHandshakeCount++;
-    autonomyState.zeroHandshakeCount = zeroHandshakeCount;
-    if (zeroHandshakeCount >= 3) {
-      autonomyState.state = 'READY_DISARMED';
-      console.log('[Autonomy] Zero handshake complete (3/3). State set to READY_DISARMED.');
-      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  }
+
+  // Check maintenance / calibration active (blocks normal motion unless running calibration test)
+  if ((typeof autoCalibState !== 'undefined' && autoCalibState.active) || activeTestInProgress || lidarTestState !== 'IDLE') {
+    if (cmdReqSource !== 'CALIBRATION_TEST') {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Maintenance or calibration mode active';
+      return res.status(429).json({ ok: false, error: 'Maintenance or calibration active' });
     }
-    return res.json({ ok: true, state: autonomyState.state, zeroCount: zeroHandshakeCount });
   }
 
   const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed && latestNormalDriveStatus.mode === 3;
   if (!isArmed) {
-    autonomyState.rejectedCount++;
     let rejectionReason = 'Rover is disarmed';
     if (latestNormalDriveStatus && latestNormalDriveStatus.mode === 4) {
       rejectionReason = latestFaultFlags ? `Rover in EMERGENCY_STOP (fault=0x${latestFaultFlags.toString(16)})` : 'Rover in EMERGENCY_STOP';
     } else if (latestFaultFlags && latestFaultFlags !== 0) {
       rejectionReason = `Rover has active safety faults (0x${latestFaultFlags.toString(16)})`;
     }
-    autonomyState.lastRejectionReason = rejectionReason;
+    if (cmdReqSource === 'ROS_AUTONOMY') {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = rejectionReason;
+    }
     return res.status(403).json({ ok: false, error: rejectionReason, faultFlags: latestFaultFlags || 0, mode: latestNormalDriveStatus ? latestNormalDriveStatus.mode : null });
   }
 
-  if (autonomyState.state === 'READY_DISARMED') {
+  if (cmdReqSource === 'ROS_AUTONOMY' && autonomyState.state === 'READY_DISARMED') {
     autonomyState.rejectedCount++;
     autonomyState.lastRejectionReason = 'Rover is disarmed';
     return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
@@ -4751,24 +4776,23 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
   const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
 
-  if (autonomyState.state === 'READY_ARMED') {
-    if (isZeroCmd) {
-      return res.json({ ok: true, state: 'READY_ARMED', linear: 0.0, angular: 0.0 });
+  if (cmdReqSource === 'ROS_AUTONOMY') {
+    if (autonomyState.state === 'READY_ARMED') {
+      autonomyState.state = 'ACTIVE';
+      autonomyState.active = true;
+      watchdogFired = false;
+      if (cmdSource !== 'ROS_AUTONOMY') {
+        sendZeroMotionPacket();
+        cmdSource = 'ROS_AUTONOMY';
+      }
+      console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
-    autonomyState.state = 'ACTIVE';
-    autonomyState.active = true;
-    watchdogFired = false;
-    if (cmdSource !== 'ROS_AUTONOMY') {
-      sendZeroMotionPacket();
-      cmdSource = 'ROS_AUTONOMY';
-    }
-    console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
-    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
   }
 
-  if (cmdSource !== 'ROS_AUTONOMY') {
+  if (cmdSource !== cmdReqSource) {
     sendZeroMotionPacket();
-    cmdSource = 'ROS_AUTONOMY';
+    cmdSource = cmdReqSource;
   }
 
   // Low-speed stop zero-bypass: bypass slew ramp when stopping from creep

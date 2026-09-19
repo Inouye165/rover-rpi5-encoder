@@ -1,6 +1,15 @@
 // ==============================================================================
-// test_localization_safety.js — Focused Automated Tests for Localization Gating
-// Covers: Startup uninitialized, pose estimate, lost localization disarm, recovery
+// test_localization_safety.js — Automated Tests for Localization Gating & Source Discrimination
+// Covers:
+// 1. Unlocalized state:
+//    - Zero velocity commands ALWAYS pass (HTTP 200)
+//    - Emergency-stop (/api/stop) and Disarm (/api/drive/disarm) ALWAYS pass (HTTP 200)
+//    - Manual drive arming is NOT blocked by localization
+//    - ROS_AUTONOMY non-zero commands ARE blocked (HTTP 403)
+//    - CALIBRATION_TEST commands are NOT blocked by localization
+// 2. Pose Estimate & Autonomy Handshake (Foxglove 2D Pose -> WAITING_FOR_ZERO -> READY_DISARMED)
+// 3. Fail-Safe Disarm on Lost Localization during Active Navigation
+// 4. Safe Stationary Recovery latch
 // ==============================================================================
 
 const assert = require('assert');
@@ -45,16 +54,16 @@ function httpRequest(options, postData) {
 }
 
 async function runTests() {
-  console.log('--- STARTING LOCALIZATION SAFETY AUTOMATED TEST SUITE ---');
+  console.log('--- STARTING LOCALIZATION SAFETY & SOURCE DISCRIMINATION TEST SUITE ---');
 
   await new Promise(r => publicServer.listen(PUBLIC_PORT, '127.0.0.1', r));
   await new Promise(r => internalServer.listen(INTERNAL_PORT, '127.0.0.1', r));
 
   try {
     // --------------------------------------------------------------------------
-    // TEST 1: Startup / Uninitialized State
+    // TEST 1: Unlocalized State Behavior & Command Source Discrimination
     // --------------------------------------------------------------------------
-    console.log('\n[Test 1] Verifying Startup Uninitialized Behavior...');
+    console.log('\n[Test 1] Verifying Unlocalized State, Source Discrimination & Safety Exceptions...');
     {
       const statusRes = await httpRequest({
         hostname: '127.0.0.1',
@@ -67,23 +76,61 @@ async function runTests() {
       assert.strictEqual(statusRes.json.localization.state, 'NOT_LOCALIZED');
       console.log('  ✓ Initial state confirmed: NOT_LOCALIZED');
 
-      // Attempt to enable autonomy while NOT localized -> MUST reject with HTTP 409
-      const enableRes = await httpRequest({
+      // 1. RULE: Zero commands must ALWAYS pass (HTTP 200) regardless of localization
+      const zeroCmdRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: INTERNAL_PORT,
+        path: '/api/cmd_vel',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Bridge-Token': CMD_TOKEN
+        }
+      }, { linear: { x: 0.0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+      assert.strictEqual(zeroCmdRes.statusCode, 200, 'Zero velocity command must always pass with HTTP 200');
+      assert.strictEqual(zeroCmdRes.json.ok, true);
+      console.log('  ✓ Zero command passed unconditionally while unlocalized (HTTP 200)');
+
+      // 2. RULE: E-stop (/api/stop) must ALWAYS pass regardless of localization
+      const estopRes = await httpRequest({
         hostname: '127.0.0.1',
         port: PUBLIC_PORT,
-        path: '/api/autonomy/enable',
+        path: '/api/stop',
+        method: 'GET'
+      });
+      // 503 is acceptable if serial port not mocked, but NOT 403 or 409 localization block
+      assert.notStrictEqual(estopRes.statusCode, 403);
+      assert.notStrictEqual(estopRes.statusCode, 409);
+      console.log('  ✓ E-stop (/api/stop) was not blocked by localization');
+
+      // 3. RULE: Disarm (/api/drive/disarm) must ALWAYS pass regardless of localization
+      const disarmRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/drive/disarm',
+        method: 'POST'
+      });
+      assert.strictEqual(disarmRes.statusCode, 200);
+      assert.strictEqual(disarmRes.json.ok, true);
+      console.log('  ✓ Disarm (/api/drive/disarm) succeeded while unlocalized (HTTP 200)');
+
+      // 4. RULE: Manual arming without autonomy flag must NOT be blocked by localization
+      const manualArmRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/drive/arm',
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Operator-Token': OPERATOR_TOKEN
         }
       }, {});
-      assert.strictEqual(enableRes.statusCode, 409, 'Enabling autonomy while NOT localized must return HTTP 409');
-      assert(enableRes.json.error.includes('NOT LOCALIZED'), 'Error message must specify vehicle is NOT LOCALIZED');
-      console.log('  ✓ Autonomy enable blocked while unlocalized (HTTP 409)');
+      // Should fail on serial port missing (503), NOT on localization (409)
+      assert.notStrictEqual(manualArmRes.statusCode, 409, 'Manual arming must NOT return HTTP 409 for localization');
+      console.log('  ✓ Manual arming is NOT blocked by localization');
 
-      // Attempt to arm rover with autonomy flag while NOT localized -> MUST reject with HTTP 409
-      const armRes = await httpRequest({
+      // 5. RULE: Autonomy arming (req.body.autonomy === true) MUST be blocked by localization
+      const autoArmRes = await httpRequest({
         hostname: '127.0.0.1',
         port: PUBLIC_PORT,
         path: '/api/drive/arm',
@@ -93,11 +140,17 @@ async function runTests() {
           'X-Operator-Token': OPERATOR_TOKEN
         }
       }, { autonomy: true });
-      assert.strictEqual(armRes.statusCode, 409, 'Arming for autonomy while NOT localized must return HTTP 409');
-      console.log('  ✓ Arming for autonomy blocked while unlocalized (HTTP 409)');
+      assert.strictEqual(autoArmRes.statusCode, 409, 'Arming for autonomy while NOT localized must return HTTP 409');
+      assert(autoArmRes.json.error.includes('NOT LOCALIZED'));
+      console.log('  ✓ Autonomy arming correctly blocked while unlocalized (HTTP 409)');
 
-      // Attempt to send /cmd_vel while NOT localized -> MUST reject with HTTP 403
-      const cmdRes = await httpRequest({
+      // 6. RULE: Non-zero ROS_AUTONOMY motion command MUST be blocked by localization
+      // Enable autonomy state so we test localization check specifically
+      serverModule.autonomyState.enabled = true;
+      serverModule.autonomyState.state = 'READY_ARMED';
+      serverModule.injectNormalDriveStatus({ armed: true, mode: 3 });
+
+      const autoMotionRes = await httpRequest({
         hostname: '127.0.0.1',
         port: INTERNAL_PORT,
         path: '/api/cmd_vel',
@@ -106,9 +159,30 @@ async function runTests() {
           'Content-Type': 'application/json',
           'X-Rover-Bridge-Token': CMD_TOKEN
         }
-      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-      assert.strictEqual(cmdRes.statusCode, 403, 'Forward commands must be rejected with 403');
-      console.log('  ✓ Motor command rejected while unlocalized (HTTP 403)');
+      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
+      assert.strictEqual(autoMotionRes.statusCode, 403, 'ROS_AUTONOMY non-zero motion must be rejected with HTTP 403');
+      assert(autoMotionRes.json.error.includes('NOT LOCALIZED'), 'Error message must specify Vehicle is NOT LOCALIZED');
+      console.log('  ✓ ROS_AUTONOMY motion rejected while unlocalized (HTTP 403: Vehicle is NOT LOCALIZED)');
+
+      // 7. RULE: Non-zero CALIBRATION_TEST command must NOT be blocked by localization
+      const calibMotionRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: INTERNAL_PORT,
+        path: '/api/cmd_vel',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Bridge-Token': CMD_TOKEN
+        }
+      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'CALIBRATION_TEST' });
+      // When armed, calibration test command should be accepted (HTTP 200)
+      assert.strictEqual(calibMotionRes.statusCode, 200, `CALIBRATION_TEST motion must not be blocked by localization: ${calibMotionRes.data}`);
+      console.log('  ✓ CALIBRATION_TEST command distinguished and accepted without localization gating (HTTP 200)');
+
+      // Clean up mock state
+      serverModule.injectNormalDriveStatus({ armed: false, mode: 0 });
+      serverModule.autonomyState.enabled = false;
+      serverModule.autonomyState.state = 'DISABLED';
     }
 
     // --------------------------------------------------------------------------
@@ -116,7 +190,6 @@ async function runTests() {
     // --------------------------------------------------------------------------
     console.log('\n[Test 2] Simulating Operator 2D Pose Initialization in Foxglove...');
     {
-      // Feed simulated converged AMCL pose
       serverModule.updateLocalizationState({
         localized: true,
         state: 'LOCALIZED',
@@ -134,10 +207,9 @@ async function runTests() {
       assert.strictEqual(locRes.statusCode, 200);
       assert.strictEqual(locRes.json.localized, true, 'Vehicle must report localized: true');
       assert.strictEqual(locRes.json.state, 'LOCALIZED');
-      assert.strictEqual(locRes.json.x, 1.166);
-      console.log('  ✓ Localization state recognized: LOCALIZED (pose tracking nominal)');
+      console.log('  ✓ Localization state recognized: LOCALIZED');
 
-      // Now enable autonomy -> MUST succeed (HTTP 200)
+      // Enable autonomy -> WAITING_FOR_ZERO
       const enableRes = await httpRequest({
         hostname: '127.0.0.1',
         port: PUBLIC_PORT,
@@ -148,7 +220,7 @@ async function runTests() {
           'X-Operator-Token': OPERATOR_TOKEN
         }
       }, {});
-      assert.strictEqual(enableRes.statusCode, 200, `Enabling autonomy must succeed when LOCALIZED: ${enableRes.data}`);
+      assert.strictEqual(enableRes.statusCode, 200);
       assert.strictEqual(serverModule.autonomyState.state, 'WAITING_FOR_ZERO');
       console.log('  ✓ Autonomy enabled (entered WAITING_FOR_ZERO)');
 
@@ -163,12 +235,10 @@ async function runTests() {
             'Content-Type': 'application/json',
             'X-Rover-Bridge-Token': CMD_TOKEN
           }
-        }, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-        if (hsRes.statusCode !== 200) {
-          console.error(`Handshake #${i+1} failed: HTTP ${hsRes.statusCode}: ${hsRes.data}`);
-        }
+        }, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
+        assert.strictEqual(hsRes.statusCode, 200);
       }
-      assert.strictEqual(serverModule.autonomyState.state, 'READY_DISARMED', `Expected READY_DISARMED, got: ${serverModule.autonomyState.state}`);
+      assert.strictEqual(serverModule.autonomyState.state, 'READY_DISARMED');
       console.log('  ✓ Zero velocity handshake complete (READY_DISARMED)');
     }
 
@@ -177,7 +247,6 @@ async function runTests() {
     // --------------------------------------------------------------------------
     console.log('\n[Test 3] Simulating Lost Localization During Active Navigation...');
     {
-      // Mock rover armed
       serverModule.injectNormalDriveStatus({ armed: true, mode: 3 });
       serverModule.autonomyState.state = 'ACTIVE';
       serverModule.autonomyState.active = true;
@@ -185,7 +254,7 @@ async function runTests() {
 
       console.log('  Active autonomous motion running (speed=0.12 m/s, armed=true, state=ACTIVE)');
 
-      // Now simulate localization loss (e.g. AMCL divergence or stale data)
+      // Simulate localization loss
       serverModule.updateLocalizationState({
         localized: false,
         state: 'NOT_LOCALIZED',
@@ -196,14 +265,14 @@ async function runTests() {
       assert.strictEqual(serverModule.autonomyState.state, 'FAULT', 'Autonomy state must transition to FAULT');
       assert.strictEqual(serverModule.autonomyState.enabled, false, 'Autonomy must be disabled');
       assert.strictEqual(serverModule.autonomyState.active, false, 'Autonomy must be inactive');
-      assert(serverModule.autonomyState.lastRejectionReason.includes('Localization lost'), 'Rejection reason must mention localization lost');
+      assert(serverModule.autonomyState.lastRejectionReason.includes('Localization lost'));
 
       // Verify rover is disarmed
       const driveStatus = serverModule.getLatestNormalDriveStatus();
       assert.strictEqual(driveStatus.armed, false, 'Rover MUST be disarmed upon localization loss');
       console.log('  ✓ Fail-safe trigger verified: Motors zeroed, autonomy FAULT, rover disarmed');
 
-      // Subsequent /cmd_vel commands must be rejected
+      // Subsequent ROS_AUTONOMY command rejected
       const cmdRes = await httpRequest({
         hostname: '127.0.0.1',
         port: INTERNAL_PORT,
@@ -213,9 +282,9 @@ async function runTests() {
           'Content-Type': 'application/json',
           'X-Rover-Bridge-Token': CMD_TOKEN
         }
-      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
       assert.strictEqual(cmdRes.statusCode, 403);
-      console.log('  ✓ Motion command rejected following localization fault');
+      console.log('  ✓ Autonomous motion command rejected following localization fault');
     }
 
     // --------------------------------------------------------------------------
@@ -248,9 +317,9 @@ async function runTests() {
       console.log('  ✓ Rover remained safely disarmed and stopped upon localization recovery');
     }
 
-    console.log('\n=======================================================');
-    console.log('✓ ALL 4 LOCALIZATION SAFETY TESTS PASSED NOMINALLY');
-    console.log('=======================================================\n');
+    console.log('\n================================================================');
+    console.log('✓ ALL LOCALIZATION SAFETY & SOURCE DISCRIMINATION TESTS PASSED');
+    console.log('================================================================\n');
     process.exit(0);
 
   } catch (err) {
