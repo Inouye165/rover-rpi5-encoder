@@ -91,7 +91,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.07
+      xy_goal_tolerance: 0.04
+      yaw_goal_tolerance: 0.087
 
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
@@ -99,7 +100,7 @@ controller_server:
       angular_dist_threshold: 0.35
       angular_disengage_threshold: 0.17
       forward_sampling_distance: 0.50
-      rotate_to_heading_angular_vel: 0.90
+      rotate_to_heading_angular_vel: 0.50
       max_angular_accel: 2.0
       simulate_ahead_time: 1.0
       closed_loop: true
@@ -110,7 +111,7 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.15
       max_vel_y: 0.0
-      max_vel_theta: 0.8
+      max_vel_theta: 0.50
       min_speed_xy: 0.0
       max_speed_xy: 0.15
       min_speed_theta: 0.1
@@ -127,7 +128,8 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.07
+      xy_goal_tolerance: 0.04
+      yaw_goal_tolerance: 0.087
       trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -234,8 +236,8 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.38
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.32
       always_send_full_costmap: True
 
 smoother_server:
@@ -292,10 +294,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.8]
-    min_velocity: [-0.15, 0.0, -0.8]
-    max_accel: [1.0, 0.0, 2.0]
-    max_decel: [-1.0, 0.0, -2.0]
+    max_velocity: [0.15, 0.0, 0.50]
+    min_velocity: [-0.15, 0.0, -0.50]
+    max_accel: [1.0, 0.0, 1.5]
+    max_decel: [-1.0, 0.0, -1.5]
     odom_topic: "/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
@@ -319,7 +321,7 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
+    max_rotational_vel: 0.50
     min_rotational_vel: 0.1
     rotational_acc_lim: 2.0
 
