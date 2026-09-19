@@ -1198,7 +1198,8 @@ function parseTelemetryPacket(extType, data) {
     // Broadcast to WebSocket clients with explicit backpressure safety check
     const imuWsMsg = JSON.stringify({
       type: 'bno08x_imu',
-      ...latestBnoImuState
+      ...latestBnoImuState,
+      dataAgeMs: 0
     });
 
     wss.clients.forEach((client) => {
