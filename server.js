@@ -102,6 +102,7 @@ let currentDriveConfig = {
   wheelBalancing: false,
   dynamicBraking: true,
   brakeDurationMs: 100,
+  maxTriggerSpeedMps: 0.35,
   maxTriggerSpeed: 0.35
 };
 
@@ -4081,15 +4082,20 @@ app.post('/api/drive/clear-faults', requireOperatorAuth, (req, res) => {
 });
 
 app.post('/api/drive/config', (req, res) => {
-  const { wheelBalancing, dynamicBraking, brakeDurationMs, maxTriggerSpeed } = req.body || {};
+  const { wheelBalancing, dynamicBraking, brakeDurationMs, maxTriggerSpeedMps, maxTriggerSpeed } = req.body || {};
   if (wheelBalancing !== undefined) currentDriveConfig.wheelBalancing = Boolean(wheelBalancing);
   if (dynamicBraking !== undefined) currentDriveConfig.dynamicBraking = Boolean(dynamicBraking);
   if (brakeDurationMs !== undefined) currentDriveConfig.brakeDurationMs = Math.max(20, Math.min(250, parseInt(brakeDurationMs) || 100));
-  if (maxTriggerSpeed !== undefined) currentDriveConfig.maxTriggerSpeed = Math.max(0.05, Math.min(1.0, parseFloat(maxTriggerSpeed) || 0.35));
+  const trigSpd = maxTriggerSpeedMps !== undefined ? maxTriggerSpeedMps : maxTriggerSpeed;
+  if (trigSpd !== undefined) {
+    const val = Math.max(0.05, Math.min(1.0, parseFloat(trigSpd) || 0.35));
+    currentDriveConfig.maxTriggerSpeedMps = val;
+    currentDriveConfig.maxTriggerSpeed = val;
+  }
 
   const flags = (currentDriveConfig.wheelBalancing ? 1 : 0) | (currentDriveConfig.dynamicBraking ? 2 : 0);
   const dur = currentDriveConfig.brakeDurationMs;
-  const maxTrig = Math.round(currentDriveConfig.maxTriggerSpeed * 100);
+  const maxTrig = Math.round(currentDriveConfig.maxTriggerSpeedMps * 100);
 
   if (serialPort && serialPort.isOpen) {
     sendBinaryCommand(FUNC_SET_DRIVE_CONFIG, [flags, dur, maxTrig], { dualChecksum: true });
