@@ -646,7 +646,7 @@ class RoverEncoderOdometry(Node):
         age_ms = int((now - last_time) * 1000.0)
         is_stationary = (abs(self.kinematics.v_x) < 0.02 and abs(self.kinematics.w_z) < 0.05)
         # When stationary, TF transform map->base_link remains live; allow up to 10s or rely on TF
-        is_fresh = is_stationary or (age_ms <= 3500)
+        is_fresh = is_stationary or (age_ms <= 8000)
         cov_ok = (last_pose["sigma_x"] <= 0.35) and (last_pose["sigma_y"] <= 0.35) and (last_pose["sigma_yaw"] <= 0.50)
 
         if is_fresh and cov_ok and tf_ok and map_ok:
@@ -668,7 +668,7 @@ class RoverEncoderOdometry(Node):
         else:
             state = "NOT_LOCALIZED"
             localized = False
-            details = f"Pose stale ({age_ms}ms > 3500ms)"
+            details = f"Pose stale ({age_ms}ms > 8000ms)"
 
         return {
             "localized": localized,
