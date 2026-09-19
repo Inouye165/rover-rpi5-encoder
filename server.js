@@ -339,7 +339,7 @@ function resetAutonomyToSafe(reason = 'Reset') {
   autonomyState.limitedLinear = 0.0;
   autonomyState.limitedAngular = 0.0;
   autonomyState.lastRejectionReason = isCmdTokenValid ? reason : 'Internal command configuration fault';
-  if (cmdSource === 'ROS_AUTONOMY') {
+  if (cmdSource === 'ROS_AUTONOMY' || cmdSource === 'CALIBRATION_TEST' || cmdSource === 'AUTO_CALIB' || cmdSource === 'LIDAR_TEST' || cmdSource === 'BACKTRACK') {
     cmdSource = 'NONE';
   }
   sendZeroMotionPacket();
@@ -2494,7 +2494,8 @@ wss.on('connection', (ws, req) => {
         case 'test_drive':
           if (msg.v !== undefined && msg.w !== undefined) {
             if (backtracking) break;
-            if (deadmanPressed) {
+            const isZeroMotion = Math.abs(msg.v) < 1e-4 && Math.abs(msg.w) < 1e-4;
+            if (deadmanPressed && !isZeroMotion) {
               targetLinear = msg.v;
               targetAngular = msg.w;
               cmdSource = 'CALIBRATION_TEST';
@@ -4098,6 +4099,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
 app.post('/api/drive/disarm', (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
+  cmdSource = 'NONE';
   latestNormalDriveStatus = { armed: false };
   // Propagate the updated armed state to calibration-status consumers immediately.
   broadcastAutoCalibStatus();
@@ -4317,6 +4319,19 @@ app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
 
 app.get('/api/autonomy/status', (req, res) => {
   res.json(getAutonomyStatusObject());
+});
+
+app.post('/api/command-source', requireOperatorAuth, (req, res) => {
+  const reqSource = (req.body && req.body.source) ? String(req.body.source).trim().toUpperCase() : 'NONE';
+  const allowed = ['NONE', 'CALIBRATION_TEST', 'ROS_AUTONOMY'];
+  const targetSource = allowed.includes(reqSource) ? reqSource : 'NONE';
+  cmdSource = targetSource;
+  if (targetSource === 'NONE') {
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+  }
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  res.json({ ok: true, cmdSource: cmdSource, message: `Command source set to ${cmdSource}` });
 });
 
 // ────────────────────────────────────────────────────────────
