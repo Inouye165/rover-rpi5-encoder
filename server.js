@@ -96,6 +96,14 @@ const FUNC_EXIT_MAINTENANCE = 0x28;
 const FUNC_EMERGENCY_STOP = 0x29;
 const FUNC_ARM_NORMAL_DRIVE = 0x2C;
 const FUNC_DISARM_NORMAL_DRIVE = 0x2D;
+const FUNC_SET_DRIVE_CONFIG = 0x2E;
+
+let currentDriveConfig = {
+  wheelBalancing: false,
+  dynamicBraking: false,
+  brakeDurationMs: 100,
+  maxTriggerSpeed: 0.35
+};
 
 // Incoming telemetry type codes (Board → Host)
 const TYPE_BATTERY  = 0x0A; // Speed/battery packet (data[6] = voltage*10)
@@ -825,6 +833,14 @@ function startDriveKeepaliveLoop() {
             limitedLinear = Math.min(targetLinear, limitedLinear + delta);
           } else {
             limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+          }
+        }
+
+        // Snap to zero if stopping and already at low creep speed
+        if (targetLinear === 0.0 && targetAngular === 0.0) {
+          if (Math.abs(limitedAngular) <= 0.20 && Math.abs(limitedLinear) <= 0.08) {
+            limitedLinear = 0.0;
+            limitedAngular = 0.0;
           }
         }
 
@@ -1802,7 +1818,10 @@ function parseTelemetryPacket(extType, data) {
         wheels.push({ targetRadps, measuredRadps, feedforward, pTerm, iTerm, dTerm, basePwm, spinSyncTrim, finalPwm, stictionCode, stictionState });
       }
       let outerYaw = null;
+      let actuationState = 'COAST';
       if (data.length >= 80) {
+        const actuationMap = ['DRIVE', 'BRAKE', 'COAST'];
+        actuationState = actuationMap[data.readUInt8(78)] || 'COAST';
         outerYaw = {
           wzRequested: data.readInt16LE(64) / 100.0,
           wzActual: data.readInt16LE(66) / 100.0,
@@ -1811,13 +1830,15 @@ function parseTelemetryPacket(extType, data) {
           wzCorrected: data.readInt16LE(72) / 100.0,
           yawOuterActive: Boolean(data.readUInt8(74)),
           imuGyroValid: Boolean(data.readUInt8(75)),
-          imuGyroAgeMs: data.readUInt16LE(76)
+          imuGyroAgeMs: data.readUInt16LE(76),
+          actuationState: actuationState
         };
       }
       pidPacketCount++;
       latestPidTelemetry = {
         timestamp: Date.now(),
         sequence: pidPacketCount,
+        actuationState,
         m1: wheels[0],
         m2: wheels[1],
         m3: wheels[2],
@@ -4042,6 +4063,28 @@ app.post('/api/drive/clear-faults', (req, res) => {
   res.json({ ok: true, message: 'Clear faults command sent.' });
 });
 
+app.post('/api/drive/config', (req, res) => {
+  const { wheelBalancing, dynamicBraking, brakeDurationMs, maxTriggerSpeed } = req.body || {};
+  if (wheelBalancing !== undefined) currentDriveConfig.wheelBalancing = Boolean(wheelBalancing);
+  if (dynamicBraking !== undefined) currentDriveConfig.dynamicBraking = Boolean(dynamicBraking);
+  if (brakeDurationMs !== undefined) currentDriveConfig.brakeDurationMs = Math.max(20, Math.min(250, parseInt(brakeDurationMs) || 100));
+  if (maxTriggerSpeed !== undefined) currentDriveConfig.maxTriggerSpeed = Math.max(0.05, Math.min(1.0, parseFloat(maxTriggerSpeed) || 0.35));
+
+  const flags = (currentDriveConfig.wheelBalancing ? 1 : 0) | (currentDriveConfig.dynamicBraking ? 2 : 0);
+  const dur = currentDriveConfig.brakeDurationMs;
+  const maxTrig = Math.round(currentDriveConfig.maxTriggerSpeed * 100);
+
+  if (serialPort && serialPort.isOpen) {
+    sendBinaryCommand(FUNC_SET_DRIVE_CONFIG, [flags, dur, maxTrig], { dualChecksum: true });
+  }
+  broadcast({ type: 'drive_config_updated', config: currentDriveConfig });
+  res.json({ ok: true, config: currentDriveConfig });
+});
+
+app.get('/api/drive/config', (req, res) => {
+  res.json({ ok: true, config: currentDriveConfig });
+});
+
 app.post('/api/drive/motion_plan_config', (req, res) => {
   try {
     const config = req.body;
@@ -4531,6 +4574,27 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   if (cmdSource !== 'ROS_AUTONOMY') {
     sendZeroMotionPacket();
     cmdSource = 'ROS_AUTONOMY';
+  }
+
+  // Low-speed stop zero-bypass: bypass slew ramp when stopping from creep
+  if (isZeroCmd) {
+    const isLowSpeed = Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15;
+    if (isLowSpeed) {
+      targetLinear = 0.0;
+      targetAngular = 0.0;
+      limitedLinear = 0.0;
+      limitedAngular = 0.0;
+      autonomyState.rawLinear = 0.0;
+      autonomyState.rawAngular = 0.0;
+      autonomyState.clampedLinear = 0.0;
+      autonomyState.clampedAngular = 0.0;
+      autonomyState.limitedLinear = 0.0;
+      autonomyState.limitedAngular = 0.0;
+      autonomyState.lastCmdTime = now;
+      watchdogFired = false;
+      sendZeroMotionPacket();
+      return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+    }
   }
 
   autonomyState.rawLinear = rawLin;
