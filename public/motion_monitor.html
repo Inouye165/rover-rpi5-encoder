@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rover Motion Monitor</title>
+  <link rel="stylesheet" href="motion_monitor.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="mm-container">
+    <!-- Header bar with title, connection status & Sticky Emergency Stop Button -->
+    <header class="mm-header">
+      <div class="mm-header-left">
+        <h1 class="mm-title"><span class="mm-title-icon">📈</span> MOTION MONITOR <span class="mm-badge-live">LIVE TELEMETRY</span></h1>
+      </div>
+      <div class="mm-header-right">
+        <span class="mm-status-badge" id="mm-ws-status"><span class="status-dot disconnected" id="dot-ws"></span> <span id="txt-ws">CONNECTING...</span></span>
+        <span class="mm-status-badge" id="mm-arm-status"><span class="status-dot disarmed" id="dot-arm"></span> <span id="txt-arm">DISARMED</span></span>
+        <span class="mm-clock" id="mm-clock">00:00:00</span>
+        <button class="btn-mm-action btn-reset" id="btn-reset-plan" title="Reset test plan state & zero origin">🔄 RESET PLAN</button>
+        <button class="btn-mm-action btn-clear" id="btn-clear-data" title="Clear all telemetry and restart test metrics">🧹 CLEAR DATA</button>
+        <button class="btn-estop-large" id="btn-estop-popup" title="EMERGENCY STOP - Command zero velocity, disarm drivetrain & abort test">🚨 EMERGENCY STOP</button>
+      </div>
+    </header>
+
+    <div class="estop-banner-active" id="estop-alert-banner" style="display: none;">
+      🚨 EMERGENCY STOP ACTIVATED — Drivetrain Disarmed & Motors Stopped
+    </div>
+
+    <!-- SECTION 1: Current Plan & Step Progress -->
+    <section class="mm-card mm-card-plan">
+      <div class="mm-card-header">
+        <h2>📋 MOTION PLAN & STEP PROGRESS</h2>
+        <span class="mm-step-badge" id="plan-overall-state">IDLE</span>
+      </div>
+
+      <!-- Plan Step Sequence -->
+      <div class="mm-plan-steps" id="plan-steps-container">
+        <div class="step-chip active" id="step-chip-1">
+          <span class="step-num">1</span>
+          <span class="step-label" id="chip-lbl-1">Forward 970.0 mm</span>
+          <span class="step-status" id="chip-st-1">ACTIVE</span>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip" id="step-chip-2">
+          <span class="step-num">2</span>
+          <span class="step-label" id="chip-lbl-2">Zone 1 (45mm/s, 40mm)</span>
+          <span class="step-status" id="chip-st-2">PENDING</span>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip" id="step-chip-3">
+          <span class="step-num">3</span>
+          <span class="step-label" id="chip-lbl-3">Zone 2 (30mm/s, 25mm)</span>
+          <span class="step-status" id="chip-st-3">PENDING</span>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip" id="step-chip-4">
+          <span class="step-num">4</span>
+          <span class="step-label" id="chip-lbl-4">Zone 3 (20mm/s, 25mm)</span>
+          <span class="step-status" id="chip-st-4">PENDING</span>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip" id="step-chip-5">
+          <span class="step-num">5</span>
+          <span class="step-label" id="chip-lbl-5">Stop / Disarm</span>
+          <span class="step-status" id="chip-st-5">PENDING</span>
+        </div>
+      </div>
+
+      <!-- Step Metrics Grid -->
+      <div class="mm-plan-metrics-grid">
+        <div class="mm-metric-box">
+          <span class="mm-label">CURRENT STEP</span>
+          <span class="mm-value-text" id="val-current-step-label">Reverse 1000.0 mm</span>
+        </div>
+        <div class="mm-metric-box">
+          <span class="mm-label">TARGET</span>
+          <span class="mm-value-num" id="val-target-dist">1000.0 <span class="unit">mm</span></span>
+        </div>
+        <div class="mm-metric-box">
+          <span class="mm-label">MEASURED</span>
+          <span class="mm-value-num cyan" id="val-measured-dist">0.0 <span class="unit">mm</span></span>
+        </div>
+        <div class="mm-metric-box">
+          <span class="mm-label">REMAINING</span>
+          <span class="mm-value-num" id="val-remaining-dist">500.0 <span class="unit">mm</span></span>
+        </div>
+        <div class="mm-metric-box">
+          <span class="mm-label">PROGRESS</span>
+          <span class="mm-value-num green" id="val-progress-pct">0.0<span class="unit">%</span></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 1.5: Interactive Test Plan & Slowdown Zone Configurator -->
+    <section class="mm-card" style="border: 1px solid rgba(0, 242, 254, 0.35); background: linear-gradient(180deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.85) 100%); margin-bottom: 20px;">
+      <div class="mm-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="color: #00f2fe; font-size: 1.05rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+          <span>⚙️</span> EDITABLE TEST PLAN & SLOWDOWN ZONES
+        </h2>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span style="background: rgba(0, 242, 254, 0.15); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.75rem; font-weight: 800; padding: 4px 10px; border-radius: 12px;">
+            ⚡ ESP32 Motor-Control Radius: 0.0325 m
+          </span>
+          <span style="background: rgba(56, 239, 125, 0.15); border: 1px solid #38ef7d; color: #38ef7d; font-size: 0.75rem; font-weight: 800; padding: 4px 10px; border-radius: 12px;">
+            📏 ROS Odometry Effective Radius: 0.033475 m (Basis: physical 1030 mm per old odometry 1000 mm)
+          </span>
+        </div>
+      </div>
+
+      <div id="editor-panel" style="padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); margin-top: 10px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px;">
+          <div>
+            <label style="color: #94a3b8; font-size: 0.75rem; font-weight: 700; display: block; margin-bottom: 4px;">TEST DIRECTION</label>
+            <select id="cfg-direction" style="width: 100%; background: #0f172a; border: 1px solid #00f2fe; color: #38ef7d; font-weight: 800; padding: 8px; border-radius: 6px; font-size: 0.9rem;">
+              <option value="1" selected>➔ FORWARD (Positive Distance)</option>
+              <option value="-1">⬅ REVERSE (Negative Distance)</option>
+            </select>
+          </div>
+
+          <div>
+            <label style="color: #94a3b8; font-size: 0.75rem; font-weight: 700; display: block; margin-bottom: 4px;">TOTAL TARGET DISTANCE (mm)</label>
+            <input type="number" id="cfg-target-dist" value="1000.0" step="0.1" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #00f2fe; font-weight: 800; padding: 8px; border-radius: 6px; font-size: 0.95rem;" />
+          </div>
+
+          <div>
+            <label style="color: #94a3b8; font-size: 0.75rem; font-weight: 700; display: block; margin-bottom: 4px;">CRUISE SPEED (m/s)</label>
+            <input type="number" id="cfg-cruise-speed" value="0.150" step="0.005" min="0.010" max="0.500" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; font-weight: 800; padding: 8px; border-radius: 6px; font-size: 0.95rem;" />
+          </div>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <label style="color: #ffb700; font-size: 0.8rem; font-weight: 800;">⚡ APPROACH SLOWDOWN ZONES (CONFIGURABLE N-ZONES)</label>
+            <button id="btn-add-zone" style="background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #ffb700; font-size: 0.75rem; font-weight: 700; border-radius: 4px; padding: 4px 8px; cursor: pointer;">+ Add Zone</button>
+          </div>
+
+          <div id="zones-editor-list" style="display: flex; flex-direction: column; gap: 8px;">
+            <!-- Dynamic Zone Input Rows -->
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+          <button id="btn-apply-plan" style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); border: none; color: #030712; font-weight: 900; padding: 10px 20px; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 12px rgba(0, 242, 254, 0.3); font-size: 0.9rem;">
+            💾 SAVE & APPLY PLAN TO MONITOR
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: Large Graphical Progress Line -->
+      <div class="mm-card-header" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <h2>🚙 LIVE MOTION PROGRESS LINE</h2>
+        <div id="inline-zone-legend" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <!-- Dynamic Pills rendered by JS -->
+        </div>
+        <span class="mm-dir-badge" id="val-motion-direction">FORWARD →</span>
+      </div>
+
+      <div class="progress-canvas-container">
+        <!-- SVG Progress Line Graphic -->
+        <svg id="progress-svg" viewBox="0 0 1000 180" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="grad-line" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#00f2fe" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#38ef7d" stop-opacity="0.35"/>
+            </linearGradient>
+            <linearGradient id="grad-decel" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#ffb700" stop-opacity="0.25"/>
+              <stop offset="100%" stop-color="#ff0055" stop-opacity="0.25"/>
+            </linearGradient>
+            <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="3.5" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+            </filter>
+          </defs>
+
+          <!-- Main Track Bar -->
+          <rect x="80" y="80" width="840" height="12" rx="6" fill="#1e293b" />
+          <rect id="track-filled" x="80" y="80" width="0" height="12" rx="6" fill="url(#grad-line)" />
+
+          <!-- Dynamic Deceleration Shaded Zones (Multi-Color N-Zone Approach) -->
+          <g id="dynamic-decel-zones"></g>
+
+          <!-- Start Marker -->
+          <line x1="80" y1="65" x2="80" y2="105" stroke="#94a3b8" stroke-width="3" />
+          <text x="80" y="55" fill="#94a3b8" font-size="12" font-weight="700" text-anchor="middle" id="txt-start-marker">START (0.0 mm)</text>
+
+          <!-- Target Marker -->
+          <line id="target-marker" x1="920" y1="55" x2="920" y2="115" stroke="#38ef7d" stroke-width="4" stroke-dasharray="6 3" />
+          <text id="target-marker-text" x="920" y="45" fill="#38ef7d" font-size="12" font-weight="800" text-anchor="middle">TARGET (500.0 mm)</text>
+
+          <!-- Stopped Final Marker (shown when step completes) -->
+          <g id="stopped-marker-group" opacity="0">
+            <line id="stopped-marker" x1="920" y1="60" x2="920" y2="110" stroke="#ff0055" stroke-width="3" />
+            <text id="stopped-marker-text" x="920" y="135" fill="#ff0055" font-size="12" font-weight="800" text-anchor="middle">STOPPED (502.1 mm)</text>
+          </g>
+
+          <!-- Rover Icon Group -->
+          <g id="rover-icon-group" transform="translate(80, 80)">
+            <circle r="22" fill="#030712" stroke="#00f2fe" stroke-width="3" filter="url(#glow)" />
+            <!-- Heading Arrow on Rover -->
+            <g id="rover-arrow-group" transform="rotate(0)">
+              <polygon points="0,-14 9,10 0,5 -9,10" fill="#00f2fe" />
+            </g>
+            <!-- Rover Label -->
+            <text x="0" y="38" fill="#00f2fe" font-size="11" font-weight="800" text-anchor="middle" id="rover-icon-label">0.0 mm</text>
+          </g>
+        </svg>
+      </div>
+
+      <!-- Endpoint & Error Summary Strip -->
+      <div class="mm-endpoint-summary">
+        <div class="ep-box"><span class="ep-label">TARGET:</span> <span class="ep-val" id="disp-target-mm">500.0 mm</span></div>
+        <div class="ep-box"><span class="ep-label">ACTUAL STOP:</span> <span class="ep-val cyan" id="disp-actual-mm">0.0 mm</span></div>
+        <div class="ep-box"><span class="ep-label">ERROR / OVERSHOOT:</span> <span class="ep-val" id="disp-error-mm">0.0 mm</span></div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: Speed & Deceleration Monitor -->
+    <section class="mm-card mm-card-speed">
+      <div class="mm-card-header">
+        <h2>⚡ SPEED & DECELERATION PROFILE</h2>
+        <span class="phase-badge" id="val-speed-phase">CRUISE</span>
+      </div>
+
+      <div class="speed-grid">
+        <div class="speed-box primary">
+          <span class="lbl">COMMANDED SPEED</span>
+          <span class="val cyan" id="val-cmd-speed">0.000 <span class="u">m/s</span></span>
+        </div>
+        <div class="speed-box primary">
+          <span class="lbl">MEASURED SPEED</span>
+          <span class="val green" id="val-meas-speed">0.000 <span class="u">m/s</span></span>
+        </div>
+        <div class="speed-box">
+          <span class="lbl">PEAK SPEED</span>
+          <span class="val" id="val-peak-speed">0.000 <span class="u">m/s</span></span>
+        </div>
+        <div class="speed-box">
+          <span class="lbl">SLOWDOWN STARTED AT</span>
+          <span class="val yellow" id="val-slowdown-start-at">-- <span class="u">mm</span></span>
+        </div>
+        <div class="speed-box">
+          <span class="lbl">DIST REMAINING AT SLOWDOWN</span>
+          <span class="val yellow" id="val-slowdown-dist-rem">-- <span class="u">mm</span></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- TWO-COLUMN PANEL: Encoders (Left) + IMU Heading (Right) -->
+    <div class="mm-lower-grid">
+      <!-- SECTION 5: Encoder Counters (Left Panel) -->
+      <section class="mm-card mm-card-encoders">
+        <div class="mm-card-header">
+          <h2>⚙️ RAW ENCODER COUNTERS</h2>
+          <span class="sub-label">Physical Motor Slots</span>
+        </div>
+
+        <div class="encoder-table">
+          <div class="enc-header-row">
+            <span>SLOT / MOTOR</span>
+            <span>CUMULATIVE TICKS</span>
+            <span>STEP TICKS</span>
+            <span>STEP DIST</span>
+          </div>
+
+          <div class="enc-row">
+            <span class="m-slot"><span class="dot m1"></span> LF / M1 / Slot 1</span>
+            <span class="val" id="enc-raw-m1">0</span>
+            <span class="val" id="enc-step-m1">0</span>
+            <span class="val cyan" id="enc-dist-m1">0.0 mm</span>
+          </div>
+          <div class="enc-row">
+            <span class="m-slot"><span class="dot m2"></span> RF / M2 / Slot 2</span>
+            <span class="val" id="enc-raw-m2">0</span>
+            <span class="val" id="enc-step-m2">0</span>
+            <span class="val cyan" id="enc-dist-m2">0.0 mm</span>
+          </div>
+          <div class="enc-row">
+            <span class="m-slot"><span class="dot m3"></span> LR / M3 / Slot 3</span>
+            <span class="val" id="enc-raw-m3">0</span>
+            <span class="val" id="enc-step-m3">0</span>
+            <span class="val cyan" id="enc-dist-m3">0.0 mm</span>
+          </div>
+          <div class="enc-row">
+            <span class="m-slot"><span class="dot m4"></span> RR / M4 / Slot 4</span>
+            <span class="val" id="enc-raw-m4">0</span>
+            <span class="val" id="enc-step-m4">0</span>
+            <span class="val cyan" id="enc-dist-m4">0.0 mm</span>
+          </div>
+        </div>
+
+        <div class="enc-summary-strip">
+          <div><span class="lbl">LEFT AVG:</span> <span class="val" id="enc-left-avg">0.0 mm</span></div>
+          <div><span class="lbl">RIGHT AVG:</span> <span class="val" id="enc-right-avg">0.0 mm</span></div>
+          <div><span class="lbl">OVERALL AVG:</span> <span class="val green" id="enc-overall-avg">0.0 mm</span></div>
+        </div>
+      </section>
+
+      <!-- SECTION 4: IMU Heading (Right Panel) -->
+      <section class="mm-card mm-card-imu">
+        <div class="mm-card-header">
+          <h2>🧭 IMU HEADING & ROTATION</h2>
+          <span class="sub-label" id="imu-cal-badge">BNO08x HEALTHY</span>
+        </div>
+
+        <div class="imu-display-grid">
+          <!-- Compass Dial Graphic -->
+          <div class="compass-box">
+            <svg class="compass-svg" viewBox="0 0 160 160">
+              <circle cx="80" cy="80" r="70" fill="#030712" stroke="#1e293b" stroke-width="4"/>
+              <circle cx="80" cy="80" r="55" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="4 2"/>
+              <!-- Cardinal Markers -->
+              <text x="80" y="24" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">N (0°)</text>
+              <text x="145" y="84" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">E</text>
+              <text x="80" y="148" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">S</text>
+              <text x="15" y="84" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">W</text>
+              
+              <!-- Start Heading Marker Line -->
+              <line id="compass-start-line" x1="80" y1="80" x2="80" y2="25" stroke="#94a3b8" stroke-width="2" stroke-dasharray="3 3"/>
+              
+              <!-- Rotating Compass Needle -->
+              <g id="compass-needle" transform="rotate(0, 80, 80)">
+                <polygon points="80,22 88,80 80,72 72,80" fill="#00f2fe" filter="url(#glow)"/>
+                <polygon points="80,138 88,80 80,88 72,80" fill="#64748b"/>
+                <circle cx="80" cy="80" r="6" fill="#00f2fe"/>
+              </g>
+            </svg>
+          </div>
+
+          <!-- Numeric IMU Metrics -->
+          <div class="imu-metrics-box">
+            <div class="imu-row">
+              <span class="lbl">START HEADING:</span>
+              <span class="val" id="val-start-heading">0.0°</span>
+            </div>
+            <div class="imu-row">
+              <span class="lbl">CURRENT HEADING:</span>
+              <span class="val cyan" id="val-current-heading">0.0°</span>
+            </div>
+            <div class="imu-row">
+              <span class="lbl">HEADING CHANGE:</span>
+              <span class="val" id="val-heading-change">+0.0°</span>
+            </div>
+            <div class="imu-row">
+              <span class="lbl">TARGET HEADING:</span>
+              <span class="val" id="val-target-heading">--°</span>
+            </div>
+            <div class="imu-row">
+              <span class="lbl">HEADING ERROR:</span>
+              <span class="val green" id="val-heading-error">0.0°</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- SECTION 6: Position & Endpoint Comparison -->
+    <section class="mm-card mm-card-comparison">
+      <div class="mm-card-header">
+        <h2>📊 POSITION & ENDPOINT COMPARISON (ESTIMATES ONLY)</h2>
+        <span class="sub-label">Rover-Derived Odometry & Encoder Estimates (Not Physical Ground Truth)</span>
+      </div>
+
+      <div class="comparison-grid">
+        <div class="cmp-box">
+          <span class="lbl">INTERNAL TARGET</span>
+          <span class="val" id="cmp-req-endpoint">1000.0 mm</span>
+        </div>
+        <div class="cmp-box">
+          <span class="lbl">ENCODER ENDPOINT (ESTIMATE)</span>
+          <span class="val cyan" id="cmp-enc-endpoint">-- mm</span>
+        </div>
+        <div class="cmp-box">
+          <span class="lbl">ODOMETRY ENDPOINT (ESTIMATE)</span>
+          <span class="val green" id="cmp-odom-endpoint">-- mm</span>
+        </div>
+        <div class="cmp-box">
+          <span class="lbl">ESTIMATED THRESHOLD DISTANCE</span>
+          <span class="val" id="cmp-dist-error">-- mm</span>
+        </div>
+        <div class="cmp-box">
+          <span class="lbl">FINAL IMU HEADING</span>
+          <span class="val" id="cmp-final-heading">0.0°</span>
+        </div>
+        <div class="cmp-box">
+          <span class="lbl">ESTIMATED HEADING CHANGE</span>
+          <span class="val" id="cmp-final-heading-change">+0.0°</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 6.5: Ron's Physical Tape Measurement & 6-Leg Calibration Plan -->
+    <section class="mm-card" style="border: 1px solid rgba(56, 239, 125, 0.4); background: rgba(15, 23, 42, 0.95); margin-bottom: 20px;">
+      <div class="mm-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="color: #38ef7d; font-size: 1.05rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+          <span>📏</span> PHYSICAL GROUND TRUTH & 6-LEG CALIBRATION PLAN
+        </h2>
+        <span style="color: #94a3b8; font-size: 0.8rem; font-weight: 600;">Single-Leg Authorization & Scale Error Analysis</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px;">
+        <!-- Left: 6-Leg Calibration Plan Matrix -->
+        <div style="background: rgba(30, 41, 59, 0.6); padding: 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+          <h3 style="color: #00f2fe; font-size: 0.85rem; font-weight: 800; margin-bottom: 10px;">📋 6-LEG CALIBRATION SEQUENCE</h3>
+          <div style="display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem;">
+            <div id="leg-item-1" style="padding: 6px 10px; border-radius: 4px; background: rgba(0, 242, 254, 0.15); border: 1px solid #00f2fe; display: flex; justify-content: space-between; font-weight: 700;">
+              <span>Set 1, Leg A: Forward +1.000000 m</span>
+              <span style="color: #00f2fe;">ACTIVE / READY</span>
+            </div>
+            <div id="leg-item-2" style="padding: 6px 10px; border-radius: 4px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; color: #94a3b8;">
+              <span>Set 1, Leg B: Reverse -1.000000 m</span>
+              <span>PENDING (PAUSE)</span>
+            </div>
+            <div id="leg-item-3" style="padding: 6px 10px; border-radius: 4px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; color: #94a3b8;">
+              <span>Set 2, Leg A: Forward +1.000000 m</span>
+              <span>PENDING (PAUSE)</span>
+            </div>
+            <div id="leg-item-4" style="padding: 6px 10px; border-radius: 4px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; color: #94a3b8;">
+              <span>Set 2, Leg B: Reverse -1.000000 m</span>
+              <span>PENDING (PAUSE)</span>
+            </div>
+            <div id="leg-item-5" style="padding: 6px 10px; border-radius: 4px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; color: #94a3b8;">
+              <span>Set 3, Leg A: Forward +1.000000 m</span>
+              <span>PENDING (PAUSE)</span>
+            </div>
+            <div id="leg-item-6" style="padding: 6px 10px; border-radius: 4px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; color: #94a3b8;">
+              <span>Set 3, Leg B: Reverse -1.000000 m</span>
+              <span>PENDING (STOP)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Ron's Physical Measurement Input & Scale Error -->
+        <div style="background: rgba(30, 41, 59, 0.6); padding: 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <h3 style="color: #38ef7d; font-size: 0.85rem; font-weight: 800; margin-bottom: 8px;">📐 RON'S PHYSICAL TAPE MEASUREMENT</h3>
+            <p style="color: #94a3b8; font-size: 0.75rem; margin-bottom: 12px;">Enter physical ground distance measured with tape measure after leg completion.</p>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+              <input type="number" id="input-physical-tape-mm" placeholder="e.g. 1020.0" step="0.1" style="flex: 1; background: #0f172a; border: 1px solid #38ef7d; color: #38ef7d; font-weight: 900; font-size: 1.1rem; padding: 8px 12px; border-radius: 6px;" />
+              <button id="btn-submit-physical-mm" style="background: #38ef7d; border: none; color: #0f172a; font-weight: 900; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">ENTER READING</button>
+            </div>
+          </div>
+
+          <div style="background: #0f172a; padding: 12px; border-radius: 6px; border: 1px dashed rgba(56, 239, 125, 0.4);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 700;">CALCULATED PHYSICAL SCALE ERROR</span>
+              <span id="lbl-scale-error-status" style="color: #64748b; font-size: 0.7rem;">AWAITING ENTRY</span>
+            </div>
+            <div id="val-calculated-scale-error" style="color: #ffeb3b; font-size: 1.1rem; font-weight: 900;">--</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 7: Timeline / Plan Sequence Bar -->
+    <section class="mm-card mm-card-timeline">
+      <div class="mm-card-header">
+        <h2>⏱️ PLAN EXECUTION TIMELINE</h2>
+        <span class="sub-label" id="val-elapsed-time">Elapsed: 0.0s</span>
+      </div>
+
+      <div class="timeline-seq" id="timeline-seq">
+        <div class="t-node active" id="tn-ready">
+          <span class="t-badge">READY</span>
+          <span class="t-time" id="tnt-ready">0.0s</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-fwd">
+          <span class="t-badge">FORWARD</span>
+          <span class="t-time" id="tnt-fwd">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-fwd-slow">
+          <span class="t-badge">SLOWDOWN</span>
+          <span class="t-time" id="tnt-fwd-slow">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-fwd-stop">
+          <span class="t-badge">STOPPED</span>
+          <span class="t-time" id="tnt-fwd-stop">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-rev">
+          <span class="t-badge">REVERSE</span>
+          <span class="t-time" id="tnt-rev">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-rev-slow">
+          <span class="t-badge">SLOWDOWN</span>
+          <span class="t-time" id="tnt-rev-slow">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-rev-stop">
+          <span class="t-badge">STOPPED</span>
+          <span class="t-time" id="tnt-rev-stop">--</span>
+        </div>
+        <span class="t-arr">→</span>
+        <div class="t-node" id="tn-disarmed">
+          <span class="t-badge">DISARMED</span>
+          <span class="t-time" id="tnt-disarmed">--</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="motion_monitor.js?v=3.5.0"></script>
+</body>
+</html>

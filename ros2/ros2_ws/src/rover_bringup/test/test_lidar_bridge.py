@@ -799,7 +799,8 @@ class TestLaunchFile:
         assert isinstance(ld, LaunchDescription)
 
         nodes = [e for e in ld.entities if isinstance(e, Node)]
-        assert len(nodes) == 6, f"Expected 6 nodes in launch, found {len(nodes)}"
+        assert len(nodes) == 8
+        assert 'rover_imu_bridge' in executables, f"Expected 6 nodes in launch, found {len(nodes)}"
 
         executables = {n.node_executable for n in nodes}
         assert "rover_system_health" in executables

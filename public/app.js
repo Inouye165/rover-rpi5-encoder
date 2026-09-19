@@ -548,7 +548,20 @@ const setValue = (id, value) => { const el = document.getElementById(id); if (el
 const setClass = (id, value) => { const el = document.getElementById(id); if (el) el.className = value; };
 const setChecked = (id, value) => { const el = document.getElementById(id); if (el) el.checked = value; };
 
+const roverTelemetryChannel = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel('rover_telemetry') : null;
+if (roverTelemetryChannel) {
+  roverTelemetryChannel.onmessage = (evt) => {
+    if (evt && evt.data && evt.data.type === 'emergency_stop_triggered') {
+      if (typeof triggerEstop === 'function') triggerEstop();
+      if (typeof disarmNormalDrive === 'function') disarmNormalDrive();
+    }
+  };
+}
+
 function handleServerMessage(msg) {
+  if (roverTelemetryChannel && msg) {
+    try { roverTelemetryChannel.postMessage(msg); } catch (e) {}
+  }
   switch (msg.type) {
     case 'auto_calib_status':
       if (typeof updateAutoCalibUI === 'function') {
@@ -1756,13 +1769,27 @@ function triggerEstop() {
   syncSpeedReadout.textContent = '0';
   updateIndividualSliderValues(0, 0, 0, 0);
   sendMotorSpeeds(0, 0, 0, 0);
-  // Also send raw emergency pwm stop just in case
+  // Also send raw emergency pwm stop & joystick deadman release just in case
   sendServerMessage({ type: 'set_pwm', pwms: [0, 0, 0, 0] });
-  logSystem('EMERGENCY STOP COMMAND SENT');
+  sendServerMessage({ type: 'joystick', x: 0, y: 0, deadman: false });
+  sendServerMessage({ type: 'disarm_normal_drive' });
+  sendServerMessage({ type: 'emergency_stop' });
+  // Call unconditional REST endpoint
+  fetch('/api/drive/disarm', { method: 'POST' }).catch(e => console.error(e));
+  if (typeof disarmNormalDrive === 'function') disarmNormalDrive();
+  logSystem('EMERGENCY STOP COMMAND SENT — Drivetrain Disarmed');
 }
 
-btnEstop.addEventListener('click', triggerEstop);
-ctrlStopCenter.addEventListener('click', triggerEstop);
+if (btnEstop) btnEstop.addEventListener('click', triggerEstop);
+if (ctrlStopCenter) ctrlStopCenter.addEventListener('click', triggerEstop);
+
+const btnEstopPopup = document.getElementById('btn-estop-popup');
+if (btnEstopPopup) {
+  btnEstopPopup.addEventListener('click', (e) => {
+    e.preventDefault();
+    triggerEstop();
+  });
+}
 
 if (btnMotorProof) {
   btnMotorProof.addEventListener('click', () => {
@@ -2891,10 +2918,24 @@ function activateTopTab(targetTabId) {
 
 // Bind Top-Level Navigation Buttons
 topTabButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', (e) => {
+    if (btn.id === 'nav-motion-monitor') {
+      e.preventDefault();
+      e.stopPropagation();
+      openMotionMonitorWindow();
+      return;
+    }
     activateTopTab(btn.dataset.tab);
   });
 });
+
+function openMotionMonitorWindow() {
+  activateTopTab('tab-drive-v2');
+  const mmSection = document.getElementById('motion-monitor-section');
+  if (mmSection) {
+    mmSection.scrollIntoView({ behavior: 'smooth' });
+  }
+}
 
 // Keyboard Navigation for Navigation Bar (Arrow Left/Right, Home, End)
 const navBar = document.querySelector('.tab-navigation-bar');
@@ -6511,18 +6552,66 @@ window.addEventListener('gamepaddisconnected', () => {
 // --- Drive Control Room Live IMU Panel & Watchdog ---
 let lastDriveImuRxMs = 0;
 
+function getCompassFacingDetails(yawDeg) {
+  const safeYaw = (typeof yawDeg === 'number' && !isNaN(yawDeg)) ? yawDeg : 0.0;
+  const heading = (safeYaw % 360 + 360) % 360;
+  const directions = [
+    'N', 'NNE', 'NE', 'ENE',
+    'E', 'ESE', 'SE', 'SSE',
+    'S', 'SSW', 'SW', 'WSW',
+    'W', 'WNW', 'NW', 'NNW'
+  ];
+  const fullNames = [
+    'NORTH', 'NORTH-NORTH-EAST', 'NORTH-EAST', 'EAST-NORTH-EAST',
+    'EAST', 'EAST-SOUTH-EAST', 'SOUTH-EAST', 'SOUTH-SOUTH-EAST',
+    'SOUTH', 'SOUTH-SOUTH-WEST', 'SOUTH-WEST', 'WEST-SOUTH-WEST',
+    'WEST', 'WEST-NORTH-WEST', 'NORTH-WEST', 'NORTH-NORTH-WEST'
+  ];
+  const idx = Math.round(heading / 22.5) % 16;
+  return {
+    heading: heading,
+    facing: directions[idx],
+    fullName: fullNames[idx]
+  };
+}
+
 function updateDriveControlRoomImuUI(msg, pitch, roll, yaw) {
   lastDriveImuRxMs = Date.now();
   const gzRad = (msg && msg.gyro && typeof msg.gyro.z === 'number') ? msg.gyro.z : 0.0;
   const cal = (msg && msg.calibrationStatus !== undefined) ? msg.calibrationStatus : '--';
   const dataAge = (msg && msg.rotVecAgeMs !== undefined && msg.rotVecAgeMs !== null) ? msg.rotVecAgeMs : 0;
 
+  const compass = getCompassFacingDetails(yaw);
+
   setText('v2-drive-imu-roll', `${roll.toFixed(1)}°`);
   setText('v2-drive-imu-pitch', `${pitch.toFixed(1)}°`);
   setText('v2-drive-imu-yaw', `${yaw.toFixed(1)}°`);
+  setText('v2-drive-imu-heading', `${compass.heading.toFixed(1)}°`);
+  setText('v2-drive-imu-facing', `${compass.facing}`);
   setText('v2-drive-imu-gyroz', `${gzRad.toFixed(3)} rad/s`);
   setText('v2-drive-imu-cal', `${cal}/3`);
   setText('v2-drive-imu-age', `${dataAge} ms`);
+
+  // Update Prominent Rover Facing Banner below IMU orientation box
+  setText('v2-drive-imu-facing-full', compass.fullName);
+  setText('v2-drive-imu-facing-code', compass.facing);
+  setText('v2-drive-imu-heading-deg', `(${compass.heading.toFixed(1)}°)`);
+
+  // Update Viewport Compass Badge Overlay
+  setText('v2-drive-imu-compass-dir', compass.facing);
+  setText('v2-drive-imu-compass-deg', `(${compass.heading.toFixed(1)}°)`);
+
+  // Update Visual Compass Instrument Needle Rotation
+  const visualNeedle = document.getElementById('visual-compass-needle');
+  if (visualNeedle) {
+    visualNeedle.style.transform = `rotate(${compass.heading.toFixed(1)}deg)`;
+  }
+
+  // Update 3D Compass Floor Ring rotation in sync with orientation
+  const compassRing = document.getElementById('drive-imu-compass-ring');
+  if (compassRing) {
+    compassRing.style.transform = `rotateX(65deg) translateZ(-40px) rotateZ(${(-yaw).toFixed(2)}deg)`;
+  }
 
   const badge = document.getElementById('v2-drive-imu-badge');
   if (badge) {

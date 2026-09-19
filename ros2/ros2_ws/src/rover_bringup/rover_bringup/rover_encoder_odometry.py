@@ -131,7 +131,7 @@ class RoverEncoderOdometry(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_rate_hz', 20.0)
-        self.declare_parameter('wheel_diameter_m', 0.065)
+        self.declare_parameter('wheel_diameter_m', 0.06695)
         self.declare_parameter('track_width_m', 0.3408575433)
         self.declare_parameter('physical_track_width_m', 0.197)
         self.declare_parameter('ticks_per_revolution', 1974.1666666667)

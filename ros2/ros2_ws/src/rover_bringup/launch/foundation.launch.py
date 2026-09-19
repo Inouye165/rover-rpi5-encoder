@@ -32,6 +32,9 @@ def generate_launch_description():
             executable='rover_encoder_odometry',
             name='rover_encoder_odometry',
             output='screen',
+            parameters=[{
+                'wheel_diameter_m': 0.06695,
+            }],
         ),
         Node(
             package='rover_bringup',

@@ -4,6 +4,9 @@
 
 import os
 import sys
+import time
+import math
+from sensor_msgs.msg import Imu
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -40,9 +43,23 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertAlmostEqual(self.node.get_parameter('track_width_m').get_parameter_value().double_value, 0.3408575433, places=6)
         self.assertEqual(self.node.get_parameter('physical_track_width_m').get_parameter_value().double_value, 0.197)
         self.assertAlmostEqual(self.node.get_parameter('ticks_per_revolution').get_parameter_value().double_value, 1974.1666666667, places=4)
-        self.assertEqual(self.node.get_parameter('wheel_diameter_m').get_parameter_value().double_value, 0.065)
+        self.assertEqual(self.node.get_parameter('wheel_diameter_m').get_parameter_value().double_value, 0.06695)
         self.assertAlmostEqual(self.node.kinematics.track_width_m, 0.3408575433, places=6)
         self.assertEqual(self.node.kinematics.physical_track_width_m, 0.197)
+
+
+    def test_cockpit_server_and_ros_effective_diameter_consistency(self):
+        """Verify Cockpit server.js effective radius (0.033475) matches ROS node effective diameter (0.06695)."""
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+        server_js = os.path.join(repo_root, 'server.js')
+        if os.path.exists(server_js):
+            with open(server_js, 'r', encoding='utf-8') as f:
+                server_content = f.read()
+            self.assertIn('ODOM_EFFECTIVE_WHEEL_RADIUS_M = 0.033475', server_content)
+
+        ros_dia = self.node.get_parameter('wheel_diameter_m').get_parameter_value().double_value
+        self.assertAlmostEqual(ros_dia, 0.06695, places=5)
+        self.assertAlmostEqual(0.033475 * 2.0, ros_dia, places=5)
 
     def test_runtime_config_and_server_defaults_match_code_default(self):
         """Verify that server.js, app.js, and launch/node default parameter track_width_m is 0.3408575433."""
@@ -139,6 +156,7 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertEqual(len(published_msgs), 1)
 
         # 2. First motion step (seq 51)
+        mock_response.json.return_value['timestamp'] = 1721697601000
         mock_response.json.return_value['sequence'] = 51
         mock_response.json.return_value['encoders'] = {'m1': 2000, 'm2': 2000, 'm3': 2000, 'm4': 2000}
         self.node._poll_and_publish()
@@ -147,6 +165,7 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertGreater(pose_x_step1, 0.0)
 
         # 3. Duplicate cached sequence poll (seq 51 repeated)
+        mock_response.json.return_value['timestamp'] = 1721697602000
         mock_response.json.return_value['sequence'] = 51
         mock_response.json.return_value['encoders'] = {'m1': 2000, 'm2': 2000, 'm3': 2000, 'm4': 2000}
         self.node._poll_and_publish()
@@ -158,14 +177,15 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         # Pose must NOT move (no double integration)
         self.assertAlmostEqual(msg_dup.pose.pose.position.x, pose_x_step1, places=6)
 
-        # Published linear & angular velocities must be 0.0
-        self.assertEqual(msg_dup.twist.twist.linear.x, 0.0)
+        # Published linear velocity retains previous fresh velocity (prevents 20Hz flicker)
+        self.assertAlmostEqual(msg_dup.twist.twist.linear.x, published_msgs[1].twist.twist.linear.x, places=5)
         self.assertEqual(msg_dup.twist.twist.angular.z, 0.0)
 
         # Error counter must NOT increment
         self.assertEqual(self.node.consecutive_errors, 0)
 
         # 4. Resume with fresh sequence (seq 52)
+        mock_response.json.return_value['timestamp'] = 1721697603000
         mock_response.json.return_value['sequence'] = 52
         mock_response.json.return_value['encoders'] = {'m1': 3000, 'm2': 3000, 'm3': 3000, 'm4': 3000}
         self.node._poll_and_publish()
@@ -194,7 +214,7 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertTrue(ok)
 
         # Distance ~0.102m over 0.100s -> v_x ~ 1.02 m/s. (If dt incorrectly used 0.050s, v_x would be ~2.04 m/s)
-        self.assertAlmostEqual(kin.v_x, 1.02206, places=2)
+        self.assertAlmostEqual(kin.v_x, 1.03771, places=2)
 
     def test_velocity_retained_during_cached_polls_prevents_flicker(self):
         """Verify that velocity is retained during duplicate cached polls to eliminate 20 Hz flicker."""

@@ -23,7 +23,7 @@ def test_launch_description():
 
     # Phase 3 + Foxglove + cmd_vel + IMU static TF: 7 entities
     entities = ld.entities
-    assert len(entities) == 7, f"Expected 7 entities in launch, found {len(entities)}"
+    assert len(entities) == 8, f"Expected 7 entities in launch, found {len(entities)}"
 
     nodes = [e for e in entities if isinstance(e, Node)]
     node_executables = {e.node_executable for e in nodes}

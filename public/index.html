@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="motion_monitor.css">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='25' y='45' width='50' height='22' rx='4' fill='%2300f2fe' stroke='%23090e16' stroke-width='2'/><rect x='35' y='38' width='30' height='7' rx='2' fill='%23ffffff' stroke='%23090e16' stroke-width='2'/><line x1='50' y1='38' x2='50' y2='20' stroke='%23ff4e50' stroke-width='4' stroke-linecap='round'/><rect x='42' y='14' width='16' height='10' rx='3' fill='%23ff4e50' stroke='%23090e16' stroke-width='1.5'/><circle cx='50' cy='19' r='3' fill='%2300f2fe'/><line x1='68' y1='45' x2='78' y2='25' stroke='%23ffffff' stroke-width='3' stroke-linecap='round'/><circle cx='78' cy='25' r='3.5' fill='%23ffffff'/><circle cx='30' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='30' cy='74' r='4' fill='%23ffffff'/><circle cx='50' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='50' cy='74' r='4' fill='%23ffffff'/><circle cx='70' cy='74' r='12' fill='%231a2230' stroke='%2300f2fe' stroke-width='3'/><circle cx='70' cy='74' r='4' fill='%23ffffff'/></svg>">
 </head>
 <body>
@@ -63,8 +64,15 @@
           </div>
           <span class="battery-text" id="battery-value">--.- V</span>
         </div>
+
+        <!-- Sticky Single-Window Emergency Stop Button -->
+        <button class="btn-estop-large" id="btn-estop-popup" title="EMERGENCY STOP - Command zero velocity, disarm drivetrain & abort test" style="margin-left: 10px;">🚨 EMERGENCY STOP</button>
       </div>
     </header>
+
+    <div class="estop-banner-active" id="estop-alert-banner" style="display: none; margin: 10px 0;">
+      🚨 EMERGENCY STOP ACTIVATED — Drivetrain Disarmed & Motors Stopped
+    </div>
 
     <!-- Tab Navigation -->
     <nav class="tab-navigation-bar" role="tablist" aria-label="Cockpit Top Navigation">
@@ -73,6 +81,7 @@
       <button class="tab-btn" id="nav-sensors" data-tab="tab-sensors-v2" role="tab" aria-selected="false" aria-controls="tab-sensors-v2" tabindex="-1">📡 Sensors</button>
       <button class="tab-btn" id="nav-calibration" data-tab="tab-calibration-v2" role="tab" aria-selected="false" aria-controls="tab-calibration-v2" tabindex="-1">🛡️ Calibration</button>
       <button class="tab-btn" id="nav-diagnostics" data-tab="tab-diagnostics-v2" role="tab" aria-selected="false" aria-controls="tab-diagnostics-v2" tabindex="-1">💻 Diagnostics</button>
+      <button class="tab-btn btn-popup-monitor" id="nav-motion-monitor" title="Open Motion Monitor in separate window">📈 Motion Monitor</button>
     </nav>
 
     <!-- Top Level Destination Tab 1: Drive V2 -->
@@ -139,7 +148,35 @@
               <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
                 <!-- 3D Chassis Viewport -->
                 <div style="perspective: 600px; width: 100%; height: 160px; display: flex; align-items: center; justify-content: center; background: #0b0f19; border: 1px solid rgba(0,242,254,0.2); border-radius: 8px; position: relative; overflow: hidden;">
-                  <div style="position: absolute; width: 200px; height: 200px; border: 1px dashed rgba(0,242,254,0.12); border-radius: 50%; transform: rotateX(65deg) translateZ(-40px); pointer-events: none;"></div>
+                  
+                  <!-- Compass Facing Overlay Badge -->
+                  <div id="drive-imu-compass-badge" style="position: absolute; top: 6px; left: 8px; background: rgba(11, 15, 25, 0.85); border: 1px solid rgba(0,242,254,0.3); border-radius: 6px; padding: 3px 8px; display: flex; align-items: center; gap: 6px; z-index: 10; backdrop-filter: blur(4px); font-family: monospace; font-size: 0.75rem; color: #f8fafc; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                    <span style="font-size: 0.85rem;">🧭</span>
+                    <span style="color: #94a3b8; font-size: 0.7rem;">FACING:</span>
+                    <strong id="v2-drive-imu-compass-dir" style="color: #10b981; font-weight: bold; font-size: 0.82rem;">--</strong>
+                    <span id="v2-drive-imu-compass-deg" style="color: #00f2fe; font-size: 0.7rem;">(--°)</span>
+                  </div>
+
+                  <!-- 3D Floor Compass Rose Ring -->
+                  <div id="drive-imu-compass-ring" style="position: absolute; width: 210px; height: 210px; border: 1px dashed rgba(0,242,254,0.25); border-radius: 50%; transform-style: preserve-3d; transform: rotateX(65deg) translateZ(-40px) rotateZ(0deg); transition: transform 0.1s ease-out; pointer-events: none; display: flex; align-items: center; justify-content: center;">
+                    <div style="position: absolute; inset: -3px; border: 1px solid rgba(0,242,254,0.1); border-radius: 50%;"></div>
+                    <!-- Cardinal Markers (N, E, S, W) -->
+                    <div style="position: absolute; top: 1px; transform: rotateX(-65deg); display: flex; flex-direction: column; align-items: center;">
+                      <span style="color: #ef4444; font-weight: bold; font-size: 11px; font-family: monospace; text-shadow: 0 0 6px rgba(239,68,68,0.8); line-height: 1;">N</span>
+                    </div>
+                    <div style="position: absolute; right: 4px; transform: rotateX(-65deg);">
+                      <span style="color: #00f2fe; font-weight: bold; font-size: 10px; font-family: monospace; text-shadow: 0 0 4px rgba(0,242,254,0.5);">E</span>
+                    </div>
+                    <div style="position: absolute; bottom: 1px; transform: rotateX(-65deg);">
+                      <span style="color: #94a3b8; font-weight: bold; font-size: 10px; font-family: monospace;">S</span>
+                    </div>
+                    <div style="position: absolute; left: 4px; transform: rotateX(-65deg);">
+                      <span style="color: #00f2fe; font-weight: bold; font-size: 10px; font-family: monospace; text-shadow: 0 0 4px rgba(0,242,254,0.5);">W</span>
+                    </div>
+                    <!-- Crosshairs -->
+                    <div style="position: absolute; width: 100%; height: 1px; background: rgba(0,242,254,0.12);"></div>
+                    <div style="position: absolute; height: 100%; width: 1px; background: linear-gradient(180deg, rgba(239,68,68,0.4) 0%, transparent 20%, transparent 80%, rgba(148,163,184,0.2) 100%);"></div>
+                  </div>
                   
                   <!-- 3D Model Box -->
                   <div id="drive-imu-3d-model" class="rover-3d-chassis" style="transform-style: preserve-3d; transform: rotateX(-20deg) rotateY(-30deg); transition: transform 0.1s ease-out; position: relative; width: 140px; height: 36px;">
@@ -157,11 +194,90 @@
                   </div>
                 </div>
 
+                <!-- Interactive Visual Compass Instrument Dial -->
+                <div id="visual-compass-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0b0f19; border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 8px; padding: 10px 8px; width: 100%; position: relative; box-shadow: inset 0 0 15px rgba(0,0,0,0.6);">
+                  <div style="font-size: 0.72rem; font-weight: bold; color: #94a3b8; letter-spacing: 1px; margin-bottom: 6px; font-family: monospace; display: flex; align-items: center; gap: 6px;">
+                    <span>🧭 VISUAL COMPASS INSTRUMENT</span>
+                  </div>
+                  
+                  <!-- SVG Compass Dial Instrument -->
+                  <div style="position: relative; width: 150px; height: 150px; display: flex; align-items: center; justify-content: center;">
+                    <!-- Fixed Outer Dial Face -->
+                    <svg viewBox="0 0 200 200" width="150" height="150" style="position: absolute; inset: 0;">
+                      <defs>
+                        <radialGradient id="compass-face-grad" cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stop-color="#090d16"/>
+                          <stop offset="85%" stop-color="#0b0f19"/>
+                          <stop offset="100%" stop-color="#141c2e"/>
+                        </radialGradient>
+                      </defs>
+
+                      <!-- Bezel & Background -->
+                      <circle cx="100" cy="100" r="96" fill="url(#compass-face-grad)" stroke="rgba(0,242,254,0.4)" stroke-width="2"/>
+                      <circle cx="100" cy="100" r="88" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+                      <circle cx="100" cy="100" r="66" fill="none" stroke="rgba(0,242,254,0.15)" stroke-width="1" stroke-dasharray="2 4"/>
+
+                      <!-- Major Cardinal Labels -->
+                      <text x="100" y="24" text-anchor="middle" fill="#ef4444" font-weight="900" font-size="17" font-family="monospace">N</text>
+                      <text x="180" y="106" text-anchor="middle" fill="#00f2fe" font-weight="bold" font-size="15" font-family="monospace">E</text>
+                      <text x="100" y="188" text-anchor="middle" fill="#94a3b8" font-weight="bold" font-size="15" font-family="monospace">S</text>
+                      <text x="20" y="106" text-anchor="middle" fill="#00f2fe" font-weight="bold" font-size="15" font-family="monospace">W</text>
+
+                      <!-- Intercardinal Labels -->
+                      <text x="154" y="48" text-anchor="middle" fill="rgba(0,242,254,0.7)" font-size="10" font-family="monospace">NE</text>
+                      <text x="154" y="162" text-anchor="middle" fill="rgba(148,163,184,0.7)" font-size="10" font-family="monospace">SE</text>
+                      <text x="46" y="162" text-anchor="middle" fill="rgba(148,163,184,0.7)" font-size="10" font-family="monospace">SW</text>
+                      <text x="46" y="48" text-anchor="middle" fill="rgba(0,242,254,0.7)" font-size="10" font-family="monospace">NW</text>
+
+                      <!-- Dial Tick Marks -->
+                      <line x1="100" y1="30" x2="100" y2="36" stroke="#ef4444" stroke-width="2.5"/>
+                      <line x1="135" y1="39" x2="131" y2="46" stroke="rgba(0,242,254,0.6)" stroke-width="1.5"/>
+                      <line x1="161" y1="65" x2="154" y2="69" stroke="rgba(0,242,254,0.6)" stroke-width="1.5"/>
+                      <line x1="170" y1="100" x2="164" y2="100" stroke="#00f2fe" stroke-width="2.5"/>
+                      <line x1="161" y1="135" x2="154" y2="131" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+                      <line x1="135" y1="161" x2="131" y2="154" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+                      <line x1="100" y1="170" x2="100" y2="164" stroke="#94a3b8" stroke-width="2.5"/>
+                      <line x1="65" y1="161" x2="69" y2="154" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+                      <line x1="39" y1="135" x2="46" y2="131" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+                      <line x1="30" y1="100" x2="36" y2="100" stroke="#00f2fe" stroke-width="2.5"/>
+                      <line x1="39" y1="65" x2="46" y2="69" stroke="rgba(0,242,254,0.6)" stroke-width="1.5"/>
+                      <line x1="65" y1="39" x2="69" y2="46" stroke="rgba(0,242,254,0.6)" stroke-width="1.5"/>
+                    </svg>
+
+                    <!-- Rotating Compass Needle Face -->
+                    <svg id="visual-compass-needle" viewBox="0 0 200 200" width="150" height="150" style="position: absolute; inset: 0; transition: transform 0.1s ease-out; transform: rotate(0deg); pointer-events: none;">
+                      <!-- Red North Arrow -->
+                      <polygon points="100,26 108,100 100,90 92,100" fill="#ef4444" stroke="#ff4e50" stroke-width="1"/>
+                      <!-- Cyan South Arrow -->
+                      <polygon points="100,174 108,100 100,110 92,100" fill="#00f2fe" stroke="#38bdf8" stroke-width="1"/>
+                      <!-- Center Hub -->
+                      <circle cx="100" cy="100" r="10" fill="#0f172a" stroke="#00f2fe" stroke-width="2"/>
+                      <circle cx="100" cy="100" r="4" fill="#ef4444"/>
+                    </svg>
+                  </div>
+                </div>
+
+                <!-- Prominent Rover Facing Direction Banner -->
+                <div style="width: 100%; background: linear-gradient(135deg, rgba(0, 242, 254, 0.12) 0%, rgba(16, 185, 129, 0.18) 100%); border: 1px solid rgba(0, 242, 254, 0.35); border-radius: 6px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; font-family: monospace;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 1.1rem; filter: drop-shadow(0 0 4px #00f2fe);">🧭</span>
+                    <span style="font-size: 0.8rem; font-weight: bold; color: #94a3b8; letter-spacing: 0.5px;">ROVER FACING:</span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="v2-drive-imu-facing-full" style="font-size: 0.95rem; font-weight: 800; color: #10b981; text-shadow: 0 0 8px rgba(16, 185, 129, 0.6); text-transform: uppercase;">--</span>
+                    <span style="color: rgba(255,255,255,0.3);">|</span>
+                    <strong id="v2-drive-imu-facing-code" style="font-size: 0.95rem; font-weight: 800; color: #00f2fe;">--</strong>
+                    <span id="v2-drive-imu-heading-deg" style="font-size: 0.8rem; color: #a855f7; font-weight: 600;">(--°)</span>
+                  </div>
+                </div>
+
                 <!-- Live Numeric Readouts Grid -->
                 <div style="font-size: 0.78rem; font-family: monospace; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 8px 10px;">
                   <div>Roll: <strong id="v2-drive-imu-roll" style="color: #00f2fe;">--°</strong></div>
                   <div>Pitch: <strong id="v2-drive-imu-pitch" style="color: #00f2fe;">--°</strong></div>
                   <div>Orientation Yaw: <strong id="v2-drive-imu-yaw" style="color: #00f2fe;">--°</strong></div>
+                  <div>Compass Heading: <strong id="v2-drive-imu-heading" style="color: #00f2fe;">--°</strong></div>
+                  <div>Compass Facing: <strong id="v2-drive-imu-facing" style="color: #10b981;">--</strong></div>
                   <div>Gyro Z: <strong id="v2-drive-imu-gyroz" style="color: #a855f7;">-- rad/s</strong></div>
                   <div>Cal Status: <strong id="v2-drive-imu-cal" style="color: #3b82f6;">--</strong></div>
                   <div>Data Age: <strong id="v2-drive-imu-age" style="color: #94a3b8;">-- ms</strong></div>
@@ -363,6 +479,321 @@
               </div>
             </div>
           </details>
+        <!-- Unified Motion Monitor Dashboard Panel (Sections 1 through 7) -->
+        <div class="v2-card" id="motion-monitor-section" style="border: 1px solid var(--cyan-bright); box-shadow: 0 0 20px rgba(0, 242, 254, 0.15); margin-top: 20px;">
+          <div class="v2-card-header" style="display: flex; align-items: center; justify-content: space-between;">
+            <h3>📈 Live Motion Monitor Telemetry & Progress</h3>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="btn-mm-action btn-reset" id="btn-reset-plan-main" title="Reset test plan state & zero origin">🔄 RESET PLAN</button>
+              <button class="btn-mm-action btn-clear" id="btn-clear-data-main" title="Clear all telemetry and restart test metrics">🧹 CLEAR DATA</button>
+              <span class="mm-step-badge" id="plan-overall-state">IDLE</span>
+            </div>
+          </div>
+
+          <!-- SECTION 1: Current Plan & Step Progress -->
+          <div class="mm-plan-steps" id="plan-steps-container">
+            <div class="step-chip active" id="step-chip-1">
+              <span class="step-num">1</span>
+              <span class="step-label" id="chip-lbl-1">Forward 970.0 mm</span>
+              <span class="step-status" id="chip-st-1">ACTIVE</span>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-chip" id="step-chip-2">
+              <span class="step-num">2</span>
+              <span class="step-label" id="chip-lbl-2">Zone 1 (45mm/s, 40mm)</span>
+              <span class="step-status" id="chip-st-2">PENDING</span>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-chip" id="step-chip-3">
+              <span class="step-num">3</span>
+              <span class="step-label" id="chip-lbl-3">Zone 2 (30mm/s, 25mm)</span>
+              <span class="step-status" id="chip-st-3">PENDING</span>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-chip" id="step-chip-4">
+              <span class="step-num">4</span>
+              <span class="step-label" id="chip-lbl-4">Zone 3 (20mm/s, 25mm)</span>
+              <span class="step-status" id="chip-st-4">PENDING</span>
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step-chip" id="step-chip-5">
+              <span class="step-num">5</span>
+              <span class="step-label" id="chip-lbl-5">Stop / Disarm</span>
+              <span class="step-status" id="chip-st-5">PENDING</span>
+            </div>
+          </div>
+
+          <div class="mm-plan-metrics-grid" style="margin-bottom: 16px;">
+            <div class="mm-metric-box">
+              <span class="mm-label">CURRENT STEP</span>
+              <span class="mm-value-text" id="val-current-step-label">Forward 1000.0 mm</span>
+            </div>
+            <div class="mm-metric-box">
+              <span class="mm-label">TARGET</span>
+              <span class="mm-value-num" id="val-target-dist">1000.0 <span class="unit">mm</span></span>
+            </div>
+            <div class="mm-metric-box">
+              <span class="mm-label">MEASURED</span>
+              <span class="mm-value-num cyan" id="val-measured-dist">0.0 <span class="unit">mm</span></span>
+            </div>
+            <div class="mm-metric-box">
+              <span class="mm-label">REMAINING</span>
+              <span class="mm-value-num" id="val-remaining-dist">500.0 <span class="unit">mm</span></span>
+            </div>
+            <div class="mm-metric-box">
+              <span class="mm-label">PROGRESS</span>
+              <span class="mm-value-num green" id="val-progress-pct">0.0<span class="unit">%</span></span>
+            </div>
+          </div>
+
+          <!-- SECTION 1.5: Interactive Test Plan & Slowdown Zone Configurator -->
+          <div style="border: 1px solid rgba(0, 242, 254, 0.35); background: linear-gradient(180deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.85) 100%); padding: 14px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <h4 style="color: #00f2fe; font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                <span>⚙️</span> EDITABLE TEST PLAN & SLOWDOWN ZONES
+              </h4>
+              <span style="color: #94a3b8; font-size: 0.75rem;">Custom Target & Multi-Zone Profile</span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label style="color: #94a3b8; font-size: 0.7rem; font-weight: 700; display: block; margin-bottom: 4px;">DIRECTION</label>
+                <select id="cfg-direction-main" style="width: 100%; background: #0f172a; border: 1px solid #00f2fe; color: #38ef7d; font-weight: 800; padding: 6px; border-radius: 6px; font-size: 0.85rem;">
+                  <option value="1" selected>➔ FORWARD (Positive)</option>
+                  <option value="-1">⬅ REVERSE (Negative)</option>
+                </select>
+              </div>
+              <div>
+                <label style="color: #94a3b8; font-size: 0.7rem; font-weight: 700; display: block; margin-bottom: 4px;">TARGET DISTANCE (mm)</label>
+                <input type="number" id="cfg-target-dist-main" value="1000.0" step="0.1" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #00f2fe; font-weight: 800; padding: 6px; border-radius: 6px; font-size: 0.85rem;" />
+              </div>
+              <div>
+                <label style="color: #94a3b8; font-size: 0.7rem; font-weight: 700; display: block; margin-bottom: 4px;">CRUISE SPEED (m/s)</label>
+                <input type="number" id="cfg-cruise-speed-main" value="0.150" step="0.005" min="0.010" max="0.500" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; font-weight: 800; padding: 6px; border-radius: 6px; font-size: 0.85rem;" />
+              </div>
+            </div>
+
+            <div style="margin-bottom: 10px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label style="color: #ffb700; font-size: 0.75rem; font-weight: 800;">⚡ SLOWDOWN ZONES</label>
+                <button id="btn-add-zone-main" style="background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #ffb700; font-size: 0.7rem; font-weight: 700; border-radius: 4px; padding: 2px 6px; cursor: pointer;">+ Add Zone</button>
+              </div>
+              <div id="zones-editor-list-main" style="display: flex; flex-direction: column; gap: 6px;">
+                <!-- Dynamic Zone Rows -->
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end;">
+              <button id="btn-apply-plan-main" style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); border: none; color: #030712; font-weight: 900; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+                💾 APPLY PLAN
+              </button>
+            </div>
+          </div>
+
+          <!-- SECTION 2: Large Graphical Progress Line -->
+          <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
+              <h4 style="color: var(--text-main); font-size: 0.95rem; font-weight: 800;">🚙 LIVE MOTION PROGRESS LINE</h4>
+              <div id="inline-zone-legend-main" style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                <!-- Dynamic Pills rendered by JS -->
+              </div>
+              <span class="mm-dir-badge" id="val-motion-direction">FORWARD →</span>
+            </div>
+            <div class="progress-canvas-container">
+              <svg id="progress-svg" viewBox="0 0 1000 180" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="grad-line" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#00f2fe" stop-opacity="0.35"/>
+                    <stop offset="100%" stop-color="#38ef7d" stop-opacity="0.35"/>
+                  </linearGradient>
+                  <linearGradient id="grad-decel" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#ffb700" stop-opacity="0.25"/>
+                    <stop offset="100%" stop-color="#ff0055" stop-opacity="0.25"/>
+                  </linearGradient>
+                  <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+                    <feGaussianBlur stdDeviation="3.5" result="blur" />
+                    <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+                  </filter>
+                </defs>
+
+                <rect x="80" y="80" width="840" height="12" rx="6" fill="#1e293b" />
+                <rect id="track-filled" x="80" y="80" width="0" height="12" rx="6" fill="url(#grad-line)" />
+                <!-- Dynamic Deceleration Shaded Zones (Multi-Color N-Zone Approach) -->
+                <g id="dynamic-decel-zones"></g>
+
+                <line x1="80" y1="65" x2="80" y2="105" stroke="#94a3b8" stroke-width="3" />
+                <text x="80" y="55" fill="#94a3b8" font-size="12" font-weight="700" text-anchor="middle" id="txt-start-marker">START (0.0 mm)</text>
+                <line id="target-marker" x1="920" y1="55" x2="920" y2="115" stroke="#38ef7d" stroke-width="4" stroke-dasharray="6 3" />
+                <text id="target-marker-text" x="920" y="45" fill="#38ef7d" font-size="12" font-weight="800" text-anchor="middle">TARGET (500.0 mm)</text>
+
+                <g id="stopped-marker-group" opacity="0">
+                  <line id="stopped-marker" x1="920" y1="60" x2="920" y2="110" stroke="#ff0055" stroke-width="3" />
+                  <text id="stopped-marker-text" x="920" y="135" fill="#ff0055" font-size="12" font-weight="800" text-anchor="middle">STOPPED (502.1 mm)</text>
+                </g>
+
+                <g id="rover-icon-group" transform="translate(80, 80)">
+                  <circle r="22" fill="#030712" stroke="#00f2fe" stroke-width="3" filter="url(#glow)" />
+                  <g id="rover-arrow-group" transform="rotate(0)">
+                    <polygon points="0,-14 9,10 0,5 -9,10" fill="#00f2fe" />
+                  </g>
+                  <text x="0" y="38" fill="#00f2fe" font-size="11" font-weight="800" text-anchor="middle" id="rover-icon-label">0.0 mm</text>
+                </g>
+              </svg>
+            </div>
+            <div class="mm-endpoint-summary">
+              <div class="ep-box"><span class="ep-label">TARGET:</span> <span class="ep-val" id="disp-target-mm">500.0 mm</span></div>
+              <div class="ep-box"><span class="ep-label">ACTUAL STOP:</span> <span class="ep-val cyan" id="disp-actual-mm">0.0 mm</span></div>
+              <div class="ep-box"><span class="ep-label">ERROR / OVERSHOOT:</span> <span class="ep-val" id="disp-error-mm">0.0 mm</span></div>
+            </div>
+          </div>
+
+          <!-- SECTION 3: Speed Profile -->
+          <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <h4 style="color: var(--text-main); font-size: 0.95rem; font-weight: 800;">⚡ SPEED & DECELERATION PROFILE</h4>
+              <span class="phase-badge" id="val-speed-phase">CRUISE</span>
+            </div>
+            <div class="speed-grid">
+              <div class="speed-box primary">
+                <span class="lbl">COMMANDED SPEED</span>
+                <span class="val cyan" id="val-cmd-speed">0.000 <span class="u">m/s</span></span>
+              </div>
+              <div class="speed-box primary">
+                <span class="lbl">MEASURED SPEED</span>
+                <span class="val green" id="val-meas-speed">0.000 <span class="u">m/s</span></span>
+              </div>
+              <div class="speed-box">
+                <span class="lbl">PEAK SPEED</span>
+                <span class="val" id="val-peak-speed">0.000 <span class="u">m/s</span></span>
+              </div>
+              <div class="speed-box">
+                <span class="lbl">SLOWDOWN STARTED AT</span>
+                <span class="val yellow" id="val-slowdown-start-at">-- <span class="u">mm</span></span>
+              </div>
+              <div class="speed-box">
+                <span class="lbl">DIST REMAINING AT SLOWDOWN</span>
+                <span class="val yellow" id="val-slowdown-dist-rem">-- <span class="u">mm</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- LOWER GRID: Encoders (Left) + IMU (Right) -->
+          <div class="mm-lower-grid" style="margin-bottom: 16px;">
+            <!-- SECTION 5: Encoder Counters -->
+            <div class="mm-card mm-card-encoders" style="background: rgba(9, 15, 30, 0.6);">
+              <div class="mm-card-header">
+                <h4 style="font-size: 0.9rem; font-weight: 800;">⚙️ RAW ENCODER COUNTERS</h4>
+                <span class="sub-label">Physical Motor Slots</span>
+              </div>
+              <div class="encoder-table">
+                <div class="enc-header-row">
+                  <span>SLOT / MOTOR</span>
+                  <span>TICKS</span>
+                  <span>STEP TICKS</span>
+                  <span>STEP DIST</span>
+                </div>
+                <div class="enc-row">
+                  <span class="m-slot"><span class="dot m1"></span> LF / M1</span>
+                  <span class="val" id="enc-raw-m1">0</span>
+                  <span class="val" id="enc-step-m1">0</span>
+                  <span class="val cyan" id="enc-dist-m1">0.0 mm</span>
+                </div>
+                <div class="enc-row">
+                  <span class="m-slot"><span class="dot m2"></span> RF / M2</span>
+                  <span class="val" id="enc-raw-m2">0</span>
+                  <span class="val" id="enc-step-m2">0</span>
+                  <span class="val cyan" id="enc-dist-m2">0.0 mm</span>
+                </div>
+                <div class="enc-row">
+                  <span class="m-slot"><span class="dot m3"></span> LR / M3</span>
+                  <span class="val" id="enc-raw-m3">0</span>
+                  <span class="val" id="enc-step-m3">0</span>
+                  <span class="val cyan" id="enc-dist-m3">0.0 mm</span>
+                </div>
+                <div class="enc-row">
+                  <span class="m-slot"><span class="dot m4"></span> RR / M4</span>
+                  <span class="val" id="enc-raw-m4">0</span>
+                  <span class="val" id="enc-step-m4">0</span>
+                  <span class="val cyan" id="enc-dist-m4">0.0 mm</span>
+                </div>
+              </div>
+              <div class="enc-summary-strip">
+                <div><span class="lbl">LEFT AVG:</span> <span class="val" id="enc-left-avg">0.0 mm</span></div>
+                <div><span class="lbl">RIGHT AVG:</span> <span class="val" id="enc-right-avg">0.0 mm</span></div>
+                <div><span class="lbl">OVERALL:</span> <span class="val green" id="enc-overall-avg">0.0 mm</span></div>
+              </div>
+            </div>
+
+            <!-- SECTION 4: IMU Heading Dial -->
+            <div class="mm-card mm-card-imu" style="background: rgba(9, 15, 30, 0.6);">
+              <div class="mm-card-header">
+                <h4 style="font-size: 0.9rem; font-weight: 800;">🧭 IMU HEADING & ROTATION</h4>
+                <span class="sub-label">BNO08x Orientation</span>
+              </div>
+              <div class="imu-display-grid">
+                <div class="compass-box">
+                  <svg class="compass-svg" viewBox="0 0 160 160">
+                    <circle cx="80" cy="80" r="70" fill="#030712" stroke="#1e293b" stroke-width="4"/>
+                    <circle cx="80" cy="80" r="55" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="4 2"/>
+                    <text x="80" y="24" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">N (0°)</text>
+                    <text x="145" y="84" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">E</text>
+                    <text x="80" y="148" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">S</text>
+                    <text x="15" y="84" fill="#94a3b8" font-size="10" font-weight="700" text-anchor="middle">W</text>
+                    <g id="compass-needle" transform="rotate(0, 80, 80)">
+                      <polygon points="80,22 88,80 80,72 72,80" fill="#00f2fe" filter="url(#glow)"/>
+                      <polygon points="80,138 88,80 80,88 72,80" fill="#64748b"/>
+                      <circle cx="80" cy="80" r="6" fill="#00f2fe"/>
+                    </g>
+                  </svg>
+                </div>
+                <div class="imu-metrics-box">
+                  <div class="imu-row"><span class="lbl">START HEADING:</span><span class="val" id="val-start-heading">0.0°</span></div>
+                  <div class="imu-row"><span class="lbl">CURRENT HEADING:</span><span class="val cyan" id="val-current-heading">0.0°</span></div>
+                  <div class="imu-row"><span class="lbl">HEADING CHANGE:</span><span class="val" id="val-heading-change">+0.0°</span></div>
+                  <div class="imu-row"><span class="lbl">TARGET HEADING:</span><span class="val" id="val-target-heading">--°</span></div>
+                  <div class="imu-row"><span class="lbl">HEADING ERROR:</span><span class="val green" id="val-heading-error">0.0°</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SECTION 6: Position & Endpoint Comparison -->
+          <div style="margin-bottom: 16px;">
+            <h4 style="color: var(--text-main); font-size: 0.95rem; font-weight: 800; margin-bottom: 8px;">📊 POSITION & ENDPOINT COMPARISON</h4>
+            <div class="comparison-grid">
+              <div class="cmp-box"><span class="lbl">REQUESTED ENDPOINT</span><span class="val" id="cmp-req-endpoint">500.0 mm</span></div>
+              <div class="cmp-box"><span class="lbl">ENCODER ENDPOINT</span><span class="val cyan" id="cmp-enc-endpoint">502.4 mm</span></div>
+              <div class="cmp-box"><span class="lbl">ODOMETRY ENDPOINT</span><span class="val green" id="cmp-odom-endpoint">502.1 mm</span></div>
+              <div class="cmp-box"><span class="lbl">DISTANCE ERROR</span><span class="val" id="cmp-dist-error">+2.1 mm</span></div>
+              <div class="cmp-box"><span class="lbl">FINAL IMU HEADING</span><span class="val" id="cmp-final-heading">0.0°</span></div>
+              <div class="cmp-box"><span class="lbl">FINAL HEADING CHANGE</span><span class="val" id="cmp-final-heading-change">+0.0°</span></div>
+            </div>
+          </div>
+
+          <!-- SECTION 7: Execution Timeline -->
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <h4 style="color: var(--text-main); font-size: 0.95rem; font-weight: 800;">⏱️ PLAN EXECUTION TIMELINE</h4>
+              <span class="sub-label" id="val-elapsed-time">Elapsed: 0.0s</span>
+            </div>
+            <div class="timeline-seq" id="timeline-seq">
+              <div class="t-node active" id="tn-ready"><span class="t-badge">READY</span><span class="t-time" id="tnt-ready">0.0s</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-fwd"><span class="t-badge">FORWARD</span><span class="t-time" id="tnt-fwd">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-fwd-slow"><span class="t-badge">SLOWDOWN</span><span class="t-time" id="tnt-fwd-slow">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-fwd-stop"><span class="t-badge">STOPPED</span><span class="t-time" id="tnt-fwd-stop">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-rev"><span class="t-badge">REVERSE</span><span class="t-time" id="tnt-rev">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-rev-slow"><span class="t-badge">SLOWDOWN</span><span class="t-time" id="tnt-rev-slow">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-rev-stop"><span class="t-badge">STOPPED</span><span class="t-time" id="tnt-rev-stop">--</span></div>
+              <span class="t-arr">→</span>
+              <div class="t-node" id="tn-disarmed"><span class="t-badge">DISARMED</span><span class="t-time" id="tnt-disarmed">--</span></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1504,6 +1935,7 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=3.5.0"></script>
+  <script src="motion_monitor.js?v=3.5.0"></script>
 </body>
 </html>
