@@ -303,6 +303,7 @@
             <div class="v2-status-item"><span class="v2-status-label">Telemetry Age:</span> <span id="v2-drive-val-telem-age" class="status-val">-- ms</span></div>
             <div class="v2-status-item"><span class="v2-status-label">Odometry Age:</span> <span id="v2-drive-val-odom-age" class="status-val">-- ms</span></div>
             <div class="v2-status-item"><span class="v2-status-label">ROS 2 Autonomy:</span> <span id="v2-drive-val-autonomy" class="status-val badge-disarmed">DISABLED</span></div>
+            <div class="v2-status-item"><span class="v2-status-label">Localization:</span> <span id="v2-drive-val-localization" class="status-val badge-disarmed" style="font-weight: bold; background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid #ef4444;">NOT LOCALIZED</span></div>
 
             <!-- Compact SLAM Control & Status Card -->
             <div class="v2-status-item" id="v2-slam-status-card" style="grid-column: span 2; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(0, 242, 254, 0.2); padding: 8px 12px;">
@@ -825,9 +826,9 @@
           <div class="v2-card" id="autonomy-localization">
             <div class="v2-card-header">
               <h3>🧭 Vehicle Localization State</h3>
-              <span class="badge badge-warning">ODOMETRY ONLY</span>
+              <span id="v2-loc-badge" class="badge badge-danger">NOT LOCALIZED</span>
             </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Active localization mode: <strong>Wheel Odometry Only (Skid-Steer Kinematics)</strong></p>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">Active localization mode: <strong id="v2-loc-mode">AMCL Map Localization (Awaiting Foxglove 2D Pose)</strong></p>
             <div class="v2-status-grid">
               <div class="v2-status-item"><span class="v2-status-label">Position X:</span> <span id="v2-loc-val-x" class="status-val">0.000 m</span></div>
               <div class="v2-status-item"><span class="v2-status-label">Position Y:</span> <span id="v2-loc-val-y" class="status-val">0.000 m</span></div>

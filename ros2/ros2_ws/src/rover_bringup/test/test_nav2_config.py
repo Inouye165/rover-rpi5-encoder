@@ -79,3 +79,11 @@ def test_costmap_and_collision_monitor_invariants():
     cm = cfg['collision_monitor']['ros__parameters']
     assert "PolygonStop" in cm['polygons']
     assert "PolygonSlow" in cm['polygons']
+
+def test_amcl_startup_pose_safety():
+    path = find_nav2_params()
+    with open(path, 'r', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+    amcl = cfg['amcl']['ros__parameters']
+    assert amcl.get('set_initial_pose') is False, "AMCL set_initial_pose must be false"
+    assert 'initial_pose' not in amcl, "AMCL must not have hardcoded initial_pose"

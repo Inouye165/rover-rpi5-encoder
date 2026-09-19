@@ -19,14 +19,15 @@ import time
 from typing import Optional, Tuple, List
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point, PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Imu
 from visualization_msgs.msg import Marker, MarkerArray
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 import requests
-from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
 from rover_bringup.encoder_kinematics import EncoderKinematics, normalize_angle
 
@@ -61,8 +62,10 @@ class OdomAPIHandler(BaseHTTPRequestHandler):
                 is_ok = (consec_errs == 0) and (odom_age_ms < 2000)
                 health = "ok" if is_ok else ("degraded" if odom_age_ms < 5000 else "stale")
 
+                loc_status = node.get_localization_status() if hasattr(node, 'get_localization_status') else None
                 data = {
                     "ok": is_ok,
+                    "localization": loc_status,
                     "timestamp": now_ts,
                     "x": float(getattr(node.kinematics, 'x', 0.0)),
                     "y": float(getattr(node.kinematics, 'y', 0.0)),
@@ -193,6 +196,35 @@ class RoverEncoderOdometry(Node):
         self.marker_pub = self.create_publisher(MarkerArray, '/rover_footprint_marker', 10)
         self.vis_marker_pub = self.create_publisher(MarkerArray, '/visualization_marker', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+
+        # TF Buffer and Listener for map -> base_link
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Localization tracking state
+        self._amcl_lock = threading.Lock()
+        self._last_amcl_pose = None
+        self._last_amcl_time = 0.0
+        self._map_received = False
+        self._map_time = 0.0
+
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped,
+            '/amcl_pose',
+            self._amcl_callback,
+            latched_qos
+        )
+        self.map_sub = self.create_subscription(
+            OccupancyGrid,
+            '/map',
+            self._map_callback,
+            latched_qos
+        )
 
         # IMU subscription and gyro integration state
         self._imu_gyro_buffer = []  # List of (timestamp_sec: float, gz_rad_per_sec: float)
@@ -548,6 +580,106 @@ class RoverEncoderOdometry(Node):
 
         self.marker_pub.publish(marker_array)
         self.vis_marker_pub.publish(marker_array)
+
+
+    def _map_callback(self, msg: OccupancyGrid):
+        self._map_received = True
+        self._map_time = time.time()
+
+    def _amcl_callback(self, msg: PoseWithCovarianceStamped):
+        with self._amcl_lock:
+            self._last_amcl_time = time.time()
+            cov = list(msg.pose.covariance)
+            sx = math.sqrt(max(0.0, cov[0]))
+            sy = math.sqrt(max(0.0, cov[7]))
+            syaw = math.sqrt(max(0.0, cov[35]))
+
+            q = msg.pose.pose.orientation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+
+            self._last_amcl_pose = {
+                "x": float(msg.pose.pose.position.x),
+                "y": float(msg.pose.pose.position.y),
+                "yaw": float(yaw),
+                "yaw_deg": float(math.degrees(yaw)),
+                "sigma_x": float(sx),
+                "sigma_y": float(sy),
+                "sigma_yaw": float(syaw),
+                "cov_x": float(cov[0]),
+                "cov_y": float(cov[7]),
+                "cov_yaw": float(cov[35]),
+                "timestamp": float(msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+            }
+
+    def get_localization_status(self):
+        with self._amcl_lock:
+            last_pose = self._last_amcl_pose
+            last_time = self._last_amcl_time
+
+        now = time.time()
+        map_ok = self._map_received and ((now - self._map_time) < 30.0 if self._map_time > 0 else False)
+        tf_ok = False
+        try:
+            tf_ok = self.tf_buffer.can_transform('map', self.base_frame, rclpy.time.Time())
+        except Exception:
+            tf_ok = False
+
+        if last_pose is None or last_time <= 0:
+            return {
+                "localized": False,
+                "state": "NOT_LOCALIZED",
+                "reason": "NO_INITIAL_POSE",
+                "details": "Awaiting initial pose estimate from operator (Foxglove)",
+                "age_ms": None,
+                "map_available": map_ok,
+                "tf_available": tf_ok,
+                "pose": None,
+                "covariance": None
+            }
+
+        age_ms = int((now - last_time) * 1000.0)
+        is_fresh = age_ms <= 2000
+        cov_ok = (last_pose["sigma_x"] <= 0.35) and (last_pose["sigma_y"] <= 0.35) and (last_pose["sigma_yaw"] <= 0.50)
+
+        if is_fresh and cov_ok and tf_ok:
+            state = "LOCALIZED"
+            localized = True
+            details = "Nominal tracking"
+        elif not is_fresh:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = f"Pose stale ({age_ms}ms > 2000ms)"
+        elif not cov_ok:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = f"Covariance exceeded threshold (sx={last_pose['sigma_x']:.2f}m, sy={last_pose['sigma_y']:.2f}m)"
+        else:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = "Map to base_link transform unavailable"
+
+        return {
+            "localized": localized,
+            "state": state,
+            "reason": "OK" if localized else state,
+            "details": details,
+            "age_ms": age_ms,
+            "map_available": map_ok,
+            "tf_available": tf_ok,
+            "pose": {
+                "x": last_pose["x"],
+                "y": last_pose["y"],
+                "yaw": last_pose["yaw"],
+                "yaw_deg": last_pose["yaw_deg"]
+            },
+            "covariance": {
+                "sigma_x": last_pose["sigma_x"],
+                "sigma_y": last_pose["sigma_y"],
+                "sigma_yaw": last_pose["sigma_yaw"]
+            }
+        }
 
 
 def main(args=None):

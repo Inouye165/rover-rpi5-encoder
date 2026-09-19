@@ -8,7 +8,9 @@ import time
 import math
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from geometry_msgs.msg import Twist
+from nav2_msgs.action import NavigateToPose
 import requests
 
 
@@ -42,6 +44,9 @@ class RoverCmdVelBridgeNode(Node):
 
         # Status tracking
         self.bridge_status = 'connected'
+
+        # Nav2 NavigateToPose action client for fail-safe goal cancellation
+        self.nav_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
 
         # Subscribe strictly to /cmd_vel topic
         self.subscription = self.create_subscription(
@@ -107,12 +112,23 @@ class RoverCmdVelBridgeNode(Node):
                     self.get_logger().warn(f"Cockpit API rejected /cmd_vel (HTTP {r.status_code}): {r.text[:120]}")
                 if r.status_code in (401, 403):
                     self.bridge_status = 'autonomy_disabled'
+                    self.cancel_nav_goals(f"Cockpit API rejected /cmd_vel (HTTP {r.status_code})")
                 else:
                     self.bridge_status = 'rejected'
         except Exception as e:
             if self._should_log('connection_error'):
                 self.get_logger().error(f"Failed to post /cmd_vel to Cockpit API: {str(e)}")
             self.bridge_status = 'fault'
+
+    def cancel_nav_goals(self, reason: str = ""):
+        try:
+            if self.nav_client and self.nav_client.server_is_ready():
+                if self._should_log('cancel_goals'):
+                    self.get_logger().warn(f"Cancelling active NavigateToPose action goals: {reason}")
+                self.nav_client.cancel_all_goals()
+        except Exception as e:
+            if self._should_log('cancel_goals_err'):
+                self.get_logger().error(f"Failed to cancel NavigateToPose goals: {str(e)}")
 
     def send_stop(self):
         """Send a best-effort zero command on orderly shutdown."""

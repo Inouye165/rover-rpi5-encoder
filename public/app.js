@@ -1445,6 +1445,11 @@ function handleServerMessage(msg) {
       break;
     }
 
+    case 'localization_status': {
+      if (msg.localization) updateLocalizationUI(msg.localization);
+      break;
+    }
+
     case 'autonomy_status': {
       if (msg.status) updateAutonomyState(msg.status);
       break;
@@ -6800,4 +6805,63 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initSlamControls);
 } else {
   initSlamControls();
+}
+
+function updateLocalizationUI(loc) {
+  if (!loc) return;
+  const elDriveLoc = document.getElementById('v2-drive-val-localization');
+  const elBadge = document.getElementById('v2-loc-badge');
+  const elMode = document.getElementById('v2-loc-mode');
+  const elX = document.getElementById('v2-loc-val-x');
+  const elY = document.getElementById('v2-loc-val-y');
+  const elYaw = document.getElementById('v2-loc-val-yaw');
+  const elCov = document.getElementById('v2-loc-val-cov');
+
+  const isLoc = (loc.localized === true);
+
+  if (elDriveLoc) {
+    if (isLoc) {
+      elDriveLoc.textContent = 'LOCALIZED';
+      elDriveLoc.style.background = 'rgba(16, 185, 129, 0.2)';
+      elDriveLoc.style.color = '#6ee7b7';
+      elDriveLoc.style.borderColor = '#10b981';
+      elDriveLoc.className = 'status-val badge-armed';
+    } else {
+      elDriveLoc.textContent = 'NOT LOCALIZED';
+      elDriveLoc.style.background = 'rgba(239, 68, 68, 0.2)';
+      elDriveLoc.style.color = '#fca5a5';
+      elDriveLoc.style.borderColor = '#ef4444';
+      elDriveLoc.className = 'status-val badge-disarmed';
+    }
+  }
+
+  if (elBadge) {
+    elBadge.textContent = isLoc ? 'LOCALIZED' : 'NOT LOCALIZED';
+    elBadge.className = isLoc ? 'badge badge-success' : 'badge badge-danger';
+  }
+
+  if (elMode) {
+    if (isLoc) {
+      elMode.textContent = 'AMCL Map Localization (Tracking Nominal)';
+    } else {
+      elMode.textContent = loc.details || 'Awaiting operator 2D pose estimate in Foxglove';
+    }
+  }
+
+  if (loc.x !== null && loc.x !== undefined && elX) {
+    elX.textContent = `${Number(loc.x).toFixed(3)} m`;
+  }
+  if (loc.y !== null && loc.y !== undefined && elY) {
+    elY.textContent = `${Number(loc.y).toFixed(3)} m`;
+  }
+  if (loc.yawDeg !== null && loc.yawDeg !== undefined && elYaw) {
+    elYaw.textContent = `${Number(loc.yawDeg).toFixed(1)}°`;
+  }
+  if (elCov) {
+    if (loc.sigmaX !== null && loc.sigmaX !== undefined) {
+      elCov.textContent = `σx=${Number(loc.sigmaX * 100).toFixed(1)}cm, σy=${Number(loc.sigmaY * 100).toFixed(1)}cm, σθ=${Number(loc.sigmaYaw * 180 / Math.PI).toFixed(1)}°`;
+    } else {
+      elCov.textContent = 'Unbounded (No Map / Pose Unset)';
+    }
+  }
 }

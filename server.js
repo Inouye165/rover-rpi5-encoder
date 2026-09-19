@@ -266,6 +266,75 @@ let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
 
+let localizationState = {
+  localized: false,
+  state: 'NOT_LOCALIZED',
+  lastUpdateMs: 0,
+  x: null,
+  y: null,
+  yaw: null,
+  yawDeg: null,
+  sigmaX: null,
+  sigmaY: null,
+  sigmaYaw: null,
+  details: 'Awaiting operator initial pose in Foxglove'
+};
+
+function updateLocalizationState(loc) {
+  if (!loc) return;
+  const wasLocalized = localizationState.localized;
+  const now = Date.now();
+
+  localizationState.localized = (loc.localized === true);
+  localizationState.state = loc.state || (loc.localized ? 'LOCALIZED' : 'NOT_LOCALIZED');
+  localizationState.details = loc.details || '';
+  localizationState.lastUpdateMs = now;
+
+  if (loc.pose) {
+    localizationState.x = loc.pose.x;
+    localizationState.y = loc.pose.y;
+    localizationState.yaw = loc.pose.yaw;
+    localizationState.yawDeg = loc.pose.yaw_deg;
+  }
+  if (loc.covariance) {
+    localizationState.sigmaX = loc.covariance.sigma_x;
+    localizationState.sigmaY = loc.covariance.sigma_y;
+    localizationState.sigmaYaw = loc.covariance.sigma_yaw;
+  }
+
+  // Fail-Safe: If rover was actively navigating and localization becomes lost:
+  if (wasLocalized && !localizationState.localized) {
+    if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
+      console.error('[Localization Safety] CRITICAL: Localization lost during autonomous navigation! Triggering fail-safe disarm.');
+      abortAutonomyDueToLocalizationLost('Localization lost during autonomous navigation');
+    }
+  }
+
+  if (wasLocalized !== localizationState.localized) {
+    broadcast({ type: 'localization_status', localization: localizationState });
+  }
+}
+
+function abortAutonomyDueToLocalizationLost(reason = 'Localization lost during autonomous navigation') {
+  console.error(`[Localization Safety] Fail-safe stop triggered: ${reason}`);
+  resetAutonomyToSafe(reason);
+  autonomyState.state = 'FAULT';
+  autonomyState.lastRejectionReason = reason;
+
+  if (latestNormalDriveStatus && latestNormalDriveStatus.armed) {
+    latestNormalDriveStatus = { armed: false };
+    broadcastAutoCalibStatus();
+    if (serialPort && serialPort.isOpen) {
+      const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+      serialPort.write(pkt);
+      broadcast({ type: 'raw_serial_out', data: `[Localization Safety] disarm command sent` });
+    }
+    broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0 });
+  }
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+  broadcast({ type: 'localization_status', localization: localizationState });
+}
+
 let autonomyState = {
   state: isCmdTokenValid ? 'DISABLED' : 'FAULT',
   enabled: false,
@@ -3157,6 +3226,9 @@ function fetchRosOdometry() {
                   valid: true,
                   odometry_age_ms: parsed.odometry_age_ms
                 };
+                if (parsed.localization) {
+                  updateLocalizationState(parsed.localization);
+                }
               }
               return finish(latestRosOdom);
             }
@@ -3960,6 +4032,15 @@ function requireOperatorAuth(req, res, next) {
 }
 
 app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
+  if (autonomyState.enabled || cmdSource === 'ROS_AUTONOMY' || (req.body && req.body.autonomy === true)) {
+    if (!localizationState.localized) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Cannot arm rover for autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
+        localization: localizationState
+      });
+    }
+  }
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
   targetAngular = 0.0;
@@ -4260,6 +4341,7 @@ app.get('/api/status', (req, res) => {
     mode: latestNormalDriveStatus ? latestNormalDriveStatus.mode : null,
     autonomyEnabled: autonomyState.enabled,
     autonomyState: autonomyState.state,
+    localization: localizationState,
     cmdSource: cmdSource,
     loopTiming: latestLoopTiming,
     bootCount: latestNormalDriveStatus ? latestNormalDriveStatus.bootCount : null,
@@ -4276,6 +4358,13 @@ app.get('/api/status', (req, res) => {
 app.post('/api/autonomy/enable', requireOperatorAuth, (req, res) => {
   if (!isCmdTokenValid) {
     return res.status(409).json({ ok: false, error: 'Internal command configuration fault: Invalid or missing ROVER_CMD_VEL_TOKEN (must be at least 64 hex characters)' });
+  }
+  if (!localizationState.localized) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot enable autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
+      localization: localizationState
+    });
   }
   const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
   if (isArmed) {
@@ -4319,6 +4408,10 @@ app.post('/api/autonomy/disable', requireOperatorAuth, (req, res) => {
 
 app.get('/api/autonomy/status', (req, res) => {
   res.json(getAutonomyStatusObject());
+});
+
+app.get('/api/localization/status', (req, res) => {
+  res.json(localizationState);
 });
 
 app.post('/api/command-source', requireOperatorAuth, (req, res) => {
@@ -4548,6 +4641,12 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     autonomyState.rejectedCount++;
     autonomyState.lastRejectionReason = 'Autonomy is disabled';
     return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
+  }
+
+  if (!localizationState.localized) {
+    autonomyState.rejectedCount++;
+    autonomyState.lastRejectionReason = 'Vehicle is NOT LOCALIZED';
+    return res.status(403).json({ ok: false, error: 'Autonomy rejected: Vehicle is NOT LOCALIZED', state: autonomyState.state, localization: localizationState });
   }
 
   // Check maintenance / calibration active
@@ -5938,5 +6037,8 @@ module.exports = {
   getLatestNormalDriveStatus: () => latestNormalDriveStatus,
   setLatestNormalDriveStatus: (s) => { latestNormalDriveStatus = s; },
   setSerialPort: (sp) => { serialPort = sp; },
-  getSerialPort: () => serialPort
+  getSerialPort: () => serialPort,
+  localizationState,
+  updateLocalizationState,
+  abortAutonomyDueToLocalizationLost
 };
