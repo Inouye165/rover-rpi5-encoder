@@ -182,6 +182,7 @@ const EventEmitter = require('events');
 const normalDriveEvents = new EventEmitter();
 let normalDriveStatusSeq = 0;
 let latestNormalDriveStatus = null;
+let latestFaultFlags = 0;
 let lastDeadmanPressedTime = Date.now();
 let reverseWaitStartTime = 0;
 let targetLinear = 0.0;
@@ -1738,6 +1739,7 @@ function parseTelemetryPacket(extType, data) {
   } else if (extType === TYPE_FAULT_REPORT) {
     if (data.length >= 4) {
       const faultFlags = data.readUInt32LE(0);
+      latestFaultFlags = faultFlags;
       broadcast({ type: 'fault_report', faultFlags });
     }
 
@@ -3860,6 +3862,7 @@ app.get('/api/faults/clear', (req, res) => {
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
     serialPort.write(pkt);
+    latestFaultFlags = 0;
     broadcast({ type: 'raw_serial_out', data: `[HTTP /api/faults/clear] clear command sent` });
     res.json({ ok: true, message: 'Faults clear command sent over Serial.' });
   } else {
@@ -3950,7 +3953,13 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
 
     timer = setTimeout(() => {
       cleanup();
-      reject(new Error('Arm confirmation timed out after 500ms waiting for ESP32 confirmation (armed=true, mode=3)'));
+      let msg = 'Arm confirmation timed out after 500ms waiting for ESP32 confirmation (armed=true, mode=3)';
+      if (latestNormalDriveStatus && latestNormalDriveStatus.mode === 4) {
+        msg += ` [ESP32 in EMERGENCY_STOP mode; active faults=0x${(latestFaultFlags || 0).toString(16)}. Clear faults while disarmed and stationary before arming.]`;
+      } else if (latestFaultFlags && latestFaultFlags !== 0) {
+        msg += ` [Active firmware faults=0x${latestFaultFlags.toString(16)}. Clear faults while disarmed and stationary before arming.]`;
+      }
+      reject(new Error(msg));
     }, 500);
 
     normalDriveEvents.on('status', onStatus);
@@ -4054,13 +4063,21 @@ app.post('/api/drive/disarm', (req, res) => {
   res.json({ ok: true, message: 'Normal drive disarm command sent.' });
 });
 
-app.post('/api/drive/clear-faults', (req, res) => {
+app.post('/api/drive/clear-faults', requireOperatorAuth, (req, res) => {
+  const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed && latestNormalDriveStatus.mode === 3;
+  if (isArmed) {
+    return res.status(409).json({ ok: false, error: 'Cannot clear faults while rover is armed' });
+  }
+  if (Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4) {
+    return res.status(409).json({ ok: false, error: 'Cannot clear faults while motion command is active' });
+  }
   if (serialPort && serialPort.isOpen) {
     const pkt = buildPacket(FUNC_CLEAR_FAULTS, [1]);
     serialPort.write(pkt);
+    latestFaultFlags = 0;
     broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/drive/clear-faults] clear faults command sent` });
   }
-  res.json({ ok: true, message: 'Clear faults command sent.' });
+  res.json({ ok: true, message: 'Clear faults command sent (verified disarmed and stationary).' });
 });
 
 app.post('/api/drive/config', (req, res) => {
@@ -4540,8 +4557,14 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed && latestNormalDriveStatus.mode === 3;
   if (!isArmed) {
     autonomyState.rejectedCount++;
-    autonomyState.lastRejectionReason = 'Rover is disarmed';
-    return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
+    let rejectionReason = 'Rover is disarmed';
+    if (latestNormalDriveStatus && latestNormalDriveStatus.mode === 4) {
+      rejectionReason = latestFaultFlags ? `Rover in EMERGENCY_STOP (fault=0x${latestFaultFlags.toString(16)})` : 'Rover in EMERGENCY_STOP';
+    } else if (latestFaultFlags && latestFaultFlags !== 0) {
+      rejectionReason = `Rover has active safety faults (0x${latestFaultFlags.toString(16)})`;
+    }
+    autonomyState.lastRejectionReason = rejectionReason;
+    return res.status(403).json({ ok: false, error: rejectionReason, faultFlags: latestFaultFlags || 0, mode: latestNormalDriveStatus ? latestNormalDriveStatus.mode : null });
   }
 
   if (autonomyState.state === 'READY_DISARMED') {
