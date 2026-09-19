@@ -20,6 +20,7 @@ from typing import Optional, Tuple, List
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point, PoseWithCovarianceStamped
+from std_srvs.srv import Empty
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Imu
 from visualization_msgs.msg import Marker, MarkerArray
@@ -213,6 +214,9 @@ class RoverEncoderOdometry(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE
         )
+        self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
+        self._last_nomotion_call = 0.0
+
         self.amcl_sub = self.create_subscription(
             PoseWithCovarianceStamped,
             '/amcl_pose',
@@ -619,7 +623,7 @@ class RoverEncoderOdometry(Node):
             last_time = self._last_amcl_time
 
         now = time.time()
-        map_ok = self._map_received and ((now - self._map_time) < 30.0 if self._map_time > 0 else False)
+        map_ok = bool(self._map_received)
         tf_ok = False
         try:
             tf_ok = self.tf_buffer.can_transform('map', self.base_frame, rclpy.time.Time())
@@ -640,17 +644,23 @@ class RoverEncoderOdometry(Node):
             }
 
         age_ms = int((now - last_time) * 1000.0)
-        is_fresh = age_ms <= 2000
+        is_stationary = (abs(self.kinematics.v_x) < 0.02 and abs(self.kinematics.w_z) < 0.05)
+        # When stationary, TF transform map->base_link remains live; allow up to 10s or rely on TF
+        is_fresh = (age_ms <= 3500) or (is_stationary and tf_ok and age_ms <= 10000)
         cov_ok = (last_pose["sigma_x"] <= 0.35) and (last_pose["sigma_y"] <= 0.35) and (last_pose["sigma_yaw"] <= 0.50)
 
-        if is_fresh and cov_ok and tf_ok:
+        if is_fresh and cov_ok and tf_ok and map_ok:
             state = "LOCALIZED"
             localized = True
             details = "Nominal tracking"
-        elif not is_fresh:
+        elif not map_ok:
             state = "NOT_LOCALIZED"
             localized = False
-            details = f"Pose stale ({age_ms}ms > 2000ms)"
+            details = "Map topic /map not received"
+        elif not tf_ok:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = "Map to base_link transform unavailable"
         elif not cov_ok:
             state = "NOT_LOCALIZED"
             localized = False
@@ -658,7 +668,7 @@ class RoverEncoderOdometry(Node):
         else:
             state = "NOT_LOCALIZED"
             localized = False
-            details = "Map to base_link transform unavailable"
+            details = f"Pose stale ({age_ms}ms > 3500ms)"
 
         return {
             "localized": localized,
