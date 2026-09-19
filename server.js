@@ -3268,6 +3268,11 @@ function fetchRosOdometry() {
   return odomFetchPromise;
 }
 
+// Background periodic poll to keep localizationState and latestRosOdom fresh
+setInterval(() => {
+  fetchRosOdometry().catch(() => {});
+}, 250);
+
 function broadcastAutoCalibStatus() {
   // Synchronize armed field from the authoritative normal-drive status before broadcasting.
   // autoCalibState.armed must never drift from latestNormalDriveStatus.armed.
@@ -4330,7 +4335,8 @@ app.get('/api/pid-telemetry', (req, res) => {
   });
 });
 
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
+  await fetchRosOdometry().catch(() => {});
   res.json({
     ok: true,
     serialConnected: (serialPort && serialPort.isOpen) === true,
