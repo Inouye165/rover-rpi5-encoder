@@ -2779,7 +2779,7 @@ app.get('/api/motor', (req, res) => {
   }
 });
 
-app.get('/api/stop', (req, res) => {
+app.all('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
   triggerNav2Cancel();
   autonomyState.enabled = false;
@@ -4663,6 +4663,27 @@ app.post('/api/navigation/cancel', (req, res) => {
   }
 
   res.json({ ok: true, message: 'Navigation cancelled and rover disarmed.' });
+});
+
+app.get('/api/navigation/home', (req, res) => {
+  const httpReq = http.get(`${ROVER_NAV_BRIDGE_URL}/api/nav/home`, { timeout: 2000 }, (bridgeRes) => {
+    let data = '';
+    bridgeRes.on('data', chunk => { data += chunk; });
+    bridgeRes.on('end', () => {
+      try {
+        res.status(bridgeRes.statusCode).json(JSON.parse(data));
+      } catch (err) {
+        res.status(502).json({ ok: false, error: err.message });
+      }
+    });
+  });
+  httpReq.on('error', (err) => {
+    res.status(503).json({ ok: false, error: err.message });
+  });
+  httpReq.on('timeout', () => {
+    httpReq.destroy();
+    res.status(504).json({ ok: false, error: 'Home request timed out' });
+  });
 });
 
 app.get('/api/navigation/status', (req, res) => {

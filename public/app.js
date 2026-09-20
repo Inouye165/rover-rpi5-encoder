@@ -6871,6 +6871,7 @@ function updateLocalizationUI(loc) {
 
 
 // ────────────────────────────────────────────────────────────
+
 // Cockpit 2D Navigation Map & Trajectory Controller
 // ────────────────────────────────────────────────────────────
 (function() {
@@ -6878,11 +6879,12 @@ function updateLocalizationUI(loc) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  let mapData = null; // { width, height, resolution, origin, pixels }
+  let mapData = null;
   let mapBitmap = null;
-  let currentRobotPose = { x: 1.442, y: -0.059, yawDeg: -2.7 };
-  let currentGoalPose = { x: 2.154, y: -0.235, yawDeg: -4.2 };
-  let previewPath = []; // [[x, y], ...]
+  let currentRobotPose = { x: 1.133, y: -0.075, yawDeg: 2.5 };
+  let savedHomePose = { x: 1.167, y: -0.111, yawDeg: -8.34 }; // Authoritative tape mark
+  let currentGoalPose = { x: 1.833, y: -0.075, yawDeg: 2.5 };
+  let previewPath = [];
   let activeGlobalPath = [];
   let activeLocalPath = [];
   let navStatus = "IDLE";
@@ -6927,23 +6929,11 @@ function updateLocalizationUI(loc) {
       const val = mapData.pixels[i];
       const idx = i * 4;
       if (val === 254 || val === 255) {
-        // Free space: clean dark slate navy
-        d[idx] = 15;
-        d[idx + 1] = 29;
-        d[idx + 2] = 58;
-        d[idx + 3] = 255;
+        d[idx] = 15; d[idx + 1] = 29; d[idx + 2] = 58; d[idx + 3] = 255;
       } else if (val === 0) {
-        // Occupied / obstacle / wall: bright cyan/blue outline
-        d[idx] = 56;
-        d[idx + 1] = 189;
-        d[idx + 2] = 248;
-        d[idx + 3] = 255;
+        d[idx] = 56; d[idx + 1] = 189; d[idx + 2] = 248; d[idx + 3] = 255;
       } else {
-        // Unexplored / unknown: dark void
-        d[idx] = 5;
-        d[idx + 1] = 9;
-        d[idx + 2] = 20;
-        d[idx + 3] = 255;
+        d[idx] = 5; d[idx + 1] = 9; d[idx + 2] = 20; d[idx + 3] = 255;
       }
     }
     octx.putImageData(imgData, 0, 0);
@@ -6977,6 +6967,30 @@ function updateLocalizationUI(loc) {
       for (let y = 0; y < canvas.height; y += step) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
       }
+    }
+
+    // Draw Authoritative Saved HOME Marker (green icon/badge)
+    if (savedHomePose && savedHomePose.x !== null) {
+      const [hu, hv] = worldToCanvas(savedHomePose.x, savedHomePose.y);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(hu - 7, hv - 7, 14, 14);
+      ctx.fillStyle = "rgba(34, 197, 94, 0.25)";
+      ctx.fill();
+      ctx.strokeStyle = "#22c55e";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(hu, hv, 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = "#22c55e";
+      ctx.fill();
+
+      ctx.font = "bold 9px monospace";
+      ctx.fillStyle = "#22c55e";
+      ctx.textAlign = "center";
+      ctx.fillText(`HOME (${savedHomePose.x.toFixed(2)}, ${savedHomePose.y.toFixed(2)})`, hu, hv - 11);
+      ctx.restore();
     }
 
     // Global / Preview Path (cyan line)
@@ -7100,21 +7114,37 @@ function updateLocalizationUI(loc) {
       }
     } catch (err) {
       console.warn("Failed to load nav map:", err);
-      const badge = document.getElementById('v2-map-badge');
-      if (badge) {
-        badge.textContent = 'MAP UNAVAILABLE';
-        badge.className = 'badge badge-danger';
+    }
+  }
+
+  async function fetchHome() {
+    try {
+      const res = await fetch('/api/navigation/home');
+      const data = await res.json();
+      if (data && data.ok && data.home) {
+        savedHomePose = {
+          x: Number(data.home.x),
+          y: Number(data.home.y),
+          yawDeg: Number(data.home.yaw_deg)
+        };
+        renderMap();
       }
+    } catch (err) {
+      console.warn("Failed to load saved home pose:", err);
     }
   }
 
   async function requestPlanPreview() {
-    const x = parseFloat(document.getElementById('nav-input-x').value);
-    const y = parseFloat(document.getElementById('nav-input-y').value);
-    const yawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
-    const yawRad = yawDeg * (Math.PI / 180.0);
+    const tx = parseFloat(document.getElementById('nav-input-x').value);
+    const ty = parseFloat(document.getElementById('nav-input-y').value);
+    const tyawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
+    const tyawRad = tyawDeg * (Math.PI / 180.0);
 
-    currentGoalPose = { x, y, yawDeg };
+    const sx = currentRobotPose.x;
+    const sy = currentRobotPose.y;
+    const syawRad = (currentRobotPose.yawDeg || 0) * (Math.PI / 180.0);
+
+    currentGoalPose = { x: tx, y: ty, yawDeg: tyawDeg };
     renderMap();
 
     const btn = document.getElementById('btn-nav-preview');
@@ -7124,23 +7154,32 @@ function updateLocalizationUI(loc) {
       const res = await fetch('/api/navigation/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x, y, yaw: yawRad })
+        body: JSON.stringify({
+          start_x: sx,
+          start_y: sy,
+          start_yaw: syawRad,
+          target_x: tx,
+          target_y: ty,
+          target_yaw: tyawRad,
+          x: tx,
+          y: ty,
+          yaw: tyawRad
+        })
       });
       const data = await res.json();
       if (data && data.ok) {
         previewPath = data.waypoints || [];
         const ptsEl = document.getElementById('v2-nav-points-val');
+        const straightEl = document.getElementById('v2-nav-straight-dist-val');
         const lenEl = document.getElementById('v2-nav-len-val');
-        if (ptsEl) ptsEl.textContent = previewPath.length;
-        if (lenEl) {
-          let totalLen = 0.0;
-          for (let i = 1; i < previewPath.length; i++) {
-            const dx = previewPath[i][0] - previewPath[i-1][0];
-            const dy = previewPath[i][1] - previewPath[i-1][1];
-            totalLen += Math.sqrt(dx*dx + dy*dy);
-          }
-          lenEl.textContent = `${totalLen.toFixed(2)} m`;
-        }
+        if (ptsEl) ptsEl.textContent = data.count || previewPath.length;
+
+        const straightDist = data.straight_distance_m !== undefined ? data.straight_distance_m : Math.hypot(tx - sx, ty - sy);
+        const curvedDist = data.cumulative_length_m !== undefined ? data.cumulative_length_m : (data.length_m || 0.0);
+
+        if (straightEl) straightEl.textContent = `${Number(straightDist).toFixed(2)} m`;
+        if (lenEl) lenEl.textContent = `${Number(curvedDist).toFixed(2)} m`;
+
         renderMap();
       } else {
         alert(`Planner error: ${data.error || 'Path planning failed'}`);
@@ -7171,7 +7210,7 @@ function updateLocalizationUI(loc) {
           'Content-Type': 'application/json',
           'X-Rover-Operator-Token': token
         },
-        body: JSON.stringify({ x, y, yaw: yawRad })
+        body: JSON.stringify({ target_x: x, target_y: y, target_yaw: yawRad, x: x, y: y, yaw: yawRad })
       });
       const data = await res.json();
       if (data && data.ok) {
@@ -7219,8 +7258,6 @@ function updateLocalizationUI(loc) {
         if (data && data.ok) {
           activeGlobalPath = data.global_path || [];
           activeLocalPath = data.local_path || [];
-          const distEl = document.getElementById('v2-nav-dist-val');
-          if (distEl) distEl.textContent = `${Number(data.distance_remaining_m || 0).toFixed(2)} m`;
           if (data.status && data.status !== navStatus) {
             navStatus = data.status;
             const cls = navStatus === 'EXECUTING' ? 'badge-warning' : (navStatus === 'SUCCEEDED' ? 'badge-success' : 'badge-secondary');
@@ -7260,24 +7297,55 @@ function updateLocalizationUI(loc) {
     if (coordsEl) coordsEl.textContent = `Pointer: X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m`;
   });
 
-  document.getElementById('btn-preset-corridor-070')?.addEventListener('click', () => {
+  // Relative Forward 0.70m from live pose
+  document.getElementById('btn-preset-fwd-070')?.addEventListener('click', () => {
+    const rad = (currentRobotPose.yawDeg || 0) * (Math.PI / 180.0);
+    const tx = currentRobotPose.x + 0.70 * Math.cos(rad);
+    const ty = currentRobotPose.y + 0.70 * Math.sin(rad);
+    document.getElementById('nav-input-x').value = tx.toFixed(3);
+    document.getElementById('nav-input-y').value = ty.toFixed(3);
+    document.getElementById('nav-input-yaw').value = (currentRobotPose.yawDeg || 0).toFixed(1);
+    requestPlanPreview();
+  });
+
+  // Relative Forward 0.60m from live pose
+  document.getElementById('btn-preset-fwd-060')?.addEventListener('click', () => {
+    const rad = (currentRobotPose.yawDeg || 0) * (Math.PI / 180.0);
+    const tx = currentRobotPose.x + 0.60 * Math.cos(rad);
+    const ty = currentRobotPose.y + 0.60 * Math.sin(rad);
+    document.getElementById('nav-input-x').value = tx.toFixed(3);
+    document.getElementById('nav-input-y').value = ty.toFixed(3);
+    document.getElementById('nav-input-yaw').value = (currentRobotPose.yawDeg || 0).toFixed(1);
+    requestPlanPreview();
+  });
+
+  // Fixed Corridor Destination (2.154, -0.235)
+  document.getElementById('btn-preset-fixed-corridor')?.addEventListener('click', () => {
     document.getElementById('nav-input-x').value = '2.154';
     document.getElementById('nav-input-y').value = '-0.235';
     document.getElementById('nav-input-yaw').value = '-4.2';
     requestPlanPreview();
   });
 
-  document.getElementById('btn-preset-corridor-060')?.addEventListener('click', () => {
-    document.getElementById('nav-input-x').value = '2.044';
-    document.getElementById('nav-input-y').value = '-0.200';
-    document.getElementById('nav-input-yaw').value = '-4.2';
+  // Authoritative Saved HOME Pose
+  document.getElementById('btn-preset-home')?.addEventListener('click', () => {
+    if (savedHomePose) {
+      document.getElementById('nav-input-x').value = savedHomePose.x.toFixed(3);
+      document.getElementById('nav-input-y').value = savedHomePose.y.toFixed(3);
+      document.getElementById('nav-input-yaw').value = savedHomePose.yawDeg.toFixed(1);
+    } else {
+      document.getElementById('nav-input-x').value = '1.167';
+      document.getElementById('nav-input-y').value = '-0.111';
+      document.getElementById('nav-input-yaw').value = '-8.3';
+    }
     requestPlanPreview();
   });
 
-  document.getElementById('btn-preset-home')?.addEventListener('click', () => {
-    document.getElementById('nav-input-x').value = '1.442';
-    document.getElementById('nav-input-y').value = '-0.059';
-    document.getElementById('nav-input-yaw').value = '-2.7';
+  // Test Start Position (Physical tape mark start)
+  document.getElementById('btn-preset-test-start')?.addEventListener('click', () => {
+    document.getElementById('nav-input-x').value = currentRobotPose.x.toFixed(3);
+    document.getElementById('nav-input-y').value = currentRobotPose.y.toFixed(3);
+    document.getElementById('nav-input-yaw').value = (currentRobotPose.yawDeg || 0).toFixed(1);
     requestPlanPreview();
   });
 
@@ -7293,5 +7361,6 @@ function updateLocalizationUI(loc) {
   };
 
   fetchMap();
+  fetchHome();
   startNavPolling();
 })();

@@ -142,10 +142,17 @@ class RoverNavBridge(Node):
                 prev_p = result.path.poses[i-1].pose.position
                 total_len += math.hypot(px - prev_p.x, py - prev_p.y)
 
+        straight_len = 0.0
+        if waypoints:
+            straight_len = math.hypot(waypoints[-1][0] - waypoints[0][0], waypoints[-1][1] - waypoints[0][1])
+
         return {
             "ok": True,
             "waypoints": waypoints,
-            "length_m": round(total_len, 3),
+            "first_waypoint": waypoints[0] if waypoints else None,
+            "last_waypoint": waypoints[-1] if waypoints else None,
+            "cumulative_length_m": round(total_len, 3),
+            "straight_distance_m": round(straight_len, 3),
             "count": len(waypoints)
         }
 
@@ -243,6 +250,32 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"ok": False, "error": "Map not loaded"})
 
+        elif self.path == '/api/nav/home':
+            home_path = "/ros2_ws/maps/home_pose_slam_2026-08-23_final.json"
+            if not os.path.exists(home_path):
+                home_path = "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam_2026-08-23_final.json"
+            if os.path.exists(home_path):
+                try:
+                    with open(home_path, "r") as f:
+                        home_json = json.load(f)
+                    pos = home_json.get("pose", {}).get("position", {})
+                    ori = home_json.get("pose", {})
+                    self._send_json(200, {
+                        "ok": True,
+                        "home": {
+                            "x": pos.get("x", 1.166746),
+                            "y": pos.get("y", -0.110614),
+                            "yaw_deg": ori.get("yaw_deg", -8.3401),
+                            "yaw_rad": ori.get("yaw_rad", -0.145563),
+                            "description": home_json.get("description", "Permanent verified HOME pose")
+                        }
+                    })
+                    return
+                except Exception as err:
+                    self._send_json(500, {"ok": False, "error": str(err)})
+                    return
+            self._send_json(404, {"ok": False, "error": "Home pose file not found"})
+
         elif self.path == '/api/nav/status':
             # Query odometry node for current AMCL pose to compute distance remaining
             cur_x, cur_y = 0.0, 0.0
@@ -283,19 +316,23 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             req_json = {}
 
         if self.path == '/api/nav/plan':
-            # Get current AMCL pose
-            try:
-                r = requests.get(ODOM_API_URL, timeout=0.50).json()
-                loc = r.get('localization', {}).get('pose', {})
-                sx = loc.get('x', 1.442)
-                sy = loc.get('y', -0.059)
-                syaw = loc.get('yaw', -0.048)
-            except Exception:
-                sx, sy, syaw = 1.442, -0.059, -0.048
+            sx = req_json.get('start_x')
+            sy = req_json.get('start_y')
+            syaw = req_json.get('start_yaw')
 
-            tx = float(req_json.get('target_x', 2.154))
-            ty = float(req_json.get('target_y', -0.235))
-            tyaw = float(req_json.get('target_yaw', -0.073))
+            if sx is None or sy is None:
+                try:
+                    r = requests.get(ODOM_API_URL, timeout=0.50).json()
+                    loc = r.get('localization', {}).get('pose', {})
+                    sx = loc.get('x', 1.133)
+                    sy = loc.get('y', -0.075)
+                    syaw = loc.get('yaw', 0.0)
+                except Exception:
+                    sx, sy, syaw = 1.133, -0.075, 0.0
+
+            tx = float(req_json.get('target_x', req_json.get('x', 2.154)))
+            ty = float(req_json.get('target_y', req_json.get('y', -0.235)))
+            tyaw = float(req_json.get('target_yaw', req_json.get('yaw', -0.073)))
 
             plan_res = bridge_node.compute_plan(sx, sy, syaw, tx, ty, tyaw)
             self._send_json(200 if plan_res.get('ok') else 400, plan_res)
