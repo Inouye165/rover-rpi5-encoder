@@ -429,7 +429,7 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
         self.assertTrue(status_fresh["localized"])
         self.assertEqual(status_fresh["state"], "LOCALIZED")
         self.assertTrue(status_fresh["fresh_validation_ok"])
-        self.assertEqual(status_fresh["details"], "Nominal tracking")
+        self.assertEqual(status_fresh["details"], "Stationary tracking")
 
         self.node._last_amcl_time_mono = now_mono - 3.5
         status_stat = self.node.get_localization_status()
