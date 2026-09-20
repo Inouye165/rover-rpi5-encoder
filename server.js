@@ -320,6 +320,9 @@ function updateLocalizationState(loc) {
   localizationState.localized = (loc.localized === true);
   localizationState.state = loc.state || (loc.localized ? 'LOCALIZED' : 'NOT_LOCALIZED');
   localizationState.freshValidationOk = (loc.fresh_validation_ok === true);
+  localizationState.fresh_validation_ok = (loc.fresh_validation_ok === true);
+  localizationState.is_stationary = (loc.is_stationary !== false);
+  localizationState.isStationary = (loc.is_stationary !== false);
   localizationState.ageMs = (typeof loc.age_ms === 'number') ? loc.age_ms : null;
   localizationState.details = loc.details || '';
   localizationState.lastUpdateMs = now;
@@ -4556,15 +4559,17 @@ app.post('/api/navigation/plan', (req, res) => {
 
 app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   // Safety check 1: Localization must be active and validated
-  if (!localizationState || !localizationState.localized || !localizationState.fresh_validation_ok) {
+  const isLocActive = localizationState && localizationState.localized && (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
+  if (!isLocActive) {
     return res.status(409).json({
       ok: false,
-      error: 'Cannot dispatch Nav2 goal: Rover is not localized with fresh AMCL validation.'
+      error: 'Cannot dispatch Nav2 goal: Rover is not localized with active AMCL pose.'
     });
   }
 
   // Safety check 2: Rover must be stationary
-  if (!localizationState.is_stationary) {
+  const isStat = localizationState.is_stationary !== false && localizationState.isStationary !== false;
+  if (!isStat) {
     return res.status(409).json({
       ok: false,
       error: 'Cannot dispatch Nav2 goal: Rover must be stationary at rest before dispatch.'
@@ -4692,7 +4697,22 @@ app.get('/api/navigation/status', (req, res) => {
     bridgeRes.on('data', chunk => { data += chunk; });
     bridgeRes.on('end', () => {
       try {
-        res.status(bridgeRes.statusCode).json(JSON.parse(data));
+        const parsed = JSON.parse(data);
+        if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
+          if (autonomyState && autonomyState.state === 'READY_ARMED') {
+            triggerNav2Cancel();
+            autonomyState.enabled = false;
+            autonomyState.state = 'READY_DISARMED';
+            cmdSource = 'NONE';
+            targetLinear = 0.0;
+            targetAngular = 0.0;
+            if (serialPort && serialPort.isOpen) {
+              const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+              serialPort.write(disarmPkt);
+            }
+          }
+        }
+        res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {
         res.status(502).json({ ok: false, error: err.message });
       }
