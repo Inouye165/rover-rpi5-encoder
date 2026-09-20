@@ -927,14 +927,20 @@ function startDriveKeepaliveLoop() {
 
     // Check ROS 2 autonomy watchdog timeout
     const monoNow = performance.now();
-    if (cmdSource === 'ROS_AUTONOMY' || autonomyState.state === 'ACTIVE') {
-      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE' || (monoNow - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
+    if (autonomyState.state === 'ACTIVE') {
+      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
         if (!watchdogFired) {
           watchdogFired = true;
           autonomyState.watchdogTimeouts++;
           console.warn('[Autonomy Watchdog] ROS 2 /cmd_vel timed out (500ms). Target forced to zero.');
         }
         resetAutonomyToSafe('Watchdog timeout exceeded (500ms)');
+        autonomyState.state = 'STALE';
+        broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+      }
+    } else if (autonomyState.state === 'READY_ARMED') {
+      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > 5000) {
+        resetAutonomyToSafe('Awaiting initial Nav2 cmd_vel timed out (5000ms)');
         autonomyState.state = 'STALE';
         broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
       }
@@ -4582,6 +4588,9 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     cmdSource = 'ROS_AUTONOMY';
     targetLinear = 0.0;
     targetAngular = 0.0;
+    autonomyState.lastCmdTime = performance.now();
+    watchdogFired = false;
+    startDriveKeepaliveLoop();
 
     if (!latestNormalDriveStatus || !latestNormalDriveStatus.armed) {
       if (!serialPort || !serialPort.isOpen) {
