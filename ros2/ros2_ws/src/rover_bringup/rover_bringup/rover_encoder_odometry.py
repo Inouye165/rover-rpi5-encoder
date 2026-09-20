@@ -22,11 +22,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point, PoseWithCovarianceStamped
 from std_srvs.srv import Empty
 from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, LaserScan
 from visualization_msgs.msg import Marker, MarkerArray
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 import requests
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
@@ -205,9 +205,12 @@ class RoverEncoderOdometry(Node):
         # Localization tracking state
         self._amcl_lock = threading.Lock()
         self._last_amcl_pose = None
-        self._last_amcl_time = 0.0
+        self._last_amcl_time_mono = 0.0
         self._map_received = False
-        self._map_time = 0.0
+        self._map_time_mono = 0.0
+        self._last_scan_time_mono = 0.0
+        self._last_telemetry_mono = 0.0
+        self._last_motion_mono = 0.0
 
         latched_qos = QoSProfile(
             depth=1,
@@ -215,8 +218,7 @@ class RoverEncoderOdometry(Node):
             reliability=ReliabilityPolicy.RELIABLE
         )
         self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
-        self._last_nomotion_call = 0.0
-        self._motion_start_time = None
+        self._last_nomotion_call_mono = 0.0
 
         self.amcl_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -229,6 +231,12 @@ class RoverEncoderOdometry(Node):
             '/map',
             self._map_callback,
             latched_qos
+        )
+        self.scan_sub = self.create_subscription(
+            LaserScan,
+            '/scan',
+            self._scan_callback,
+            qos_profile_sensor_data
         )
 
         # IMU subscription and gyro integration state
@@ -412,6 +420,9 @@ class RoverEncoderOdometry(Node):
                 )
 
             self.consecutive_errors = 0
+            self._last_telemetry_mono = time.monotonic()
+            if abs(self.kinematics.v_x) >= 0.008 or abs(self.kinematics.w_z) >= 0.015:
+                self._last_motion_mono = time.monotonic()
 
             # Publish odometry and broadcast TF
             self._publish_odom_and_tf(now_ros)
@@ -587,13 +598,16 @@ class RoverEncoderOdometry(Node):
         self.vis_marker_pub.publish(marker_array)
 
 
+    def _scan_callback(self, msg: LaserScan):
+        self._last_scan_time_mono = time.monotonic()
+
     def _map_callback(self, msg: OccupancyGrid):
         self._map_received = True
-        self._map_time = time.time()
+        self._map_time_mono = time.monotonic()
 
     def _amcl_callback(self, msg: PoseWithCovarianceStamped):
         with self._amcl_lock:
-            self._last_amcl_time = time.time()
+            self._last_amcl_time_mono = time.monotonic()
             cov = list(msg.pose.covariance)
             sx = math.sqrt(max(0.0, cov[0]))
             sy = math.sqrt(max(0.0, cov[7]))
@@ -619,75 +633,131 @@ class RoverEncoderOdometry(Node):
             }
 
     def get_localization_status(self):
+        now_mono = time.monotonic()
         with self._amcl_lock:
             last_pose = self._last_amcl_pose
-            last_time = self._last_amcl_time
+            last_time_mono = self._last_amcl_time_mono
 
-        now = time.time()
         map_ok = bool(self._map_received)
+
+        # 1. Dynamic TF check: lookup map -> base_link and verify header stamp is recent (not cached/stale)
         tf_ok = False
+        tf_age_ms = None
         try:
-            tf_ok = self.tf_buffer.can_transform('map', self.base_frame, rclpy.time.Time())
+            tf = self.tf_buffer.lookup_transform('map', self.base_frame, rclpy.time.Time())
+            tf_stamp = tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9
+            now_ros = self.get_clock().now().nanoseconds * 1e-9
+            tf_age_s = now_ros - tf_stamp
+            if -0.5 <= tf_age_s <= 2.0:
+                tf_ok = True
+                tf_age_ms = max(0, int(tf_age_s * 1000.0))
+            else:
+                tf_ok = False
+                tf_age_ms = int(tf_age_s * 1000.0) if math.isfinite(tf_age_s) else None
         except Exception:
             tf_ok = False
+            tf_age_ms = None
 
-        if last_pose is None or last_time <= 0:
+        # 2. Sensor health checks: LiDAR scan and Odometry telemetry
+        scan_ok = (self._last_scan_time_mono > 0) and ((now_mono - self._last_scan_time_mono) <= 2.0)
+        scan_age_ms = int((now_mono - self._last_scan_time_mono) * 1000.0) if self._last_scan_time_mono > 0 else None
+
+        odom_age_s = (now_mono - self._last_telemetry_mono) if self._last_telemetry_mono > 0 else 999.0
+        odom_ok = (self.consecutive_errors == 0) and (odom_age_s <= 2.0)
+        odom_age_ms = int(odom_age_s * 1000.0) if self._last_telemetry_mono > 0 else None
+
+        if last_pose is None or last_time_mono <= 0:
             return {
                 "localized": False,
                 "state": "NOT_LOCALIZED",
                 "reason": "NO_INITIAL_POSE",
                 "details": "Awaiting initial pose estimate from operator (Foxglove)",
                 "age_ms": None,
-                "motion_elapsed_ms": 0,
+                "fresh_validation_ok": False,
                 "is_stationary": True,
                 "map_available": map_ok,
                 "tf_available": tf_ok,
+                "scan_available": scan_ok,
+                "odom_available": odom_ok,
+                "dynamic_tf_age_ms": tf_age_ms,
+                "scan_age_ms": scan_age_ms,
+                "odom_age_ms": odom_age_ms,
                 "pose": None,
                 "covariance": None
             }
 
-        age_ms = int((now - last_time) * 1000.0)
-        is_stationary = (abs(self.kinematics.v_x) < 0.02 and abs(self.kinematics.w_z) < 0.05)
+        age_ms = int((now_mono - last_time_mono) * 1000.0)
 
-        # 1. Stationary rover:
-        # A stationary, properly localized rover must not become unlocalized merely because AMCL publishes slowly while nothing moves.
-        if is_stationary:
-            self._motion_start_time = None
-            is_fresh = True
-            motion_elapsed_ms = 0
-        else:
-            # 2. Active motion:
-            # When motion begins, anchor the motion-staleness window and request a fresh scan update
-            if self._motion_start_time is None:
-                self._motion_start_time = now
-                if self.nomotion_client.service_is_ready():
-                    self.nomotion_client.call_async(Empty.Request())
-            motion_elapsed_ms = int((now - max(last_time, self._motion_start_time)) * 1000.0)
-            # During motion, stale AMCL data (> 2000 ms) must promptly trigger fail-safe
-            is_fresh = (motion_elapsed_ms <= 2000)
+        # 3. Motion state evaluation (including slow creep detection)
+        is_moving_now = (abs(self.kinematics.v_x) >= 0.008 or abs(self.kinematics.w_z) >= 0.015)
+        if is_moving_now:
+            self._last_motion_mono = now_mono
+
+        # Sustained stationary: must be stopped for >= 2.0 seconds.
+        # Brief stops (<2.0s) do not revert to stationary mode and cannot repeatedly renew grace periods.
+        is_sustained_stationary = (now_mono - self._last_motion_mono) >= 2.0
 
         cov_ok = (last_pose["sigma_x"] <= 0.35) and (last_pose["sigma_y"] <= 0.35) and (last_pose["sigma_yaw"] <= 0.50)
 
-        if is_fresh and cov_ok and tf_ok and map_ok:
-            state = "LOCALIZED"
-            localized = True
-            details = "Nominal tracking"
-        elif not map_ok:
+        # 4. Fresh validation check: pose age <= 2000 ms, covariance within limits, dynamic TF fresh, and sensors healthy
+        fresh_validation_ok = (age_ms <= 2000) and cov_ok and tf_ok and map_ok and scan_ok and odom_ok
+
+        # 5. Determine localization state based on motion vs. stationary rules:
+        if not map_ok:
             state = "NOT_LOCALIZED"
             localized = False
             details = "Map topic /map not received"
+        elif not scan_ok:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = f"LiDAR scan stale or missing ({scan_age_ms}ms > 2000ms)"
+        elif not odom_ok:
+            state = "NOT_LOCALIZED"
+            localized = False
+            details = f"Odometry telemetry stale or erroring ({odom_age_ms}ms, errors={self.consecutive_errors})"
         elif not tf_ok:
             state = "NOT_LOCALIZED"
             localized = False
-            details = "Map to base_link transform unavailable"
+            details = f"Dynamic map to base_link transform stale or unavailable ({tf_age_ms}ms)"
         elif not cov_ok:
             state = "NOT_LOCALIZED"
             localized = False
             details = f"Covariance exceeded threshold (sx={last_pose['sigma_x']:.2f}m, sy={last_pose['sigma_y']:.2f}m)"
+        elif not is_sustained_stationary:
+            # ACTIVE MOTION (or within 2.0s of motion):
+            # During motion, AMCL pose MUST be freshly updated within 2000 ms.
+            # Proactively request nomotion update if pose is getting close to timeout (> 1500 ms)
+            if age_ms >= 1500 and (now_mono - self._last_nomotion_call_mono) >= 1.0:
+                self._last_nomotion_call_mono = now_mono
+                if self.nomotion_client.service_is_ready():
+                    self.nomotion_client.call_async(Empty.Request())
+
+            if age_ms <= 2000:
+                state = "LOCALIZED"
+                localized = True
+                details = "Nominal tracking"
+            else:
+                state = "NOT_LOCALIZED"
+                localized = False
+                details = f"Pose stale during motion ({age_ms}ms > 2000ms)"
         else:
-            state = "NOT_LOCALIZED"
-            localized = False
-            details = f"Pose stale during motion ({motion_elapsed_ms}ms > 2000ms)"
+            # SUSTAINED STATIONARY:
+            # AMCL pauses normal pose publication when nothing moves.
+            # Distinguish normal stationary publication pause from stopped AMCL:
+            # If age_ms >= 4000, trigger nomotion update to keep AMCL actively validated.
+            if age_ms >= 4000 and (now_mono - self._last_nomotion_call_mono) >= 2.0:
+                self._last_nomotion_call_mono = now_mono
+                if self.nomotion_client.service_is_ready():
+                    self.nomotion_client.call_async(Empty.Request())
+
+            if age_ms <= 8000:
+                state = "LOCALIZED"
+                localized = True
+                details = "Stationary tracking"
+            else:
+                state = "NOT_LOCALIZED"
+                localized = False
+                details = f"AMCL pose update timeout while stationary ({age_ms}ms > 8000ms; AMCL unresponsive)"
 
         return {
             "localized": localized,
@@ -695,10 +765,15 @@ class RoverEncoderOdometry(Node):
             "reason": "OK" if localized else state,
             "details": details,
             "age_ms": age_ms,
-            "motion_elapsed_ms": motion_elapsed_ms,
-            "is_stationary": is_stationary,
+            "fresh_validation_ok": fresh_validation_ok,
+            "is_stationary": is_sustained_stationary,
             "map_available": map_ok,
             "tf_available": tf_ok,
+            "scan_available": scan_ok,
+            "odom_available": odom_ok,
+            "dynamic_tf_age_ms": tf_age_ms,
+            "scan_age_ms": scan_age_ms,
+            "odom_age_ms": odom_age_ms,
             "pose": {
                 "x": last_pose["x"],
                 "y": last_pose["y"],

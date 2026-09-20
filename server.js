@@ -269,6 +269,8 @@ let reqRateCount = 0;
 let localizationState = {
   localized: false,
   state: 'NOT_LOCALIZED',
+  freshValidationOk: false,
+  ageMs: null,
   lastUpdateMs: 0,
   x: null,
   y: null,
@@ -283,10 +285,12 @@ let localizationState = {
 function updateLocalizationState(loc) {
   if (!loc) return;
   const wasLocalized = localizationState.localized;
-  const now = Date.now();
+  const now = performance.now();
 
   localizationState.localized = (loc.localized === true);
   localizationState.state = loc.state || (loc.localized ? 'LOCALIZED' : 'NOT_LOCALIZED');
+  localizationState.freshValidationOk = (loc.fresh_validation_ok === true);
+  localizationState.ageMs = (typeof loc.age_ms === 'number') ? loc.age_ms : null;
   localizationState.details = loc.details || '';
   localizationState.lastUpdateMs = now;
 
@@ -356,9 +360,9 @@ let autonomyState = {
 };
 
 function getAutonomyStatusObject() {
-  const now = Date.now();
-  const cmdAgeMs = autonomyState.lastCmdTime ? (now - autonomyState.lastCmdTime) : null;
-  const bridgeConnected = autonomyState.lastBridgeHeartbeat ? ((now - autonomyState.lastBridgeHeartbeat) < 2000) : false;
+  const monoNow = performance.now();
+  const cmdAgeMs = autonomyState.lastCmdTime ? Math.round(monoNow - autonomyState.lastCmdTime) : null;
+  const bridgeConnected = autonomyState.lastBridgeHeartbeat ? ((monoNow - autonomyState.lastBridgeHeartbeat) < 2000) : false;
   return {
     ok: true,
     state: autonomyState.state,
@@ -889,8 +893,9 @@ function startDriveKeepaliveLoop() {
     if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
 
     // Check ROS 2 autonomy watchdog timeout
+    const monoNow = performance.now();
     if (cmdSource === 'ROS_AUTONOMY' || autonomyState.state === 'ACTIVE') {
-      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE' || (now - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
+      if (!autonomyState.enabled || autonomyState.state !== 'ACTIVE' || (monoNow - autonomyState.lastCmdTime) > autonomyState.watchdogTimeoutMs) {
         if (!watchdogFired) {
           watchdogFired = true;
           autonomyState.watchdogTimeouts++;
@@ -3216,7 +3221,7 @@ function fetchRosOdometry() {
               parsed.odometry_age_ms < 2000;
 
             if (isSourceFresh) {
-              const fetchTime = Date.now();
+              const fetchTime = performance.now();
               if (fetchTime >= lastOdomSuccessTime) {
                 lastOdomSuccessTime = fetchTime;
                 odomConsecutiveErrors = 0;
@@ -3255,8 +3260,8 @@ function fetchRosOdometry() {
     function handleOdomError(msg) {
       if (handled) return;
       odomConsecutiveErrors++;
-      const now = Date.now();
-      const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+      const now = performance.now();
+      const sampleAge = lastOdomSuccessTime > 0 ? Math.round(now - lastOdomSuccessTime) : 99999;
       latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);
       latestRosOdom.odometry_age_ms = sampleAge;
       latestRosOdom.consecutive_errors = odomConsecutiveErrors;
@@ -3264,6 +3269,7 @@ function fetchRosOdometry() {
         updateLocalizationState({
           localized: false,
           state: 'NOT_LOCALIZED',
+          fresh_validation_ok: false,
           details: `Odometry node telemetry unreachable (${sampleAge}ms)`
         });
       }
@@ -3557,7 +3563,7 @@ async function runAutoCalibTick() {
     const encSnap = getEncoderSnapshot();
     await fetchRosOdometry();
 
-    const odomAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+    const odomAge = lastOdomSuccessTime > 0 ? Math.round(performance.now() - lastOdomSuccessTime) : 99999;
     const isOdomFresh = (lastOdomSuccessTime > 0 && odomAge < 2000);
 
     autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
@@ -3867,7 +3873,7 @@ app.get('/api/calibration/auto/status', async (req, res) => {
   }
   const encSnap = getEncoderSnapshot();
   const now = Date.now();
-  const sampleAge = lastOdomSuccessTime > 0 ? (now - lastOdomSuccessTime) : 99999;
+  const sampleAge = lastOdomSuccessTime > 0 ? Math.round(performance.now() - lastOdomSuccessTime) : 99999;
   const isOdomFresh = (lastOdomSuccessTime > 0 && sampleAge < 2000);
 
   autoCalibState.telemetryAgeMs = encSnap.ageMs || 99999;
@@ -4045,12 +4051,23 @@ function requireOperatorAuth(req, res, next) {
 
 app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
   const isAutonomyArm = (req.body && req.body.autonomy === true) || (cmdSource === 'ROS_AUTONOMY');
-  if (isAutonomyArm && !localizationState.localized) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Cannot arm rover for autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
-      localization: localizationState
-    });
+  if (isAutonomyArm) {
+    if (!localizationState.localized || localizationState.state !== 'LOCALIZED') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Cannot arm rover for autonomy: Vehicle is NOT LOCALIZED. Please initialize pose in Foxglove first.',
+        localization: localizationState
+      });
+    }
+    // Fresh validation gate: pose must be fresh before autonomous motion is allowed
+    const isFresh = localizationState.freshValidationOk || (localizationState.ageMs !== null && localizationState.ageMs <= 2000);
+    if (!isFresh) {
+      return res.status(409).json({
+        ok: false,
+        error: `Cannot arm rover for autonomy: Localization requires fresh validation before motion (${localizationState.ageMs || 0}ms > 2000ms).`,
+        localization: localizationState
+      });
+    }
   }
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
@@ -4713,7 +4730,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     autonomyState.clampedAngular = 0.0;
     autonomyState.limitedLinear = 0.0;
     autonomyState.limitedAngular = 0.0;
-    autonomyState.lastCmdTime = now;
+    autonomyState.lastCmdTime = performance.now();
     sendZeroMotionPacket();
     return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
   }
@@ -4727,12 +4744,24 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
       return res.status(403).json({ ok: false, error: 'Autonomy is disabled by operator' });
     }
 
-    if (!localizationState.localized) {
+    if (!localizationState.localized || localizationState.state !== 'LOCALIZED') {
       autonomyState.rejectedCount++;
       autonomyState.lastRejectionReason = 'Vehicle is NOT LOCALIZED';
       return res.status(403).json({
         ok: false,
         error: 'Autonomy motion rejected: Vehicle is NOT LOCALIZED',
+        state: autonomyState.state,
+        localization: localizationState
+      });
+    }
+
+    // Motion staleness check: non-zero commands require fresh validation (age <= 2000ms)
+    if (!isZeroCmd && (localizationState.ageMs !== null && localizationState.ageMs > 2000)) {
+      autonomyState.rejectedCount++;
+      autonomyState.lastRejectionReason = 'Localization pose stale during motion';
+      return res.status(403).json({
+        ok: false,
+        error: `Autonomy motion rejected: Localization pose stale (${localizationState.ageMs}ms > 2000ms)`,
         state: autonomyState.state,
         localization: localizationState
       });
@@ -4822,7 +4851,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
       autonomyState.clampedAngular = 0.0;
       autonomyState.limitedLinear = 0.0;
       autonomyState.limitedAngular = 0.0;
-      autonomyState.lastCmdTime = now;
+      autonomyState.lastCmdTime = performance.now();
       watchdogFired = false;
       sendZeroMotionPacket();
       return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
@@ -4833,7 +4862,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   autonomyState.rawAngular = rawAng;
   autonomyState.clampedLinear = clampedLin;
   autonomyState.clampedAngular = clampedAng;
-  autonomyState.lastCmdTime = now;
+  autonomyState.lastCmdTime = performance.now();
   watchdogFired = false;
 
   targetLinear = clampedLin;

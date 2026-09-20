@@ -396,6 +396,148 @@ class TestRoverEncoderOdometryNode(unittest.TestCase):
 
         self.assertIsNone(self.node._compute_integrated_gyro_yaw(500.0, 500.05))
 
+    def test_localization_no_initial_pose(self):
+        self.node._last_amcl_pose = None
+        self.node._last_amcl_time_mono = 0.0
+        status = self.node.get_localization_status()
+        self.assertFalse(status["localized"])
+        self.assertEqual(status["state"], "NOT_LOCALIZED")
+        self.assertEqual(status["reason"], "NO_INITIAL_POSE")
+        self.assertFalse(status["fresh_validation_ok"])
+
+    def test_localization_healthy_stationary_and_fresh_validation(self):
+        now_mono = time.monotonic()
+        self.node._map_received = True
+        self.node._last_scan_time_mono = now_mono - 0.1
+        self.node._last_telemetry_mono = now_mono - 0.05
+        self.node.consecutive_errors = 0
+        self.node.kinematics.v_x = 0.0
+        self.node.kinematics.w_z = 0.0
+        self.node._last_motion_mono = now_mono - 5.0
+
+        mock_tf = MagicMock()
+        mock_tf.header.stamp.sec = int(self.node.get_clock().now().nanoseconds * 1e-9)
+        mock_tf.header.stamp.nanosec = int((self.node.get_clock().now().nanoseconds % 1e9))
+        self.node.tf_buffer.lookup_transform = MagicMock(return_value=mock_tf)
+
+        self.node._last_amcl_pose = {
+            "x": 1.0, "y": 2.0, "yaw": 0.1, "yaw_deg": 5.73,
+            "sigma_x": 0.05, "sigma_y": 0.05, "sigma_yaw": 0.02
+        }
+        self.node._last_amcl_time_mono = now_mono - 0.5
+        status_fresh = self.node.get_localization_status()
+        self.assertTrue(status_fresh["localized"])
+        self.assertEqual(status_fresh["state"], "LOCALIZED")
+        self.assertTrue(status_fresh["fresh_validation_ok"])
+        self.assertEqual(status_fresh["details"], "Nominal tracking")
+
+        self.node._last_amcl_time_mono = now_mono - 3.5
+        status_stat = self.node.get_localization_status()
+        self.assertTrue(status_stat["localized"])
+        self.assertEqual(status_stat["state"], "LOCALIZED")
+        self.assertFalse(status_stat["fresh_validation_ok"])
+        self.assertEqual(status_stat["details"], "Stationary tracking")
+
+    def test_localization_sensor_and_dynamic_tf_failure(self):
+        now_mono = time.monotonic()
+        self.node._map_received = True
+        self.node._last_amcl_pose = {
+            "x": 1.0, "y": 2.0, "yaw": 0.1, "yaw_deg": 5.73,
+            "sigma_x": 0.05, "sigma_y": 0.05, "sigma_yaw": 0.02
+        }
+        self.node._last_amcl_time_mono = now_mono - 0.5
+        self.node.kinematics.v_x = 0.0
+        self.node.kinematics.w_z = 0.0
+        self.node._last_motion_mono = now_mono - 5.0
+
+        mock_tf = MagicMock()
+        mock_tf.header.stamp.sec = int(self.node.get_clock().now().nanoseconds * 1e-9)
+        mock_tf.header.stamp.nanosec = int((self.node.get_clock().now().nanoseconds % 1e9))
+        self.node.tf_buffer.lookup_transform = MagicMock(return_value=mock_tf)
+
+        self.node._last_scan_time_mono = now_mono - 3.0
+        self.node._last_telemetry_mono = now_mono - 0.1
+        status_scan = self.node.get_localization_status()
+        self.assertFalse(status_scan["localized"])
+        self.assertIn("LiDAR scan stale", status_scan["details"])
+
+        self.node._last_scan_time_mono = now_mono - 0.1
+        self.node._last_telemetry_mono = now_mono - 3.0
+        status_odom = self.node.get_localization_status()
+        self.assertFalse(status_odom["localized"])
+        self.assertIn("Odometry telemetry stale", status_odom["details"])
+
+        self.node._last_scan_time_mono = now_mono - 0.1
+        self.node._last_telemetry_mono = now_mono - 0.1
+        mock_stale_tf = MagicMock()
+        mock_stale_tf.header.stamp.sec = int(self.node.get_clock().now().nanoseconds * 1e-9) - 5
+        mock_stale_tf.header.stamp.nanosec = 0
+        self.node.tf_buffer.lookup_transform = MagicMock(return_value=mock_stale_tf)
+        status_tf = self.node.get_localization_status()
+        self.assertFalse(status_tf["localized"])
+        self.assertIn("Dynamic map to base_link transform stale", status_tf["details"])
+
+    def test_localization_motion_staleness_and_creep(self):
+        now_mono = time.monotonic()
+        self.node._map_received = True
+        self.node._last_scan_time_mono = now_mono - 0.1
+        self.node._last_telemetry_mono = now_mono - 0.1
+        self.node.consecutive_errors = 0
+        self.node._last_amcl_pose = {
+            "x": 1.0, "y": 2.0, "yaw": 0.1, "yaw_deg": 5.73,
+            "sigma_x": 0.05, "sigma_y": 0.05, "sigma_yaw": 0.02
+        }
+
+        mock_tf = MagicMock()
+        mock_tf.header.stamp.sec = int(self.node.get_clock().now().nanoseconds * 1e-9)
+        mock_tf.header.stamp.nanosec = int((self.node.get_clock().now().nanoseconds % 1e9))
+        self.node.tf_buffer.lookup_transform = MagicMock(return_value=mock_tf)
+
+        self.node.kinematics.v_x = 0.10
+        self.node.kinematics.w_z = 0.0
+        self.node._last_motion_mono = now_mono
+        self.node._last_amcl_time_mono = now_mono - 2.5
+        status_motion = self.node.get_localization_status()
+        self.assertFalse(status_motion["localized"])
+        self.assertIn("Pose stale during motion", status_motion["details"])
+
+        self.node.kinematics.v_x = 0.0
+        self.node._last_motion_mono = now_mono - 0.5
+        self.node._last_amcl_time_mono = now_mono - 2.5
+        status_brief_stop = self.node.get_localization_status()
+        self.assertFalse(status_brief_stop["localized"])
+        self.assertIn("Pose stale during motion", status_brief_stop["details"])
+
+        self.node.kinematics.v_x = 0.01
+        self.node._last_amcl_time_mono = now_mono - 2.5
+        status_creep = self.node.get_localization_status()
+        self.assertFalse(status_creep["localized"])
+        self.assertIn("Pose stale during motion", status_creep["details"])
+
+    def test_localization_stopped_amcl_stationary_timeout(self):
+        now_mono = time.monotonic()
+        self.node._map_received = True
+        self.node._last_scan_time_mono = now_mono - 0.1
+        self.node._last_telemetry_mono = now_mono - 0.1
+        self.node.consecutive_errors = 0
+        self.node.kinematics.v_x = 0.0
+        self.node.kinematics.w_z = 0.0
+        self.node._last_motion_mono = now_mono - 10.0
+        self.node._last_amcl_pose = {
+            "x": 1.0, "y": 2.0, "yaw": 0.1, "yaw_deg": 5.73,
+            "sigma_x": 0.05, "sigma_y": 0.05, "sigma_yaw": 0.02
+        }
+
+        mock_tf = MagicMock()
+        mock_tf.header.stamp.sec = int(self.node.get_clock().now().nanoseconds * 1e-9)
+        mock_tf.header.stamp.nanosec = int((self.node.get_clock().now().nanoseconds % 1e9))
+        self.node.tf_buffer.lookup_transform = MagicMock(return_value=mock_tf)
+
+        self.node._last_amcl_time_mono = now_mono - 9.0
+        status_stopped = self.node.get_localization_status()
+        self.assertFalse(status_stopped["localized"])
+        self.assertIn("AMCL pose update timeout while stationary", status_stopped["details"])
+
 
 if __name__ == '__main__':
     unittest.main()

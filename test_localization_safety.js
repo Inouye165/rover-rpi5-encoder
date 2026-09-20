@@ -317,6 +317,245 @@ async function runTests() {
       console.log('  ✓ Rover remained safely disarmed and stopped upon localization recovery');
     }
 
+    // --------------------------------------------------------------------------
+    // TEST 5: Fresh Validation Required Before Autonomous Motion
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 5] Verifying Fresh Validation Gating Before Autonomous Motion...');
+    {
+      // Reset autonomy state to clean WAITING_FOR_ZERO -> READY_DISARMED
+      serverModule.autonomyState.state = 'WAITING_FOR_ZERO';
+      serverModule.autonomyState.enabled = true;
+      serverModule.autonomyState.zeroHandshakeCount = 3;
+      serverModule.autonomyState.state = 'READY_DISARMED';
+
+      // 1. Stationary pose with age > 2000ms (normal stationary pause, fresh_validation_ok: false)
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: false,
+        age_ms: 3500,
+        details: 'Stationary tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      // Attempting to arm for autonomy with unvalidated/older stationary pose MUST return HTTP 409
+      const unvalidatedArmRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/drive/arm',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Operator-Token': OPERATOR_TOKEN
+        }
+      }, { autonomy: true });
+      assert.strictEqual(unvalidatedArmRes.statusCode, 409, 'Arming for autonomy without fresh validation must be rejected (HTTP 409)');
+      assert(unvalidatedArmRes.json.error.includes('fresh validation'), `Error must mention fresh validation: ${unvalidatedArmRes.json.error}`);
+      console.log('  ✓ Autonomy arming rejected when stationary pose is not freshly validated (HTTP 409)');
+
+      // 2. Supply freshly validated pose (age <= 2000ms, fresh_validation_ok: true)
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: true,
+        age_ms: 250,
+        details: 'Nominal tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      // Mock serial response for arming
+      serverModule.injectNormalDriveStatus({ armed: true, mode: 3 });
+      serverModule.autonomyState.state = 'READY_ARMED';
+      console.log('  ✓ Autonomy arming allowed once fresh validation confirmed');
+    }
+
+    // --------------------------------------------------------------------------
+    // TEST 6: Sensor Failure Detection (Stale LiDAR / Stale Odometry)
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 6] Verifying Sensor Failure Detection (LiDAR and Odometry)...');
+    {
+      // 1. Simulate LiDAR scan stale (> 2000ms)
+      serverModule.updateLocalizationState({
+        localized: false,
+        state: 'NOT_LOCALIZED',
+        fresh_validation_ok: false,
+        age_ms: 250,
+        scan_available: false,
+        details: 'LiDAR scan stale or missing (2500ms > 2000ms)'
+      });
+
+      let statusRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(statusRes.json.localization.localized, false);
+      assert(statusRes.json.localization.details.includes('LiDAR scan stale'));
+      console.log('  ✓ Stale LiDAR scan correctly transitioned localization to NOT_LOCALIZED');
+
+      // 2. Re-establish valid localization then simulate odometry failure
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: true,
+        age_ms: 200,
+        details: 'Nominal tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      serverModule.updateLocalizationState({
+        localized: false,
+        state: 'NOT_LOCALIZED',
+        fresh_validation_ok: false,
+        odom_available: false,
+        details: 'Odometry telemetry stale or erroring (2500ms, errors=1)'
+      });
+
+      statusRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(statusRes.json.localization.localized, false);
+      assert(statusRes.json.localization.details.includes('Odometry telemetry stale'));
+      console.log('  ✓ Stale odometry telemetry correctly transitioned localization to NOT_LOCALIZED');
+    }
+
+    // --------------------------------------------------------------------------
+    // TEST 7: Cached / Stale Dynamic Transform Rejection
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 7] Verifying Cached / Stale Dynamic Transform Rejection...');
+    {
+      serverModule.updateLocalizationState({
+        localized: false,
+        state: 'NOT_LOCALIZED',
+        fresh_validation_ok: false,
+        tf_available: false,
+        dynamic_tf_age_ms: 2500,
+        details: 'Dynamic map to base_link transform stale or unavailable (2500ms)'
+      });
+
+      const statusRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(statusRes.json.localization.localized, false);
+      assert(statusRes.json.localization.details.includes('Dynamic map to base_link transform stale'));
+      console.log('  ✓ Stale dynamic transform rejected (not fooled by cached transforms)');
+    }
+
+    // --------------------------------------------------------------------------
+    // TEST 8: Stopped AMCL Stationary Timeout (> 8000ms)
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 8] Verifying Stopped AMCL Stationary Timeout (> 8000ms)...');
+    {
+      serverModule.updateLocalizationState({
+        localized: false,
+        state: 'NOT_LOCALIZED',
+        fresh_validation_ok: false,
+        age_ms: 8500,
+        is_stationary: true,
+        details: 'AMCL pose update timeout while stationary (8500ms > 8000ms; AMCL unresponsive)'
+      });
+
+      const statusRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(statusRes.json.localization.localized, false);
+      assert(statusRes.json.localization.details.includes('AMCL pose update timeout'));
+      console.log('  ✓ Stopped AMCL node correctly triggers stationary timeout (>8000ms)');
+    }
+
+    // --------------------------------------------------------------------------
+    // TEST 9: Active Motion Staleness Gate (No Reset on Slow Creep or Zero Speed)
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 9] Verifying Active Motion Staleness Gate & Watchdog Protection...');
+    {
+      // Re-initialize localization to LOCALIZED with fresh validation
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: true,
+        age_ms: 100,
+        details: 'Nominal tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      serverModule.autonomyState.enabled = true;
+      serverModule.autonomyState.state = 'READY_ARMED';
+      serverModule.injectNormalDriveStatus({ armed: true, mode: 3 });
+
+      // 1. Initial motion command accepted
+      const cmd1 = await httpRequest({
+        hostname: '127.0.0.1',
+        port: INTERNAL_PORT,
+        path: '/api/cmd_vel',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Bridge-Token': CMD_TOKEN
+        }
+      }, { linear: { x: 0.1, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
+      assert.strictEqual(cmd1.statusCode, 200);
+      assert.strictEqual(serverModule.autonomyState.state, 'ACTIVE');
+
+      // 2. Simulate AMCL pose becoming stale during motion (> 2000ms)
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: false,
+        age_ms: 2200,
+        details: 'Nominal tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      // Next motion command (even slow creep or commanded motion with 0 measured speed) MUST be rejected
+      const cmd2 = await httpRequest({
+        hostname: '127.0.0.1',
+        port: INTERNAL_PORT,
+        path: '/api/cmd_vel',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Bridge-Token': CMD_TOKEN
+        }
+      }, { linear: { x: 0.015, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
+      assert.strictEqual(cmd2.statusCode, 403, 'Non-zero command with stale pose (>2000ms) must be rejected with HTTP 403');
+      assert(cmd2.json.error.includes('stale'));
+      console.log('  ✓ Commanded motion / creep with stale pose rejected during motion (HTTP 403)');
+
+      // 3. Zero command still accepted unconditionally
+      const zeroCmd = await httpRequest({
+        hostname: '127.0.0.1',
+        port: INTERNAL_PORT,
+        path: '/api/cmd_vel',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Bridge-Token': CMD_TOKEN
+        }
+      }, { linear: { x: 0.0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 }, source: 'ROS_AUTONOMY' });
+      assert.strictEqual(zeroCmd.statusCode, 200);
+      console.log('  ✓ Zero command accepted unconditionally while pose is stale');
+
+      // Cleanup
+      serverModule.injectNormalDriveStatus({ armed: false, mode: 0 });
+      serverModule.autonomyState.enabled = false;
+      serverModule.autonomyState.state = 'DISABLED';
+    }
+
     console.log('\n================================================================');
     console.log('✓ ALL LOCALIZATION SAFETY & SOURCE DISCRIMINATION TESTS PASSED');
     console.log('================================================================\n');
