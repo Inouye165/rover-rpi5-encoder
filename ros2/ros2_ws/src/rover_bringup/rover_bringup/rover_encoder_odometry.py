@@ -216,6 +216,7 @@ class RoverEncoderOdometry(Node):
         )
         self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
         self._last_nomotion_call = 0.0
+        self._motion_start_time = None
 
         self.amcl_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -637,6 +638,8 @@ class RoverEncoderOdometry(Node):
                 "reason": "NO_INITIAL_POSE",
                 "details": "Awaiting initial pose estimate from operator (Foxglove)",
                 "age_ms": None,
+                "motion_elapsed_ms": 0,
+                "is_stationary": True,
                 "map_available": map_ok,
                 "tf_available": tf_ok,
                 "pose": None,
@@ -645,8 +648,24 @@ class RoverEncoderOdometry(Node):
 
         age_ms = int((now - last_time) * 1000.0)
         is_stationary = (abs(self.kinematics.v_x) < 0.02 and abs(self.kinematics.w_z) < 0.05)
-        # When stationary, TF transform map->base_link remains live; allow up to 10s or rely on TF
-        is_fresh = is_stationary or (age_ms <= 8000)
+
+        # 1. Stationary rover:
+        # A stationary, properly localized rover must not become unlocalized merely because AMCL publishes slowly while nothing moves.
+        if is_stationary:
+            self._motion_start_time = None
+            is_fresh = True
+            motion_elapsed_ms = 0
+        else:
+            # 2. Active motion:
+            # When motion begins, anchor the motion-staleness window and request a fresh scan update
+            if self._motion_start_time is None:
+                self._motion_start_time = now
+                if self.nomotion_client.service_is_ready():
+                    self.nomotion_client.call_async(Empty.Request())
+            motion_elapsed_ms = int((now - max(last_time, self._motion_start_time)) * 1000.0)
+            # During motion, stale AMCL data (> 2000 ms) must promptly trigger fail-safe
+            is_fresh = (motion_elapsed_ms <= 2000)
+
         cov_ok = (last_pose["sigma_x"] <= 0.35) and (last_pose["sigma_y"] <= 0.35) and (last_pose["sigma_yaw"] <= 0.50)
 
         if is_fresh and cov_ok and tf_ok and map_ok:
@@ -668,7 +687,7 @@ class RoverEncoderOdometry(Node):
         else:
             state = "NOT_LOCALIZED"
             localized = False
-            details = f"Pose stale ({age_ms}ms > 8000ms)"
+            details = f"Pose stale during motion ({motion_elapsed_ms}ms > 2000ms)"
 
         return {
             "localized": localized,
@@ -676,6 +695,8 @@ class RoverEncoderOdometry(Node):
             "reason": "OK" if localized else state,
             "details": details,
             "age_ms": age_ms,
+            "motion_elapsed_ms": motion_elapsed_ms,
+            "is_stationary": is_stationary,
             "map_available": map_ok,
             "tf_available": tf_ok,
             "pose": {

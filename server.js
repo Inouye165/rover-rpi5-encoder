@@ -3260,6 +3260,13 @@ function fetchRosOdometry() {
       latestRosOdom.valid = (lastOdomSuccessTime > 0 && sampleAge < 2000);
       latestRosOdom.odometry_age_ms = sampleAge;
       latestRosOdom.consecutive_errors = odomConsecutiveErrors;
+      if (sampleAge >= 2000 && localizationState.localized) {
+        updateLocalizationState({
+          localized: false,
+          state: 'NOT_LOCALIZED',
+          details: `Odometry node telemetry unreachable (${sampleAge}ms)`
+        });
+      }
     }
   }).finally(() => {
     odomFetchPromise = null;
