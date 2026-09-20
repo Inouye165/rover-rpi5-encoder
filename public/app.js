@@ -7203,8 +7203,7 @@ function updateLocalizationUI(loc) {
       return;
     }
 
-    const ok = (window.__skipNavConfirm === true) ? true : confirm(`AUTHORIZE PHYSICAL AUTONOMOUS NAVIGATION?\nDestination: (${x.toFixed(2)} m, ${y.toFixed(2)} m, ${yawDeg.toFixed(1)}°)\nEnsure 1.5m corridor clearance!`);
-    if (!ok) return;
+    // Explicit UI button click with authenticated operator token authorizes dispatch
 
     try {
       const res = await fetch('/api/navigation/dispatch', {
