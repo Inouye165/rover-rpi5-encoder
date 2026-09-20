@@ -55,6 +55,9 @@ function httpRequest(options, postData) {
 
 async function runTests() {
   console.log('--- STARTING LOCALIZATION SAFETY & SOURCE DISCRIMINATION TEST SUITE ---');
+  if (serverModule.setOdomPollingDisabled) {
+    serverModule.setOdomPollingDisabled(true);
+  }
 
   await new Promise(r => publicServer.listen(PUBLIC_PORT, '127.0.0.1', r));
   await new Promise(r => internalServer.listen(INTERNAL_PORT, '127.0.0.1', r));

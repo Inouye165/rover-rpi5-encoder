@@ -3192,8 +3192,12 @@ let lastAutoCalibLogTime = 0;
 let odomFetchPromise = null;
 let lastOdomSuccessTime = 0;
 let odomConsecutiveErrors = 0;
+let odomPollingDisabled = false;
 
 function fetchRosOdometry() {
+  if (odomPollingDisabled) {
+    return Promise.resolve(latestRosOdom);
+  }
   if (odomFetchPromise) {
     return odomFetchPromise;
   }
@@ -6106,5 +6110,6 @@ module.exports = {
   getSerialPort: () => serialPort,
   localizationState,
   updateLocalizationState,
-  abortAutonomyDueToLocalizationLost
+  abortAutonomyDueToLocalizationLost,
+  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
 };
