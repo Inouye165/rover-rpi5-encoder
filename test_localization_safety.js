@@ -559,6 +559,75 @@ async function runTests() {
       serverModule.autonomyState.state = 'DISABLED';
     }
 
+
+    // --------------------------------------------------------------------------
+    // TEST 10: Navigation & Collision-Protection Lifecycle Gating
+    // --------------------------------------------------------------------------
+    console.log('\n[Test 10] Verifying Navigation Lifecycle Gating Before Autonomous Arming...');
+    {
+      // 1. Establish fresh localization but leave navigation inactive
+      serverModule.updateLocalizationState({
+        localized: true,
+        state: 'LOCALIZED',
+        fresh_validation_ok: true,
+        age_ms: 200,
+        details: 'Nominal tracking',
+        pose: { x: 1.166, y: -0.110, yaw: -0.145, yaw_deg: -8.3 },
+        covariance: { sigma_x: 0.065, sigma_y: 0.058, sigma_yaw: 0.042 }
+      });
+
+      serverModule.updateNavigationState({
+        ready: false,
+        state: 'WAITING_FOR_LOCALIZATION',
+        details: 'bt_navigator is inactive',
+        nodes: { controller_server: 'unconfigured', planner_server: 'unconfigured', bt_navigator: 'inactive', collision_monitor: 'unconfigured' }
+      });
+
+      // Verify /api/status exposes navigation block
+      let stRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(stRes.json.navigation.ready, false);
+      assert.strictEqual(stRes.json.navigation.details, 'bt_navigator is inactive');
+      console.log('  ✓ /api/status accurately reflects inactive navigation lifecycle state');
+
+      // Attempt autonomy arming when navigation is not ready -> MUST return HTTP 409
+      let armRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/drive/arm',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-operator-token': OPERATOR_TOKEN
+        }
+      }, { autonomy: true });
+      assert.strictEqual(armRes.statusCode, 409, 'Must reject arming with HTTP 409 when navigation is not ready');
+      assert(armRes.json.error.includes('Navigation stack not ready'), 'Error must specify Navigation stack not ready');
+      console.log('  ✓ Autonomy arming rejected with HTTP 409 when navigation lifecycle is inactive');
+
+      // 2. Set navigation to ready (all required nodes active)
+      serverModule.updateNavigationState({
+        ready: true,
+        state: 'ACTIVE',
+        details: 'All required navigation and collision-protection nodes active',
+        nodes: { controller_server: 'active', planner_server: 'active', bt_navigator: 'active', collision_monitor: 'active' }
+      });
+
+      stRes = await httpRequest({
+        hostname: '127.0.0.1',
+        port: PUBLIC_PORT,
+        path: '/api/status',
+        method: 'GET'
+      });
+      assert.strictEqual(stRes.json.navigation.ready, true);
+      assert.strictEqual(stRes.json.navigation.state, 'ACTIVE');
+      console.log('  ✓ /api/status reflects active navigation state when bringup completes');
+    }
+
     console.log('\n================================================================');
     console.log('✓ ALL LOCALIZATION SAFETY & SOURCE DISCRIMINATION TESTS PASSED');
     console.log('================================================================\n');

@@ -8,6 +8,9 @@
   <license>Proprietary</license>
 
   <depend>rclpy</depend>
+  <depend>std_srvs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>

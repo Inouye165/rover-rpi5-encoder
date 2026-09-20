@@ -20,7 +20,9 @@ from typing import Optional, Tuple, List
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from geometry_msgs.msg import TransformStamped, PolygonStamped, Point32, Point, PoseWithCovarianceStamped
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
+from nav2_msgs.srv import ManageLifecycleNodes
+from lifecycle_msgs.srv import GetState
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Imu, LaserScan
 from visualization_msgs.msg import Marker, MarkerArray
@@ -31,6 +33,14 @@ import requests
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
 from rover_bringup.encoder_kinematics import EncoderKinematics, normalize_angle
+
+
+REQUIRED_NAV_NODES = [
+    'controller_server',
+    'planner_server',
+    'bt_navigator',
+    'collision_monitor'
+]
 
 
 class OdomAPIHandler(BaseHTTPRequestHandler):
@@ -64,9 +74,11 @@ class OdomAPIHandler(BaseHTTPRequestHandler):
                 health = "ok" if is_ok else ("degraded" if odom_age_ms < 5000 else "stale")
 
                 loc_status = node.get_localization_status() if hasattr(node, 'get_localization_status') else None
+                nav_status = node.get_navigation_status() if hasattr(node, 'get_navigation_status') else None
                 data = {
                     "ok": is_ok,
                     "localization": loc_status,
+                    "navigation": nav_status,
                     "timestamp": now_ts,
                     "x": float(getattr(node.kinematics, 'x', 0.0)),
                     "y": float(getattr(node.kinematics, 'y', 0.0)),
@@ -218,6 +230,24 @@ class RoverEncoderOdometry(Node):
             reliability=ReliabilityPolicy.RELIABLE
         )
         self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
+        # Navigation lifecycle management
+        self.nav_manage_client = self.create_client(ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
+        self.nav_is_active_client = self.create_client(Trigger, '/lifecycle_manager_navigation/is_active')
+        self._nav_get_state_clients = {
+            name: self.create_client(GetState, f'/{name}/get_state')
+            for name in REQUIRED_NAV_NODES
+        }
+        self._nav_activation_attempts = 0
+        self._max_nav_activation_attempts = 3
+        self._last_nav_activation_attempt_mono = 0.0
+        self._nav_lock = threading.Lock()
+        self._nav_lifecycle_status = {
+            "ready": False,
+            "state": "UNCONFIGURED",
+            "details": "Awaiting localization before bringing up navigation stack",
+            "nodes": {name: "unknown" for name in REQUIRED_NAV_NODES}
+        }
+        self.lifecycle_timer = self.create_timer(1.0, self._check_and_manage_navigation_lifecycle)
         self._last_nomotion_call_mono = 0.0
 
         self.amcl_sub = self.create_subscription(
@@ -597,6 +627,100 @@ class RoverEncoderOdometry(Node):
         self.marker_pub.publish(marker_array)
         self.vis_marker_pub.publish(marker_array)
 
+
+
+    def get_navigation_status(self):
+        with self._nav_lock:
+            return {
+                "ready": bool(self._nav_lifecycle_status["ready"]),
+                "state": str(self._nav_lifecycle_status["state"]),
+                "details": str(self._nav_lifecycle_status["details"]),
+                "nodes": dict(self._nav_lifecycle_status["nodes"]),
+                "activation_attempts": int(self._nav_activation_attempts)
+            }
+
+    def _check_and_manage_navigation_lifecycle(self):
+        now_mono = time.monotonic()
+
+        # 1. Query states of each required node asynchronously
+        for name, client in self._nav_get_state_clients.items():
+            if client.service_is_ready():
+                req = GetState.Request()
+                future = client.call_async(req)
+                def make_cb(node_name):
+                    def cb(f):
+                        try:
+                            res = f.result()
+                            if res and hasattr(res, 'current_state'):
+                                with self._nav_lock:
+                                    self._nav_lifecycle_status["nodes"][node_name] = res.current_state.label
+                        except Exception:
+                            pass
+                    return cb
+                future.add_done_callback(make_cb(name))
+
+        # 2. Evaluate current node states
+        with self._nav_lock:
+            node_states = dict(self._nav_lifecycle_status["nodes"])
+
+        inactive_nodes = [n for n in REQUIRED_NAV_NODES if node_states.get(n) != 'active']
+        all_active = (len(inactive_nodes) == 0) and (len(node_states) >= len(REQUIRED_NAV_NODES))
+
+        # 3. Check localization readiness
+        loc = self.get_localization_status()
+        is_localized = loc.get("localized", False) and loc.get("tf_available", False)
+
+        with self._nav_lock:
+            if all_active:
+                self._nav_lifecycle_status["ready"] = True
+                self._nav_lifecycle_status["state"] = "ACTIVE"
+                self._nav_lifecycle_status["details"] = "All required navigation and collision-protection nodes active"
+                return
+            else:
+                self._nav_lifecycle_status["ready"] = False
+                if not is_localized:
+                    self._nav_lifecycle_status["state"] = "WAITING_FOR_LOCALIZATION"
+                    self._nav_lifecycle_status["details"] = "Awaiting operator initial pose in Foxglove before navigation bringup"
+                    return
+
+        # 4. If localized but nodes are not all active, trigger bounded bringup
+        if is_localized and not all_active:
+            if self._nav_activation_attempts >= self._max_nav_activation_attempts:
+                with self._nav_lock:
+                    self._nav_lifecycle_status["state"] = "ACTIVATION_FAILED"
+                    self._nav_lifecycle_status["details"] = (
+                        f"Navigation bringup failed after {self._max_nav_activation_attempts} attempts. "
+                        f"Inactive: {', '.join(f'{n}={node_states.get(n, "unknown")}' for n in inactive_nodes)}"
+                    )
+                return
+
+            if (now_mono - self._last_nav_activation_attempt_mono) >= 3.0:
+                self._last_nav_activation_attempt_mono = now_mono
+                self._nav_activation_attempts += 1
+                attempt_num = self._nav_activation_attempts
+                self.get_logger().info(
+                    f"[Lifecycle Manager] Triggering navigation bringup (attempt {attempt_num}/{self._max_nav_activation_attempts}) via manage_nodes(START)..."
+                )
+                with self._nav_lock:
+                    self._nav_lifecycle_status["state"] = "ACTIVATING"
+                    self._nav_lifecycle_status["details"] = f"Activating navigation lifecycle nodes (attempt {attempt_num})..."
+
+                if self.nav_manage_client.service_is_ready():
+                    req = ManageLifecycleNodes.Request()
+                    req.command = 0  # 0 = START / BRINGUP
+                    future = self.nav_manage_client.call_async(req)
+                    def on_manage_done(f):
+                        try:
+                            res = f.result()
+                            if res and res.success:
+                                self.get_logger().info("[Lifecycle Manager] Navigation bringup reported success.")
+                            else:
+                                self.get_logger().warn(f"[Lifecycle Manager] Navigation bringup reported failure: {res}")
+                        except Exception as err:
+                            self.get_logger().error(f"[Lifecycle Manager] Error calling manage_nodes: {err}")
+                    future.add_done_callback(on_manage_done)
+                else:
+                    self.get_logger().warn("[Lifecycle Manager] /lifecycle_manager_navigation/manage_nodes service not ready.")
 
     def _scan_callback(self, msg: LaserScan):
         self._last_scan_time_mono = time.monotonic()

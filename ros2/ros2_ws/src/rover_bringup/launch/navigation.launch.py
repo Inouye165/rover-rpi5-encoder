@@ -1,3 +1,4 @@
+import subprocess
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -70,6 +71,13 @@ def generate_launch_description():
         description='Use simulation clock if true'
     )
 
+    autostart_navigation_arg = DeclareLaunchArgument(
+        'autostart_navigation',
+        default_value='false',
+        description='Automatically startup the navigation lifecycle nodes (defaults to false to wait for localization)'
+    )
+    autostart_navigation = LaunchConfiguration('autostart_navigation')
+
     autostart_arg = DeclareLaunchArgument(
         'autostart',
         default_value='true',
@@ -81,6 +89,15 @@ def generate_launch_description():
         default_value='info',
         description='Log level'
     )
+
+    # Duplicate Nav2 launch protection
+    try:
+        pgrep_res = subprocess.run(['pgrep', '-f', 'component_container_isolated.*nav2_container'], capture_output=True, text=True)
+        if pgrep_res.returncode == 0 and pgrep_res.stdout.strip():
+            existing_pids = pgrep_res.stdout.strip().split()
+            raise RuntimeError(f"Duplicate Nav2 launch prevented: nav2_container is already running (PIDs: {', '.join(existing_pids)})")
+    except (FileNotFoundError, PermissionError):
+        pass
 
     # 1. Start component container for composed Nav2 nodes
     container_node = Node(
@@ -177,7 +194,7 @@ def generate_launch_description():
                         plugin='nav2_lifecycle_manager::LifecycleManager',
                         name='lifecycle_manager_navigation',
                         parameters=[
-                            {'autostart': autostart, 'node_names': lifecycle_nodes}
+                            {'autostart': autostart_navigation, 'node_names': lifecycle_nodes}
                         ],
                     ),
                 ],
@@ -191,6 +208,7 @@ def generate_launch_description():
         map_arg,
         use_sim_time_arg,
         autostart_arg,
+        autostart_navigation_arg,
         log_level_arg,
         container_node,
         localization_launch,

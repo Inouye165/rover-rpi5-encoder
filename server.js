@@ -266,6 +266,21 @@ let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
 
+let navigationState = {
+  ready: false,
+  state: 'UNCONFIGURED',
+  details: 'Awaiting navigation telemetry',
+  nodes: {}
+};
+
+function updateNavigationState(nav) {
+  if (!nav || typeof nav !== 'object') return;
+  navigationState.ready = Boolean(nav.ready);
+  navigationState.state = nav.state || 'UNKNOWN';
+  navigationState.details = nav.details || '';
+  navigationState.nodes = nav.nodes || {};
+}
+
 let localizationState = {
   localized: false,
   state: 'NOT_LOCALIZED',
@@ -3238,6 +3253,9 @@ function fetchRosOdometry() {
                 if (parsed.localization) {
                   updateLocalizationState(parsed.localization);
                 }
+                if (parsed.navigation) {
+                  updateNavigationState(parsed.navigation);
+                }
               }
               return finish(latestRosOdom);
             }
@@ -4072,6 +4090,15 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
         localization: localizationState
       });
     }
+    // Navigation and collision-protection lifecycle gate: required nodes must be active
+    if (!navigationState || !navigationState.ready) {
+      return res.status(409).json({
+        ok: false,
+        error: `Cannot arm rover for autonomy: Navigation stack not ready (${navigationState ? navigationState.details : 'Navigation lifecycle inactive'}).`,
+        navigation: navigationState,
+        localization: localizationState
+      });
+    }
   }
   console.log(`[DEBUG] /api/drive/arm received. Current autoCalib phase: ${autoCalibState.phase}, active: ${autoCalibState.active}, test: ${autoCalibState.test}. ESP32 latest armed: ${latestNormalDriveStatus ? latestNormalDriveStatus.armed : 'unknown'}`);
   targetLinear = 0.0;
@@ -4375,6 +4402,7 @@ app.get('/api/status', async (req, res) => {
     autonomyEnabled: autonomyState.enabled,
     autonomyState: autonomyState.state,
     localization: localizationState,
+    navigation: navigationState,
     cmdSource: cmdSource,
     loopTiming: latestLoopTiming,
     bootCount: latestNormalDriveStatus ? latestNormalDriveStatus.bootCount : null,
@@ -6110,6 +6138,8 @@ module.exports = {
   getSerialPort: () => serialPort,
   localizationState,
   updateLocalizationState,
+  navigationState,
+  updateNavigationState,
   abortAutonomyDueToLocalizationLost,
   setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
 };
