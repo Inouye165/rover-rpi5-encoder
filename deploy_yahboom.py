@@ -390,10 +390,14 @@ def main():
 
     clean_ok, clean_err = verify_remote_git_clean(client, password)
     if not clean_ok:
-        print(f"ERROR: {clean_err}", file=sys.stderr)
-        client.close()
-        sys.exit(1)
-    print(" [OK] Remote Pi Git Clean Verification: PASS (0 untracked or modified files)")
+        if not args.allow_dirty:
+            print(f"ERROR: {clean_err}", file=sys.stderr)
+            client.close()
+            sys.exit(1)
+        else:
+            print(" [WARN] Remote Pi Git contains untracked files (ignored due to --allow-dirty)")
+    else:
+        print(" [OK] Remote Pi Git Clean Verification: PASS (0 untracked or modified files)")
 
     client.close()
 
