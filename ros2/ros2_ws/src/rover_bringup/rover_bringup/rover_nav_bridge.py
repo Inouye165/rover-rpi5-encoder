@@ -22,6 +22,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from geometry_msgs.msg import PoseStamped
+from std_srvs.srv import Empty
 from nav_msgs.msg import Path
 
 DEFAULT_PORT = 3005
@@ -35,6 +36,7 @@ class RoverNavBridge(Node):
 
         self.compute_path_client = ActionClient(self, ComputePathToPose, '/compute_path_to_pose')
         self.nav_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
+        self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
 
         self.latest_global_plan = []
         self.latest_local_plan = []

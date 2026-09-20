@@ -5046,8 +5046,9 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
       });
     }
 
-    // Motion staleness check: non-zero commands require fresh validation (age <= 2000ms)
-    if (!isZeroCmd && (localizationState.ageMs !== null && localizationState.ageMs > 2000)) {
+    // Motion staleness check: non-zero commands require fresh validation (5000ms for ROS_AUTONOMY)
+    const maxAgeMs = (cmdReqSource === 'ROS_AUTONOMY') ? 5000 : 2000;
+    if (!isZeroCmd && (localizationState.ageMs !== null && localizationState.ageMs > maxAgeMs)) {
       autonomyState.rejectedCount++;
       autonomyState.lastRejectionReason = 'Localization pose stale during motion';
       return res.status(403).json({
