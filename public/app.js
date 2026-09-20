@@ -6848,6 +6848,9 @@ function updateLocalizationUI(loc) {
     }
   }
 
+    if (typeof window.updateNavRobotPose === 'function' && loc.x !== null && loc.x !== undefined) {
+    window.updateNavRobotPose(Number(loc.x), Number(loc.y), Number(loc.yawDeg || 0));
+  }
   if (loc.x !== null && loc.x !== undefined && elX) {
     elX.textContent = `${Number(loc.x).toFixed(3)} m`;
   }
@@ -6865,3 +6868,430 @@ function updateLocalizationUI(loc) {
     }
   }
 }
+
+
+// ────────────────────────────────────────────────────────────
+// Cockpit 2D Navigation Map & Trajectory Controller
+// ────────────────────────────────────────────────────────────
+(function() {
+  const canvas = document.getElementById('nav-map-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  let mapData = null; // { width, height, resolution, origin, pixels }
+  let mapBitmap = null;
+  let currentRobotPose = { x: 1.442, y: -0.059, yawDeg: -2.7 };
+  let currentGoalPose = { x: 2.154, y: -0.235, yawDeg: -4.2 };
+  let previewPath = []; // [[x, y], ...]
+  let activeGlobalPath = [];
+  let activeLocalPath = [];
+  let navStatus = "IDLE";
+  let pollInterval = null;
+
+  const SCALE = 5.0;
+
+  function worldToCanvas(x, y) {
+    if (!mapData) return [0, 0];
+    const originX = mapData.origin[0];
+    const originY = mapData.origin[1];
+    const res = mapData.resolution;
+    const u_grid = (x - originX) / res;
+    const v_grid = (y - originY) / res;
+    const u_canvas = u_grid * SCALE;
+    const v_canvas = (mapData.height - 1 - v_grid) * SCALE;
+    return [u_canvas, v_canvas];
+  }
+
+  function canvasToWorld(u, v) {
+    if (!mapData) return [0, 0];
+    const originX = mapData.origin[0];
+    const originY = mapData.origin[1];
+    const res = mapData.resolution;
+    const u_grid = u / SCALE;
+    const v_grid = (mapData.height - 1) - (v / SCALE);
+    const x = originX + u_grid * res;
+    const y = originY + v_grid * res;
+    return [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000];
+  }
+
+  function buildMapBitmap() {
+    if (!mapData || !mapData.pixels) return;
+    const offscreen = document.createElement('canvas');
+    offscreen.width = mapData.width;
+    offscreen.height = mapData.height;
+    const octx = offscreen.getContext('2d');
+    const imgData = octx.createImageData(mapData.width, mapData.height);
+    const d = imgData.data;
+
+    for (let i = 0; i < mapData.pixels.length; i++) {
+      const val = mapData.pixels[i];
+      const idx = i * 4;
+      if (val === 254 || val === 255) {
+        // Free space: clean dark slate navy
+        d[idx] = 15;
+        d[idx + 1] = 29;
+        d[idx + 2] = 58;
+        d[idx + 3] = 255;
+      } else if (val === 0) {
+        // Occupied / obstacle / wall: bright cyan/blue outline
+        d[idx] = 56;
+        d[idx + 1] = 189;
+        d[idx + 2] = 248;
+        d[idx + 3] = 255;
+      } else {
+        // Unexplored / unknown: dark void
+        d[idx] = 5;
+        d[idx + 1] = 9;
+        d[idx + 2] = 20;
+        d[idx + 3] = 255;
+      }
+    }
+    octx.putImageData(imgData, 0, 0);
+    mapBitmap = offscreen;
+  }
+
+  function renderMap() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (mapBitmap) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(mapBitmap, 0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.fillStyle = "#0b1329";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#64748b";
+      ctx.font = "14px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("Loading Map...", canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    // Grid overlay (0.5m interval)
+    if (mapData) {
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.lineWidth = 1;
+      const step = (0.50 / mapData.resolution) * SCALE;
+      for (let x = 0; x < canvas.width; x += step) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += step) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+    }
+
+    // Global / Preview Path (cyan line)
+    const pathToDraw = (activeGlobalPath && activeGlobalPath.length > 0) ? activeGlobalPath : previewPath;
+    if (pathToDraw && pathToDraw.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = "#00f2fe";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const [u0, v0] = worldToCanvas(pathToDraw[0][0], pathToDraw[0][1]);
+      ctx.moveTo(u0, v0);
+      for (let i = 1; i < pathToDraw.length; i++) {
+        const [u, v] = worldToCanvas(pathToDraw[i][0], pathToDraw[i][1]);
+        ctx.lineTo(u, v);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = "#38ef7d";
+      for (let i = 0; i < pathToDraw.length; i += 3) {
+        const [u, v] = worldToCanvas(pathToDraw[i][0], pathToDraw[i][1]);
+        ctx.beginPath();
+        ctx.arc(u, v, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
+
+    // Local DWB Trajectory (green line)
+    if (activeLocalPath && activeLocalPath.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = "#22c55e";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      const [lu0, lv0] = worldToCanvas(activeLocalPath[0][0], activeLocalPath[0][1]);
+      ctx.moveTo(lu0, lv0);
+      for (let i = 1; i < activeLocalPath.length; i++) {
+        const [lu, lv] = worldToCanvas(activeLocalPath[i][0], activeLocalPath[i][1]);
+        ctx.lineTo(lu, lv);
+      }
+      ctx.stroke();
+    }
+
+    // Goal Target Marker (orange target)
+    if (currentGoalPose && currentGoalPose.x !== null) {
+      const [gu, gv] = worldToCanvas(currentGoalPose.x, currentGoalPose.y);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(gu, gv, 10, 0, 2 * Math.PI);
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(gu, gv, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = "#f59e0b";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(gu - 14, gv); ctx.lineTo(gu + 14, gv);
+      ctx.moveTo(gu, gv - 14); ctx.lineTo(gu, gv + 14);
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.6)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.font = "bold 10px monospace";
+      ctx.fillStyle = "#f59e0b";
+      ctx.textAlign = "center";
+      ctx.fillText(`GOAL (${currentGoalPose.x.toFixed(2)}, ${currentGoalPose.y.toFixed(2)})`, gu, gv - 16);
+      ctx.restore();
+    }
+
+    // Robot Pose (bright cyan triangle)
+    if (currentRobotPose && currentRobotPose.x !== null) {
+      const [ru, rv] = worldToCanvas(currentRobotPose.x, currentRobotPose.y);
+      const rad = (currentRobotPose.yawDeg || 0) * (Math.PI / 180.0);
+      const canvasAngle = -rad;
+
+      ctx.save();
+      ctx.translate(ru, rv);
+      ctx.rotate(canvasAngle);
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 14, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(0, 242, 254, 0.2)";
+      ctx.fill();
+      ctx.strokeStyle = "#00f2fe";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(14, 0);
+      ctx.lineTo(-10, -8);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-10, 8);
+      ctx.closePath();
+      ctx.fillStyle = "#00f2fe";
+      ctx.fill();
+
+      ctx.restore();
+
+      ctx.font = "bold 10px monospace";
+      ctx.fillStyle = "#00f2fe";
+      ctx.textAlign = "center";
+      ctx.fillText(`ROVER (${currentRobotPose.x.toFixed(2)}, ${currentRobotPose.y.toFixed(2)})`, ru, rv + 24);
+    }
+  }
+
+  async function fetchMap() {
+    try {
+      const res = await fetch('/api/navigation/map');
+      const data = await res.json();
+      if (data && data.ok) {
+        mapData = data;
+        buildMapBitmap();
+        const badge = document.getElementById('v2-map-badge');
+        if (badge) {
+          badge.textContent = `MAP: ${data.width}x${data.height} (${(data.resolution*100).toFixed(0)}cm)`;
+          badge.className = 'badge badge-success';
+        }
+        renderMap();
+      }
+    } catch (err) {
+      console.warn("Failed to load nav map:", err);
+      const badge = document.getElementById('v2-map-badge');
+      if (badge) {
+        badge.textContent = 'MAP UNAVAILABLE';
+        badge.className = 'badge badge-danger';
+      }
+    }
+  }
+
+  async function requestPlanPreview() {
+    const x = parseFloat(document.getElementById('nav-input-x').value);
+    const y = parseFloat(document.getElementById('nav-input-y').value);
+    const yawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
+    const yawRad = yawDeg * (Math.PI / 180.0);
+
+    currentGoalPose = { x, y, yawDeg };
+    renderMap();
+
+    const btn = document.getElementById('btn-nav-preview');
+    if (btn) btn.textContent = '⏳ Planning...';
+
+    try {
+      const res = await fetch('/api/navigation/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y, yaw: yawRad })
+      });
+      const data = await res.json();
+      if (data && data.ok) {
+        previewPath = data.waypoints || [];
+        const ptsEl = document.getElementById('v2-nav-points-val');
+        const lenEl = document.getElementById('v2-nav-len-val');
+        if (ptsEl) ptsEl.textContent = previewPath.length;
+        if (lenEl) {
+          let totalLen = 0.0;
+          for (let i = 1; i < previewPath.length; i++) {
+            const dx = previewPath[i][0] - previewPath[i-1][0];
+            const dy = previewPath[i][1] - previewPath[i-1][1];
+            totalLen += Math.sqrt(dx*dx + dy*dy);
+          }
+          lenEl.textContent = `${totalLen.toFixed(2)} m`;
+        }
+        renderMap();
+      } else {
+        alert(`Planner error: ${data.error || 'Path planning failed'}`);
+      }
+    } catch (err) {
+      alert(`Plan request error: ${err.message}`);
+    } finally {
+      if (btn) btn.textContent = '🔍 Preview Plan (Disarmed)';
+    }
+  }
+
+  async function dispatchNavGoal() {
+    const x = parseFloat(document.getElementById('nav-input-x').value);
+    const y = parseFloat(document.getElementById('nav-input-y').value);
+    const yawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
+    const yawRad = yawDeg * (Math.PI / 180.0);
+
+    const token = typeof getOperatorToken === 'function' ? getOperatorToken() : (prompt("Enter Operator Token to authorize autonomous navigation:") || "");
+    if (!token) return;
+
+    const ok = confirm(`AUTHORIZE PHYSICAL AUTONOMOUS NAVIGATION?\nDestination: (${x.toFixed(2)} m, ${y.toFixed(2)} m, ${yawDeg.toFixed(1)}°)\nEnsure 1.5m corridor clearance!`);
+    if (!ok) return;
+
+    try {
+      const res = await fetch('/api/navigation/dispatch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rover-Operator-Token': token
+        },
+        body: JSON.stringify({ x, y, yaw: yawRad })
+      });
+      const data = await res.json();
+      if (data && data.ok) {
+        navStatus = "EXECUTING";
+        updateNavStatusBadge("EXECUTING", "badge-warning");
+        startNavPolling();
+      } else {
+        alert(`Goal dispatch rejected: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      alert(`Dispatch error: ${err.message}`);
+    }
+  }
+
+  async function cancelNavGoal() {
+    try {
+      const res = await fetch('/api/navigation/cancel', { method: 'POST' });
+      const data = await res.json();
+      navStatus = "CANCELLED";
+      updateNavStatusBadge("CANCELLED", "badge-secondary");
+      activeGlobalPath = [];
+      activeLocalPath = [];
+      renderMap();
+    } catch (err) {
+      console.warn("Error cancelling nav:", err);
+    }
+  }
+
+  function updateNavStatusBadge(status, badgeClass) {
+    const badge = document.getElementById('v2-nav-status-badge');
+    const val = document.getElementById('v2-nav-status-val');
+    if (badge) {
+      badge.textContent = status;
+      badge.className = `badge ${badgeClass || 'badge-secondary'}`;
+    }
+    if (val) val.textContent = status;
+  }
+
+  function startNavPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/navigation/status');
+        const data = await res.json();
+        if (data && data.ok) {
+          activeGlobalPath = data.global_path || [];
+          activeLocalPath = data.local_path || [];
+          const distEl = document.getElementById('v2-nav-dist-val');
+          if (distEl) distEl.textContent = `${Number(data.distance_remaining_m || 0).toFixed(2)} m`;
+          if (data.status && data.status !== navStatus) {
+            navStatus = data.status;
+            const cls = navStatus === 'EXECUTING' ? 'badge-warning' : (navStatus === 'SUCCEEDED' ? 'badge-success' : 'badge-secondary');
+            updateNavStatusBadge(navStatus, cls);
+          }
+          renderMap();
+        }
+      } catch (_) {}
+    }, 500);
+  }
+
+  canvas.addEventListener('click', (evt) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const u = (evt.clientX - rect.left) * scaleX;
+    const v = (evt.clientY - rect.top) * scaleY;
+
+    const [wx, wy] = canvasToWorld(u, v);
+    document.getElementById('nav-input-x').value = wx.toFixed(3);
+    document.getElementById('nav-input-y').value = wy.toFixed(3);
+
+    currentGoalPose.x = wx;
+    currentGoalPose.y = wy;
+    renderMap();
+    requestPlanPreview();
+  });
+
+  canvas.addEventListener('mousemove', (evt) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const u = (evt.clientX - rect.left) * scaleX;
+    const v = (evt.clientY - rect.top) * scaleY;
+    const [wx, wy] = canvasToWorld(u, v);
+    const coordsEl = document.getElementById('nav-map-coords');
+    if (coordsEl) coordsEl.textContent = `Pointer: X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m`;
+  });
+
+  document.getElementById('btn-preset-corridor-070')?.addEventListener('click', () => {
+    document.getElementById('nav-input-x').value = '2.154';
+    document.getElementById('nav-input-y').value = '-0.235';
+    document.getElementById('nav-input-yaw').value = '-4.2';
+    requestPlanPreview();
+  });
+
+  document.getElementById('btn-preset-corridor-060')?.addEventListener('click', () => {
+    document.getElementById('nav-input-x').value = '2.044';
+    document.getElementById('nav-input-y').value = '-0.200';
+    document.getElementById('nav-input-yaw').value = '-4.2';
+    requestPlanPreview();
+  });
+
+  document.getElementById('btn-preset-home')?.addEventListener('click', () => {
+    document.getElementById('nav-input-x').value = '1.442';
+    document.getElementById('nav-input-y').value = '-0.059';
+    document.getElementById('nav-input-yaw').value = '-2.7';
+    requestPlanPreview();
+  });
+
+  document.getElementById('btn-nav-preview')?.addEventListener('click', requestPlanPreview);
+  document.getElementById('btn-nav-dispatch')?.addEventListener('click', dispatchNavGoal);
+  document.getElementById('btn-nav-cancel')?.addEventListener('click', cancelNavGoal);
+
+  window.updateNavRobotPose = function(x, y, yawDeg) {
+    currentRobotPose.x = x;
+    currentRobotPose.y = y;
+    currentRobotPose.yawDeg = yawDeg;
+    renderMap();
+  };
+
+  fetchMap();
+  startNavPolling();
+})();

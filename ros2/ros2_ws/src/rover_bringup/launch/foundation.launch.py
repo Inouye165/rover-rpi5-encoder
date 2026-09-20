@@ -81,6 +81,12 @@ def generate_launch_description():
             ],
         ),
         Node(
+            package='rover_bringup',
+            executable='rover_nav_bridge',
+            name='rover_nav_bridge',
+            output='screen',
+        ),
+        Node(
             package='foxglove_bridge',
             executable='foxglove_bridge',
             name='foxglove_bridge',

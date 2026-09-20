@@ -843,19 +843,83 @@
             </div>
             <p style="color: var(--text-muted); font-size: 0.85rem;">SLAM map building service is <strong>Not installed</strong> on this chassis build. Cartographer/SLAM-Toolbox integration scheduled for Phase 7.</p>
           </div>
-          <div class="v2-card" id="autonomy-nav2">
+          <!-- 2D NAVIGATION MAP & TRAJECTORY -->
+          <div class="v2-card" id="autonomy-map-card" style="grid-column: 1 / -1;">
             <div class="v2-card-header">
-              <h3>🧭 Nav2 Lifecycle State</h3>
-              <span class="badge badge-secondary">NOT INSTALLED</span>
+              <h3>🗺️ 2D Navigation Map & Live Trajectory</h3>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <span id="v2-map-badge" class="badge badge-info">LOADING MAP...</span>
+                <span id="v2-nav-status-badge" class="badge badge-secondary">IDLE</span>
+              </div>
             </div>
-            <p style="color: var(--text-muted); font-size: 0.85rem;">Nav2 stack planner and controller servers are <strong>Not installed</strong>. Autonomous path planning is scheduled for Phase 7.</p>
-          </div>
-          <div class="v2-card" id="autonomy-goal">
-            <div class="v2-card-header">
-              <h3>🎯 Navigation Goal & Progress</h3>
-              <span class="badge badge-secondary">NOT INSTALLED</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start;">
+              <!-- Map Canvas Frame -->
+              <div style="position: relative; background: #070c18; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px; display: inline-block;">
+                <canvas id="nav-map-canvas" width="485" height="625" style="display: block; cursor: crosshair; background: #0b1329; border-radius: 4px;"></canvas>
+                <div id="nav-map-coords" style="position: absolute; bottom: 12px; left: 12px; font-family: monospace; font-size: 0.75rem; background: rgba(0,0,0,0.75); padding: 3px 8px; border-radius: 4px; color: #94a3b8; pointer-events: none; border: 1px solid rgba(255,255,255,0.1);">Click map to set goal</div>
+              </div>
+              
+              <!-- Control & Metric Column -->
+              <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 14px;">
+                <!-- Legend -->
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px;">
+                  <h4 style="margin: 0 0 8px 0; font-size: 0.82rem; color: #94a3b8; letter-spacing: 0.5px;">MAP LEGEND & OVERLAYS</h4>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.8rem;">
+                    <div><span style="color: #00f2fe; font-weight: bold;">▲</span> Robot Pose (AMCL)</div>
+                    <div><span style="color: #f59e0b; font-weight: bold;">🎯</span> Nav2 Destination</div>
+                    <div><span style="color: #00f2fe; font-weight: bold;">━</span> Global Path (Smac2D)</div>
+                    <div><span style="color: #22c55e; font-weight: bold;">━</span> Local Plan (DWB)</div>
+                  </div>
+                </div>
+
+                <!-- Destination Coordinates & Presets -->
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px;">
+                  <h4 style="margin: 0 0 10px 0; font-size: 0.82rem; color: #94a3b8; letter-spacing: 0.5px;">DESTINATION TARGET (MAP METERS)</h4>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                    <div>
+                      <label style="font-size: 0.72rem; color: #94a3b8; display: block; margin-bottom: 4px; font-weight: 600;">TARGET X (m)</label>
+                      <input id="nav-input-x" type="number" step="0.01" value="2.154" style="width: 100%; background: #0b1329; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 0.9rem;" />
+                    </div>
+                    <div>
+                      <label style="font-size: 0.72rem; color: #94a3b8; display: block; margin-bottom: 4px; font-weight: 600;">TARGET Y (m)</label>
+                      <input id="nav-input-y" type="number" step="0.01" value="-0.235" style="width: 100%; background: #0b1329; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 0.9rem;" />
+                    </div>
+                    <div>
+                      <label style="font-size: 0.72rem; color: #94a3b8; display: block; margin-bottom: 4px; font-weight: 600;">YAW (deg)</label>
+                      <input id="nav-input-yaw" type="number" step="0.1" value="-4.2" style="width: 100%; background: #0b1329; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 0.9rem;" />
+                    </div>
+                  </div>
+
+                  <!-- Corridor Quick Presets -->
+                  <div style="margin-bottom: 14px;">
+                    <div style="font-size: 0.72rem; color: #94a3b8; margin-bottom: 6px; font-weight: 600;">TEST ROUTE PRESETS:</div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                      <button class="btn btn-small" id="btn-preset-corridor-070" style="background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; font-size: 0.8rem; font-weight: 600;">Corridor (0.70m)</button>
+                      <button class="btn btn-small" id="btn-preset-corridor-060" style="background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; font-size: 0.8rem; font-weight: 600;">Corridor (0.60m)</button>
+                      <button class="btn btn-small" id="btn-preset-home" style="background: rgba(148, 163, 184, 0.15); border: 1px solid #94a3b8; color: #94a3b8; font-size: 0.8rem; font-weight: 600;">Home (Origin)</button>
+                    </div>
+                  </div>
+
+                  <!-- Navigation Actions -->
+                  <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <button class="btn btn-block" id="btn-nav-preview" style="background: rgba(0, 242, 254, 0.15); border: 1px solid #00f2fe; color: #00f2fe; font-weight: 700; padding: 10px; font-size: 0.9rem;">🔍 Preview Plan (Disarmed)</button>
+                    <button class="btn btn-block" id="btn-nav-dispatch" style="background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #f59e0b; font-weight: 700; padding: 10px; font-size: 0.9rem;">🚀 Dispatch Goal (Arm & Drive)</button>
+                    <button class="btn btn-block btn-danger" id="btn-nav-cancel" style="font-weight: 700; padding: 10px; font-size: 0.9rem;">⏹️ Cancel Navigation & Disarm</button>
+                  </div>
+                </div>
+
+                <!-- Metrics Box -->
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px;">
+                  <h4 style="margin: 0 0 8px 0; font-size: 0.82rem; color: #94a3b8; letter-spacing: 0.5px;">LIVE NAVIGATION TELEMETRY</h4>
+                  <div class="v2-status-grid">
+                    <div class="v2-status-item"><span class="v2-status-label">Status:</span> <span id="v2-nav-status-val" class="status-val">IDLE</span></div>
+                    <div class="v2-status-item"><span class="v2-status-label">Dist to Goal:</span> <span id="v2-nav-dist-val" class="status-val">0.00 m</span></div>
+                    <div class="v2-status-item"><span class="v2-status-label">Waypoints:</span> <span id="v2-nav-points-val" class="status-val">0</span></div>
+                    <div class="v2-status-item"><span class="v2-status-label">Path Length:</span> <span id="v2-nav-len-val" class="status-val">0.00 m</span></div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <p style="color: var(--text-muted); font-size: 0.85rem;">Navigation goal controls will be enabled after Nav2 integration is deployed.</p>
           </div>
           <div class="v2-card" id="autonomy-foxglove">
             <div class="v2-card-header">

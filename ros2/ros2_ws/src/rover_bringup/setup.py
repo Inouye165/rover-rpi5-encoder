@@ -33,6 +33,7 @@ setup(
             'rover_cmd_vel_bridge = rover_bringup.rover_cmd_vel_bridge:main',
             'rover_imu_bridge = rover_bringup.rover_imu_bridge:main',
             'record_odom_calibration = rover_bringup.record_odom_calibration:main',
+            'rover_nav_bridge = rover_bringup.rover_nav_bridge:main',
         ],
     },
 )

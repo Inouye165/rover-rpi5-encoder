@@ -37,6 +37,21 @@ const PORT = process.env.PORT || 3000;
 const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
 const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
 
+
+function triggerNav2Cancel() {
+  try {
+    const cancelReq = http.request({
+      hostname: '127.0.0.1',
+      port: 3005,
+      path: '/api/nav/cancel',
+      method: 'POST',
+      timeout: 500
+    });
+    cancelReq.on('error', () => {});
+    cancelReq.end();
+  } catch (_) {}
+}
+
 function isValidCmdToken(token) {
   if (!token || typeof token !== 'string') return false;
   const trimmed = token.trim();
@@ -2766,6 +2781,7 @@ app.get('/api/motor', (req, res) => {
 
 app.get('/api/stop', (req, res) => {
   positionMode = [false, false, false, false];
+  triggerNav2Cancel();
   autonomyState.enabled = false;
   autonomyState.active = false;
   autonomyState.lastRejectionReason = 'E-Stop triggered';
@@ -4468,6 +4484,208 @@ app.get('/api/autonomy/status', (req, res) => {
 app.get('/api/localization/status', (req, res) => {
   res.json(localizationState);
 });
+
+// ────────────────────────────────────────────────────────────
+// ROS 2 Navigation Bridge Proxy Endpoints (port 3005)
+// ────────────────────────────────────────────────────────────
+const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
+let cachedNavMap = null;
+
+app.get('/api/navigation/map', (req, res) => {
+  if (cachedNavMap) {
+    return res.json(cachedNavMap);
+  }
+  const httpReq = http.get(`${ROVER_NAV_BRIDGE_URL}/api/nav/map`, { timeout: 3000 }, (bridgeRes) => {
+    let data = '';
+    bridgeRes.on('data', chunk => { data += chunk; });
+    bridgeRes.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.ok) {
+          cachedNavMap = parsed;
+        }
+        res.status(bridgeRes.statusCode).json(parsed);
+      } catch (err) {
+        res.status(502).json({ ok: false, error: `Invalid JSON from nav bridge map: ${err.message}` });
+      }
+    });
+  });
+  httpReq.on('error', (err) => {
+    res.status(503).json({ ok: false, error: `Nav bridge unavailable: ${err.message}` });
+  });
+  httpReq.on('timeout', () => {
+    httpReq.destroy();
+    res.status(504).json({ ok: false, error: 'Nav bridge map request timed out' });
+  });
+});
+
+app.post('/api/navigation/plan', (req, res) => {
+  const payload = JSON.stringify(req.body || {});
+  const options = {
+    hostname: '127.0.0.1',
+    port: 3005,
+    path: '/api/nav/plan',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    },
+    timeout: 3000
+  };
+  const bridgeReq = http.request(options, (bridgeRes) => {
+    let data = '';
+    bridgeRes.on('data', chunk => { data += chunk; });
+    bridgeRes.on('end', () => {
+      try {
+        res.status(bridgeRes.statusCode).json(JSON.parse(data));
+      } catch (err) {
+        res.status(502).json({ ok: false, error: `Invalid JSON from nav bridge plan: ${err.message}` });
+      }
+    });
+  });
+  bridgeReq.on('error', (err) => {
+    res.status(503).json({ ok: false, error: `Nav bridge plan failed: ${err.message}` });
+  });
+  bridgeReq.on('timeout', () => {
+    bridgeReq.destroy();
+    res.status(504).json({ ok: false, error: 'Nav bridge plan request timed out' });
+  });
+  bridgeReq.write(payload);
+  bridgeReq.end();
+});
+
+app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
+  // Safety check 1: Localization must be active and validated
+  if (!localizationState || !localizationState.localized || !localizationState.fresh_validation_ok) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot dispatch Nav2 goal: Rover is not localized with fresh AMCL validation.'
+    });
+  }
+
+  // Safety check 2: Rover must be stationary
+  if (!localizationState.is_stationary) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot dispatch Nav2 goal: Rover must be stationary at rest before dispatch.'
+    });
+  }
+
+  // Safety check 3: Drivetrain arming & autonomy handshake
+  try {
+    autonomyState.enabled = true;
+    cmdSource = 'ROS_AUTONOMY';
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+
+    if (!latestNormalDriveStatus || !latestNormalDriveStatus.armed) {
+      if (!serialPort || !serialPort.isOpen) {
+        return res.status(503).json({ ok: false, error: 'Serial port not open for drivetrain arming' });
+      }
+
+      const pkt = buildPacket(FUNC_ARM_NORMAL_DRIVE, [1]);
+      serialPort.write(pkt);
+      broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/navigation/dispatch] arm command sent` });
+
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          normalDriveEvents.removeListener('status', onArmStatus);
+          reject(new Error('Timed out waiting for ESP32 arm confirmation'));
+        }, 800);
+
+        function onArmStatus(st) {
+          if (st && st.armed && st.mode === 3) {
+            clearTimeout(timeout);
+            normalDriveEvents.removeListener('status', onArmStatus);
+            resolve(st);
+          }
+        }
+        normalDriveEvents.on('status', onArmStatus);
+      });
+      autonomyState.state = 'READY_ARMED';
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+  } catch (armErr) {
+    resetAutonomyToSafe('Arming failed during goal dispatch');
+    return res.status(500).json({ ok: false, error: `Failed to arm rover for navigation: ${armErr.message}` });
+  }
+
+  // Forward dispatch to nav bridge
+  const payload = JSON.stringify(req.body || {});
+  const options = {
+    hostname: '127.0.0.1',
+    port: 3005,
+    path: '/api/nav/dispatch',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    },
+    timeout: 3000
+  };
+  const bridgeReq = http.request(options, (bridgeRes) => {
+    let data = '';
+    bridgeRes.on('data', chunk => { data += chunk; });
+    bridgeRes.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        res.status(bridgeRes.statusCode).json(parsed);
+      } catch (err) {
+        res.status(502).json({ ok: false, error: `Invalid response from dispatch: ${err.message}` });
+      }
+    });
+  });
+  bridgeReq.on('error', (err) => {
+    res.status(503).json({ ok: false, error: `Nav bridge dispatch error: ${err.message}` });
+  });
+  bridgeReq.on('timeout', () => {
+    bridgeReq.destroy();
+    res.status(504).json({ ok: false, error: 'Nav bridge dispatch timed out' });
+  });
+  bridgeReq.write(payload);
+  bridgeReq.end();
+});
+
+app.post('/api/navigation/cancel', (req, res) => {
+  triggerNav2Cancel();
+
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  autonomyState.enabled = false;
+  autonomyState.state = 'READY_DISARMED';
+  broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+
+  if (serialPort && serialPort.isOpen) {
+    const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+    serialPort.write(disarmPkt);
+    broadcast({ type: 'raw_serial_out', data: `[HTTP POST /api/navigation/cancel] disarm command sent` });
+  }
+
+  res.json({ ok: true, message: 'Navigation cancelled and rover disarmed.' });
+});
+
+app.get('/api/navigation/status', (req, res) => {
+  const httpReq = http.get(`${ROVER_NAV_BRIDGE_URL}/api/nav/status`, { timeout: 1000 }, (bridgeRes) => {
+    let data = '';
+    bridgeRes.on('data', chunk => { data += chunk; });
+    bridgeRes.on('end', () => {
+      try {
+        res.status(bridgeRes.statusCode).json(JSON.parse(data));
+      } catch (err) {
+        res.status(502).json({ ok: false, error: err.message });
+      }
+    });
+  });
+  httpReq.on('error', (err) => {
+    res.status(503).json({ ok: false, error: err.message });
+  });
+  httpReq.on('timeout', () => {
+    httpReq.destroy();
+    res.status(504).json({ ok: false, error: 'Status timed out' });
+  });
+});
+
 
 app.post('/api/command-source', requireOperatorAuth, (req, res) => {
   const reqSource = (req.body && req.body.source) ? String(req.body.source).trim().toUpperCase() : 'NONE';
