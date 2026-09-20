@@ -39,7 +39,11 @@ def main():
         print("ERROR: ROVER_OPERATOR_TOKEN not found in .env")
         return 1
 
-    headers_op = {"x-operator-token": op_token, "Content-Type": "application/json"}
+    headers_op = {
+        "x-operator-token": op_token,
+        "X-Rover-Operator-Token": op_token,
+        "Content-Type": "application/json"
+    }
     headers_cmd = {"X-Rover-Bridge-Token": cmd_token, "Content-Type": "application/json"}
 
     # Target destination (aligned with costmap cell 58, 96):
