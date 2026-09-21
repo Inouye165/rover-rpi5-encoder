@@ -4491,7 +4491,7 @@ app.get('/api/autonomy/status', (req, res) => {
 });
 
 app.get('/api/localization/status', (req, res) => {
-  res.json(localizationState);
+  res.json({ ok: true, ...localizationState });
 });
 
 // ────────────────────────────────────────────────────────────
@@ -4529,7 +4529,23 @@ app.get('/api/navigation/map', (req, res) => {
 });
 
 app.post('/api/navigation/plan', (req, res) => {
-  const payload = JSON.stringify(req.body || {});
+  const body = req.body || {};
+  if (body.relative_distance !== undefined && body.relative_distance !== null && localizationState && localizationState.x !== null) {
+    const d = Number(body.relative_distance);
+    const sx = Number(localizationState.x);
+    const sy = Number(localizationState.y);
+    const syaw = Number(localizationState.yaw || 0);
+    body.start_x = sx;
+    body.start_y = sy;
+    body.start_yaw = syaw;
+    body.target_x = sx + d * Math.cos(syaw);
+    body.target_y = sy + d * Math.sin(syaw);
+    body.target_yaw = syaw;
+    body.x = body.target_x;
+    body.y = body.target_y;
+    body.yaw = body.target_yaw;
+  }
+  const payload = JSON.stringify(body);
   const options = {
     hostname: '127.0.0.1',
     port: 3005,
@@ -4622,6 +4638,20 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   } catch (armErr) {
     resetAutonomyToSafe('Arming failed during goal dispatch');
     return res.status(500).json({ ok: false, error: `Failed to arm rover for navigation: ${armErr.message}` });
+  }
+
+  // If relative_distance is present, recompute target from latest server localizationState
+  if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null && localizationState && localizationState.x !== null) {
+    const d = Number(req.body.relative_distance);
+    const sx = Number(localizationState.x);
+    const sy = Number(localizationState.y);
+    const syaw = Number(localizationState.yaw || 0);
+    req.body.target_x = sx + d * Math.cos(syaw);
+    req.body.target_y = sy + d * Math.sin(syaw);
+    req.body.target_yaw = syaw;
+    req.body.x = req.body.target_x;
+    req.body.y = req.body.target_y;
+    req.body.yaw = req.body.target_yaw;
   }
 
   // Forward dispatch to nav bridge
