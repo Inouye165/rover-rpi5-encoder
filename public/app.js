@@ -7364,11 +7364,23 @@ function updateLocalizationUI(loc) {
     document.getElementById('nav-input-x').value = wx.toFixed(3);
     document.getElementById('nav-input-y').value = wy.toFixed(3);
 
+    // Compute approach heading from rover to clicked destination
+    const dx = wx - currentRobotPose.x;
+    const dy = wy - currentRobotPose.y;
+    let tyawDeg = currentRobotPose.yawDeg || 0;
+    if (Math.hypot(dx, dy) > 0.05) {
+      tyawDeg = Math.atan2(dy, dx) * 180.0 / Math.PI;
+      const inYaw = document.getElementById('nav-input-yaw');
+      if (inYaw) inYaw.value = tyawDeg.toFixed(1);
+    }
+
     currentGoalPose.x = wx;
     currentGoalPose.y = wy;
+    currentGoalPose.yawDeg = tyawDeg;
     renderMap();
     requestPlanPreview();
   });
+
 
   canvas.addEventListener('mousemove', (evt) => {
     const rect = canvas.getBoundingClientRect();
@@ -7441,6 +7453,241 @@ function updateLocalizationUI(loc) {
   document.getElementById('btn-nav-preview')?.addEventListener('click', requestPlanPreview);
   document.getElementById('btn-nav-dispatch')?.addEventListener('click', dispatchNavGoal);
   document.getElementById('btn-nav-cancel')?.addEventListener('click', cancelNavGoal);
+
+  // ==============================================================================
+  // Multi-Step Scripted Mission Sequencer
+  // ==============================================================================
+  function parseClientMissionScript(scriptText, startPose) {
+    const commands = scriptText.split(/[,;\n]+/).map(c => c.trim()).filter(c => c.length > 0);
+    const legs = [];
+    let currX = startPose.x;
+    let currY = startPose.y;
+    let currYaw = (startPose.yawDeg || 0) * Math.PI / 180.0;
+
+    for (let idx = 0; idx < commands.length; idx++) {
+      const cmd = commands[idx];
+      const cLower = cmd.toLowerCase();
+      const legInfo = { index: idx + 1, command: cmd, start: { x: currX, y: currY, yaw: currYaw } };
+
+      if (cLower.includes('home')) {
+        const tx = (savedHomePose && savedHomePose.x) || 1.166746;
+        const ty = (savedHomePose && savedHomePose.y) || -0.110614;
+        const tyaw = (savedHomePose && savedHomePose.yawDeg !== undefined) ? (savedHomePose.yawDeg * Math.PI / 180.0) : -0.14556;
+        legInfo.type = 'RETURN_HOME';
+        legInfo.target = { x: tx, y: ty, yaw: tyaw };
+        legs.push(legInfo);
+        currX = tx; currY = ty; currYaw = tyaw;
+        continue;
+      }
+
+      const mFwd = cLower.match(/(?:forward|fwd|move|advance)\s+([0-9.]+)\s*(feet|foot|ft|meters|meter|m|inches|inch|in|cm)?/);
+      if (mFwd) {
+        let val = parseFloat(mFwd[1]);
+        const unit = (mFwd[2] || 'm').toLowerCase();
+        let dist = val;
+        if (unit === 'ft' || unit === 'feet' || unit === 'foot') dist = val * 0.3048;
+        else if (unit === 'in' || unit === 'inch' || unit === 'inches') dist = val * 0.0254;
+        else if (unit === 'cm') dist = val * 0.01;
+        
+        const tx = currX + dist * Math.cos(currYaw);
+        const ty = currY + dist * Math.sin(currYaw);
+        const tyaw = currYaw;
+        legInfo.type = 'FORWARD';
+        legInfo.distance_m = Math.round(dist * 1000) / 1000;
+        legInfo.target = { x: tx, y: ty, yaw: tyaw };
+        legs.push(legInfo);
+        currX = tx; currY = ty; currYaw = tyaw;
+        continue;
+      }
+
+      const mBack = cLower.match(/(?:backward|back|reverse)\s+([0-9.]+)\s*(feet|foot|ft|meters|meter|m|inches|inch|in|cm)?/);
+      if (mBack) {
+        let val = parseFloat(mBack[1]);
+        const unit = (mBack[2] || 'm').toLowerCase();
+        let dist = val;
+        if (unit === 'ft' || unit === 'feet' || unit === 'foot') dist = val * 0.3048;
+        else if (unit === 'in' || unit === 'inch' || unit === 'inches') dist = val * 0.0254;
+        else if (unit === 'cm') dist = val * 0.01;
+
+        const tx = currX - dist * Math.cos(currYaw);
+        const ty = currY - dist * Math.sin(currYaw);
+        const tyaw = currYaw;
+        legInfo.type = 'BACKWARD';
+        legInfo.distance_m = Math.round(dist * 1000) / 1000;
+        legInfo.target = { x: tx, y: ty, yaw: tyaw };
+        legs.push(legInfo);
+        currX = tx; currY = ty; currYaw = tyaw;
+        continue;
+      }
+
+      const mTurn = cLower.match(/(?:turn\s+)?(left|right|cw|ccw)\s+([0-9.]+)\s*(?:deg|degrees)?/);
+      if (mTurn) {
+        const dir = mTurn[1];
+        const deg = parseFloat(mTurn[2]);
+        let rad = deg * Math.PI / 180.0;
+        if (dir === 'right' || dir === 'cw') rad = -rad;
+        let tyaw = currYaw + rad;
+        while (tyaw > Math.PI) tyaw -= 2.0 * Math.PI;
+        while (tyaw < -Math.PI) tyaw += 2.0 * Math.PI;
+        legInfo.type = 'TURN';
+        legInfo.angle_deg = (dir === 'left' || dir === 'ccw') ? deg : -deg;
+        legInfo.target = { x: currX, y: currY, yaw: tyaw };
+        legs.push(legInfo);
+        currYaw = tyaw;
+        continue;
+      }
+
+      const mGoto = cLower.match(/goto\s+([0-9.-]+)\s+([0-9.-]+)(?:\s+([0-9.-]+))?/);
+      if (mGoto) {
+        const tx = parseFloat(mGoto[1]);
+        const ty = parseFloat(mGoto[2]);
+        const deg = mGoto[3] ? parseFloat(mGoto[3]) : 0.0;
+        let tyaw = deg * Math.PI / 180.0;
+        while (tyaw > Math.PI) tyaw -= 2.0 * Math.PI;
+        while (tyaw < -Math.PI) tyaw += 2.0 * Math.PI;
+        legInfo.type = 'GOTO';
+        legInfo.target = { x: tx, y: ty, yaw: tyaw };
+        legs.push(legInfo);
+        currX = tx; currY = ty; currYaw = tyaw;
+        continue;
+      }
+
+      throw new Error(`Unrecognized command syntax: '${cmd}'`);
+    }
+    return legs;
+  }
+
+  async function requestMissionPreview() {
+    const scriptEl = document.getElementById('nav-mission-script');
+    const badgeEl = document.getElementById('nav-mission-status-badge');
+    const containerEl = document.getElementById('nav-mission-legs-container');
+    const summaryEl = document.getElementById('nav-mission-legs-summary');
+    const listEl = document.getElementById('nav-mission-legs-list');
+    const btnEl = document.getElementById('btn-mission-preview');
+
+    const scriptText = scriptEl ? scriptEl.value.trim() : '';
+    if (!scriptText) {
+      alert("Please enter a mission script (e.g. forward 2 feet, turn left 90 degrees, move 1 foot, return home)");
+      return;
+    }
+
+    if (btnEl) btnEl.textContent = '⏳ Computing Multi-Leg Smac2D Plan...';
+    if (badgeEl) { badgeEl.textContent = 'PLANNING...'; badgeEl.className = 'badge badge-info'; }
+
+    const pose = await getFreshestPose();
+    let legs;
+    try {
+      legs = parseClientMissionScript(scriptText, pose);
+    } catch (err) {
+      alert(`Script syntax error: ${err.message}`);
+      if (btnEl) btnEl.textContent = '🔍 Preview Mission (Disarmed)';
+      if (badgeEl) { badgeEl.textContent = 'SYNTAX ERROR'; badgeEl.className = 'badge badge-danger'; }
+      return;
+    }
+
+    const allWaypoints = [];
+    let totalMissionDist = 0.0;
+    let allOk = true;
+
+    if (listEl) listEl.innerHTML = '';
+
+    for (const leg of legs) {
+      try {
+        const res = await fetch('/api/navigation/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            start_x: leg.start.x,
+            start_y: leg.start.y,
+            start_yaw: leg.start.yaw,
+            target_x: leg.target.x,
+            target_y: leg.target.y,
+            target_yaw: leg.target.yaw,
+            x: leg.target.x,
+            y: leg.target.y,
+            yaw: leg.target.yaw
+          })
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          leg.plan_ok = true;
+          leg.waypoints = data.waypoints || [];
+          leg.dist = data.cumulative_length_m || data.straight_distance_m || 0.0;
+          totalMissionDist += leg.dist;
+          if (leg.waypoints.length > 0) {
+            allWaypoints.push(...leg.waypoints);
+          }
+        } else {
+          leg.plan_ok = false;
+          leg.error = (data && data.error) || 'Rejected';
+          allOk = false;
+        }
+      } catch (err) {
+        leg.plan_ok = false;
+        leg.error = err.message;
+        allOk = false;
+      }
+
+      if (listEl) {
+        const item = document.createElement('div');
+        item.style.cssText = `display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; border-radius: 4px; background: ${leg.plan_ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.15)'}; border: 1px solid ${leg.plan_ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.4)'};`;
+        const legYawDeg = Math.round(leg.target.yaw * 180.0 / Math.PI);
+        item.innerHTML = `
+          <span><strong>Leg ${leg.index}:</strong> ${leg.command} &rarr; (${leg.target.x.toFixed(2)}, ${leg.target.y.toFixed(2)}, ${legYawDeg}&deg;)</span>
+          <span style="color: ${leg.plan_ok ? '#22c55e' : '#ef4444'}; font-weight: bold;">
+            ${leg.plan_ok ? `${leg.dist.toFixed(2)}m (OK)` : `OBSTRUCTED`}
+          </span>
+        `;
+        listEl.appendChild(item);
+      }
+    }
+
+    if (containerEl) containerEl.style.display = 'block';
+    if (summaryEl) {
+      summaryEl.textContent = allOk 
+        ? `✅ Mission Feasible: ${legs.length} Legs, ${totalMissionDist.toFixed(2)}m Total Path (${allWaypoints.length} Waypoints)`
+        : `⚠️ Mission Warning: One or more legs obstructed or out of bounds`;
+      summaryEl.style.color = allOk ? '#22c55e' : '#f59e0b';
+    }
+
+    if (badgeEl) {
+      badgeEl.textContent = allOk ? 'FEASIBLE' : 'OBSTRUCTED';
+      badgeEl.className = allOk ? 'badge badge-success' : 'badge badge-warning';
+    }
+
+    if (allWaypoints.length > 0) {
+      previewPath = allWaypoints;
+      const lastLeg = legs[legs.length - 1];
+      currentGoalPose = { x: lastLeg.target.x, y: lastLeg.target.y, yawDeg: Math.round(lastLeg.target.yaw * 180.0 / Math.PI) };
+      renderMap();
+
+      const ptsEl = document.getElementById('v2-nav-points-val');
+      const lenEl = document.getElementById('v2-nav-len-val');
+      if (ptsEl) ptsEl.textContent = allWaypoints.length;
+      if (lenEl) lenEl.textContent = `${totalMissionDist.toFixed(2)} m`;
+    }
+
+    if (btnEl) btnEl.textContent = '🔍 Preview Mission (Disarmed)';
+  }
+
+  // Preset Mission Examples
+  document.getElementById('btn-mission-example-1')?.addEventListener('click', () => {
+    const el = document.getElementById('nav-mission-script');
+    if (el) el.value = "forward 2 feet, turn left 90 degrees, move 1 foot, return home";
+    requestMissionPreview();
+  });
+  document.getElementById('btn-mission-example-2')?.addEventListener('click', () => {
+    const el = document.getElementById('nav-mission-script');
+    if (el) el.value = "forward 2 feet, return home";
+    requestMissionPreview();
+  });
+  document.getElementById('btn-mission-example-3')?.addEventListener('click', () => {
+    const el = document.getElementById('nav-mission-script');
+    if (el) el.value = "forward 2 feet, turn left 90 deg, move 2 feet, turn left 90 deg, move 2 feet, return home";
+    requestMissionPreview();
+  });
+  document.getElementById('btn-mission-preview')?.addEventListener('click', requestMissionPreview);
+
 
   window.updateNavRobotPose = function(x, y, yawDeg) {
     currentRobotPose.x = x;

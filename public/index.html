@@ -924,6 +924,31 @@
                     <div class="v2-status-item"><span class="v2-status-label">Waypoints:</span> <span id="v2-nav-points-val" class="status-val">0</span></div>
                   </div>
                 </div>
+
+                <!-- Multi-Step Mission Sequencer -->
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px;">
+                  <h4 style="margin: 0 0 10px 0; font-size: 0.82rem; color: #94a3b8; letter-spacing: 0.5px; display: flex; align-items: center; justify-content: space-between;">
+                    <span>📜 MULTI-STEP MISSION SCRIPT & SEQUENCER</span>
+                    <span id="nav-mission-status-badge" class="badge badge-secondary" style="font-size: 0.68rem;">READY</span>
+                  </h4>
+                  <p style="font-size: 0.75rem; color: #94a3b8; margin: 0 0 8px 0;">Compose compound missions in natural syntax (comma-separated):</p>
+                  <textarea id="nav-mission-script" rows="2" style="width: 100%; background: #0b1329; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 8px; font-family: monospace; font-size: 0.82rem; resize: vertical; box-sizing: border-box; margin-bottom: 8px;" placeholder="e.g. forward 2 feet, turn left 90 degrees, move 1 foot, return home">forward 2 feet, turn left 90 degrees, move 1 foot, return home</textarea>
+                  
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <button class="btn btn-small" id="btn-mission-example-1" style="background: rgba(0, 242, 254, 0.1); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.72rem;">2ft L-Return</button>
+                    <button class="btn btn-small" id="btn-mission-example-2" style="background: rgba(34, 197, 94, 0.1); border: 1px solid #22c55e; color: #22c55e; font-size: 0.72rem;">Out & Back (2ft)</button>
+                    <button class="btn btn-small" id="btn-mission-example-3" style="background: rgba(245, 158, 11, 0.1); border: 1px solid #f59e0b; color: #f59e0b; font-size: 0.72rem;">Square Box Patrol</button>
+                  </div>
+
+                  <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-block" id="btn-mission-preview" style="background: rgba(0, 242, 254, 0.2); border: 1px solid #00f2fe; color: #00f2fe; font-weight: 700; padding: 8px; font-size: 0.85rem; flex: 1;">🔍 Preview Mission (Disarmed)</button>
+                  </div>
+
+                  <div id="nav-mission-legs-container" style="margin-top: 10px; display: none; font-size: 0.75rem; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                    <div id="nav-mission-legs-summary" style="font-weight: 600; color: #00f2fe; margin-bottom: 6px;"></div>
+                    <div id="nav-mission-legs-list" style="display: flex; flex-direction: column; gap: 4px;"></div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
