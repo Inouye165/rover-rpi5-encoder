@@ -287,6 +287,7 @@ let navigationState = {
   details: 'Awaiting navigation telemetry',
   nodes: {}
 };
+let lastDispatchedNav = null;
 
 function updateNavigationState(nav) {
   if (!nav || typeof nav !== 'object') return;
@@ -4530,20 +4531,43 @@ app.get('/api/navigation/map', (req, res) => {
 
 app.post('/api/navigation/plan', (req, res) => {
   const body = req.body || {};
+  let planMeta = null;
   if (body.relative_distance !== undefined && body.relative_distance !== null && localizationState && localizationState.x !== null) {
     const d = Number(body.relative_distance);
-    const sx = Number(localizationState.x);
-    const sy = Number(localizationState.y);
-    const syaw = Number(localizationState.yaw || 0);
-    body.start_x = sx;
-    body.start_y = sy;
-    body.start_yaw = syaw;
-    body.target_x = sx + d * Math.cos(syaw);
-    body.target_y = sy + d * Math.sin(syaw);
-    body.target_yaw = syaw;
-    body.x = body.target_x;
-    body.y = body.target_y;
-    body.yaw = body.target_yaw;
+    const sourcePose = {
+      x: Number(localizationState.x),
+      y: Number(localizationState.y),
+      yaw: Number(localizationState.yaw || 0),
+      yaw_deg: Number(localizationState.yawDeg !== undefined ? localizationState.yawDeg : (Number(localizationState.yaw || 0) * 180.0 / Math.PI)),
+      age_ms: localizationState.ageMs,
+      timestamp: localizationState.lastUpdateMs || Date.now()
+    };
+    const tx = sourcePose.x + d * Math.cos(sourcePose.yaw);
+    const ty = sourcePose.y + d * Math.sin(sourcePose.yaw);
+    const tyaw = sourcePose.yaw;
+    const tyawDeg = sourcePose.yaw_deg;
+
+    body.start_x = sourcePose.x;
+    body.start_y = sourcePose.y;
+    body.start_yaw = sourcePose.yaw;
+    body.target_x = tx;
+    body.target_y = ty;
+    body.target_yaw = tyaw;
+    body.x = tx;
+    body.y = ty;
+    body.yaw = tyaw;
+
+    planMeta = {
+      atomic: true,
+      source_pose: sourcePose,
+      relative_distance: d,
+      resolved_target: {
+        x: tx,
+        y: ty,
+        yaw: tyaw,
+        yaw_deg: tyawDeg
+      }
+    };
   }
   const payload = JSON.stringify(body);
   const options = {
@@ -4562,7 +4586,14 @@ app.post('/api/navigation/plan', (req, res) => {
     bridgeRes.on('data', chunk => { data += chunk; });
     bridgeRes.on('end', () => {
       try {
-        res.status(bridgeRes.statusCode).json(JSON.parse(data));
+        const parsed = JSON.parse(data);
+        if (planMeta) {
+          parsed.plan_meta = planMeta;
+          parsed.source_pose = planMeta.source_pose;
+          parsed.relative_distance = planMeta.relative_distance;
+          parsed.resolved_target = planMeta.resolved_target;
+        }
+        res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {
         res.status(502).json({ ok: false, error: `Invalid JSON from nav bridge plan: ${err.message}` });
       }
@@ -4596,6 +4627,63 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       ok: false,
       error: 'Cannot dispatch Nav2 goal: Rover must be stationary at rest before dispatch.'
     });
+  }
+
+  // Atomic snapshot of source localization pose at dispatch initiation
+  const snapshotPose = {
+    x: Number(localizationState.x),
+    y: Number(localizationState.y),
+    yaw: Number(localizationState.yaw || 0),
+    yaw_deg: Number(localizationState.yawDeg !== undefined ? localizationState.yawDeg : (Number(localizationState.yaw || 0) * 180.0 / Math.PI)),
+    age_ms: localizationState.ageMs,
+    timestamp: localizationState.lastUpdateMs || Date.now()
+  };
+
+  let dispatchMeta = null;
+  if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null) {
+    const d = Number(req.body.relative_distance);
+    const tx = snapshotPose.x + d * Math.cos(snapshotPose.yaw);
+    const ty = snapshotPose.y + d * Math.sin(snapshotPose.yaw);
+    const tyaw = snapshotPose.yaw;
+    const tyawDeg = snapshotPose.yaw_deg;
+
+    req.body.target_x = tx;
+    req.body.target_y = ty;
+    req.body.target_yaw = tyaw;
+    req.body.x = tx;
+    req.body.y = ty;
+    req.body.yaw = tyaw;
+
+    dispatchMeta = {
+      atomic: true,
+      source_pose: snapshotPose,
+      relative_distance: d,
+      resolved_target: {
+        x: tx,
+        y: ty,
+        yaw: tyaw,
+        yaw_deg: tyawDeg
+      },
+      dispatched_at: Date.now()
+    };
+    lastDispatchedNav = dispatchMeta;
+  } else if (req.body && (req.body.target_x !== undefined || req.body.x !== undefined)) {
+    const tx = Number(req.body.target_x !== undefined ? req.body.target_x : req.body.x);
+    const ty = Number(req.body.target_y !== undefined ? req.body.target_y : req.body.y);
+    const tyaw = Number(req.body.target_yaw !== undefined ? req.body.target_yaw : (req.body.yaw || 0));
+    dispatchMeta = {
+      atomic: false,
+      source_pose: snapshotPose,
+      relative_distance: null,
+      resolved_target: {
+        x: tx,
+        y: ty,
+        yaw: tyaw,
+        yaw_deg: (tyaw * 180.0 / Math.PI)
+      },
+      dispatched_at: Date.now()
+    };
+    lastDispatchedNav = dispatchMeta;
   }
 
   // Safety check 3: Drivetrain arming & autonomy handshake
@@ -4640,20 +4728,6 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: `Failed to arm rover for navigation: ${armErr.message}` });
   }
 
-  // If relative_distance is present, recompute target from latest server localizationState
-  if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null && localizationState && localizationState.x !== null) {
-    const d = Number(req.body.relative_distance);
-    const sx = Number(localizationState.x);
-    const sy = Number(localizationState.y);
-    const syaw = Number(localizationState.yaw || 0);
-    req.body.target_x = sx + d * Math.cos(syaw);
-    req.body.target_y = sy + d * Math.sin(syaw);
-    req.body.target_yaw = syaw;
-    req.body.x = req.body.target_x;
-    req.body.y = req.body.target_y;
-    req.body.yaw = req.body.target_yaw;
-  }
-
   // Forward dispatch to nav bridge
   const payload = JSON.stringify(req.body || {});
   const options = {
@@ -4673,6 +4747,12 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     bridgeRes.on('end', () => {
       try {
         const parsed = JSON.parse(data);
+        if (dispatchMeta) {
+          parsed.dispatch_meta = dispatchMeta;
+          parsed.source_pose = dispatchMeta.source_pose;
+          parsed.relative_distance = dispatchMeta.relative_distance;
+          parsed.resolved_target = dispatchMeta.resolved_target;
+        }
         res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {
         res.status(502).json({ ok: false, error: `Invalid response from dispatch: ${err.message}` });
@@ -4737,6 +4817,9 @@ app.get('/api/navigation/status', (req, res) => {
     bridgeRes.on('end', () => {
       try {
         const parsed = JSON.parse(data);
+        if (lastDispatchedNav) {
+          parsed.last_dispatch = lastDispatchedNav;
+        }
         if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
           if (autonomyState && autonomyState.state === 'READY_ARMED') {
             triggerNav2Cancel();
