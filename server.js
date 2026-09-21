@@ -4530,6 +4530,7 @@ app.get('/api/navigation/map', (req, res) => {
 });
 
 app.post('/api/navigation/plan', (req, res) => {
+  const t_start = Date.now();
   const body = req.body || {};
   let planMeta = null;
   if (body.relative_distance !== undefined && body.relative_distance !== null && localizationState && localizationState.x !== null) {
@@ -4569,6 +4570,7 @@ app.post('/api/navigation/plan', (req, res) => {
       }
     };
   }
+  const t_loc_done = Date.now();
   const payload = JSON.stringify(body);
   const options = {
     hostname: '127.0.0.1',
@@ -4581,10 +4583,12 @@ app.post('/api/navigation/plan', (req, res) => {
     },
     timeout: 3000
   };
+  const t_bridge_sent = Date.now();
   const bridgeReq = http.request(options, (bridgeRes) => {
     let data = '';
     bridgeRes.on('data', chunk => { data += chunk; });
     bridgeRes.on('end', () => {
+      const t_bridge_done = Date.now();
       try {
         const parsed = JSON.parse(data);
         if (planMeta) {
@@ -4593,6 +4597,11 @@ app.post('/api/navigation/plan', (req, res) => {
           parsed.relative_distance = planMeta.relative_distance;
           parsed.resolved_target = planMeta.resolved_target;
         }
+        parsed.backend_timing = {
+          loc_check_ms: t_loc_done - t_start,
+          bridge_roundtrip_ms: t_bridge_done - t_bridge_sent,
+          total_backend_ms: t_bridge_done - t_start
+        };
         res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {
         res.status(502).json({ ok: false, error: `Invalid JSON from nav bridge plan: ${err.message}` });

@@ -95,8 +95,12 @@ class RoverNavBridge(Node):
             return None
 
     def compute_plan(self, start_x, start_y, start_yaw, target_x, target_y, target_yaw):
+        t_req_start = time.perf_counter()
+
+        t_wait_server_start = time.perf_counter()
         if not self.compute_path_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/compute_path_to_pose action server unavailable"}
+        t_wait_server_end = time.perf_counter()
 
         goal = ComputePathToPose.Goal()
         goal.start = PoseStamped()
@@ -117,23 +121,28 @@ class RoverNavBridge(Node):
         goal.goal.pose.orientation.w = math.cos(target_yaw / 2.0)
         goal.planner_id = 'Smac2D'
 
+        t_send_goal_start = time.perf_counter()
         future = self.compute_path_client.send_goal_async(goal)
         t0 = time.time()
         while not future.done() and (time.time() - t0) < 3.0:
-            time.sleep(0.02)
+            time.sleep(0.001)
 
         if not future.done() or not future.result().accepted:
             return {"ok": False, "error": "Plan goal was rejected or timed out by Smac2D planner"}
+        t_goal_accept_end = time.perf_counter()
 
         handle = future.result()
+        t_compute_start = time.perf_counter()
         res_future = handle.get_result_async()
         t0 = time.time()
         while not res_future.done() and (time.time() - t0) < 3.0:
-            time.sleep(0.02)
+            time.sleep(0.001)
 
         if not res_future.done():
             return {"ok": False, "error": "Plan computation timed out"}
+        t_compute_end = time.perf_counter()
 
+        t_extract_start = time.perf_counter()
         result = res_future.result().result
         waypoints = []
         total_len = 0.0
@@ -147,6 +156,16 @@ class RoverNavBridge(Node):
         straight_len = 0.0
         if waypoints:
             straight_len = math.hypot(waypoints[-1][0] - waypoints[0][0], waypoints[-1][1] - waypoints[0][1])
+        t_extract_end = time.perf_counter()
+
+        t_req_end = time.perf_counter()
+        timing_bridge = {
+            "wait_server_ms": round((t_wait_server_end - t_wait_server_start) * 1000, 2),
+            "goal_accept_ms": round((t_goal_accept_end - t_send_goal_start) * 1000, 2),
+            "computepath_action_ms": round((t_compute_end - t_compute_start) * 1000, 2),
+            "extract_waypoints_ms": round((t_extract_end - t_extract_start) * 1000, 2),
+            "total_bridge_ms": round((t_req_end - t_req_start) * 1000, 2)
+        }
 
         return {
             "ok": True,
@@ -155,7 +174,8 @@ class RoverNavBridge(Node):
             "last_waypoint": waypoints[-1] if waypoints else None,
             "cumulative_length_m": round(total_len, 3),
             "straight_distance_m": round(straight_len, 3),
-            "count": len(waypoints)
+            "count": len(waypoints),
+            "timing_bridge": timing_bridge
         }
 
     def dispatch_goal(self, target_x, target_y, target_yaw):
