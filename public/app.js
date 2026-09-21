@@ -6880,7 +6880,7 @@ function updateLocalizationUI(loc) {
   let mapData = null;
   let mapBitmap = null;
   let currentRobotPose = { x: 1.133, y: -0.075, yawDeg: 2.5 };
-  let savedHomePose = { x: 1.167, y: -0.111, yawDeg: -8.34 }; // Authoritative tape mark
+  let savedHomePose = { x: 1.194, y: -0.045, yawDeg: -5.05 }; // Authoritative tape mark
   let currentGoalPose = { x: 1.833, y: -0.075, yawDeg: 2.5 };
   let previewPath = [];
   let activeGlobalPath = [];
@@ -7426,9 +7426,9 @@ function updateLocalizationUI(loc) {
       document.getElementById('nav-input-y').value = savedHomePose.y.toFixed(3);
       document.getElementById('nav-input-yaw').value = savedHomePose.yawDeg.toFixed(1);
     } else {
-      document.getElementById('nav-input-x').value = '1.167';
-      document.getElementById('nav-input-y').value = '-0.111';
-      document.getElementById('nav-input-yaw').value = '-8.3';
+      document.getElementById('nav-input-x').value = '1.194';
+      document.getElementById('nav-input-y').value = '-0.045';
+      document.getElementById('nav-input-yaw').value = '-5.0';
     }
     requestPlanPreview();
   });
@@ -7470,9 +7470,9 @@ function updateLocalizationUI(loc) {
       const legInfo = { index: idx + 1, command: cmd, start: { x: currX, y: currY, yaw: currYaw } };
 
       if (cLower.includes('home')) {
-        const tx = (savedHomePose && savedHomePose.x) || 1.166746;
-        const ty = (savedHomePose && savedHomePose.y) || -0.110614;
-        const tyaw = (savedHomePose && savedHomePose.yawDeg !== undefined) ? (savedHomePose.yawDeg * Math.PI / 180.0) : -0.14556;
+        const tx = (savedHomePose && savedHomePose.x) || 1.193853;
+        const ty = (savedHomePose && savedHomePose.y) || -0.045221;
+        const tyaw = (savedHomePose && savedHomePose.yawDeg !== undefined) ? (savedHomePose.yawDeg * Math.PI / 180.0) : -0.088087;
         legInfo.type = 'RETURN_HOME';
         legInfo.target = { x: tx, y: ty, yaw: tyaw };
         legs.push(legInfo);
