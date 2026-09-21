@@ -50,7 +50,17 @@ class RoverNavBridge(Node):
         # Pre-load and cache map
         self.map_cache = self._load_map()
 
+        # Warm up action clients in background so first request is instant
+        threading.Thread(target=self._warm_up_clients, daemon=True).start()
+
         self.get_logger().info("RoverNavBridge initialized. Subscribed to /plan, /local_plan.")
+
+    def _warm_up_clients(self):
+        try:
+            self.compute_path_client.wait_for_server(timeout_sec=2.0)
+            self.nav_client.wait_for_server(timeout_sec=2.0)
+        except Exception:
+            pass
 
     def _plan_cb(self, msg: Path):
         self.latest_global_plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses]
@@ -98,8 +108,9 @@ class RoverNavBridge(Node):
         t_req_start = time.perf_counter()
 
         t_wait_server_start = time.perf_counter()
-        if not self.compute_path_client.wait_for_server(timeout_sec=2.0):
-            return {"ok": False, "error": "/compute_path_to_pose action server unavailable"}
+        if not self.compute_path_client.server_is_ready():
+            if not self.compute_path_client.wait_for_server(timeout_sec=1.0):
+                return {"ok": False, "error": "/compute_path_to_pose action server unavailable"}
         t_wait_server_end = time.perf_counter()
 
         goal = ComputePathToPose.Goal()
