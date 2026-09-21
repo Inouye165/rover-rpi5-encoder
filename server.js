@@ -940,8 +940,8 @@ function startDriveKeepaliveLoop() {
         broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
       }
     } else if (autonomyState.state === 'READY_ARMED') {
-      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > 5000) {
-        resetAutonomyToSafe('Awaiting initial Nav2 cmd_vel timed out (5000ms)');
+      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > 20000) {
+        resetAutonomyToSafe('Awaiting initial Nav2 cmd_vel timed out (20000ms)');
         autonomyState.state = 'STALE';
         broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
       }
@@ -4729,9 +4729,22 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
         }
         normalDriveEvents.on('status', onArmStatus);
       });
-      autonomyState.state = 'READY_ARMED';
-      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
+
+    // Unconditionally configure and arm autonomy intake state for incoming Nav2 commands
+    autonomyState.enabled = true;
+    autonomyState.state = 'READY_ARMED';
+    autonomyState.active = false;
+    autonomyState.lastCmdTime = performance.now();
+    autonomyState.zeroHandshakeCount = 0;
+    autonomyState.rejectedCount = 0;
+    autonomyState.lastRejectionReason = null;
+    cmdSource = 'ROS_AUTONOMY';
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+    watchdogFired = false;
+    startDriveKeepaliveLoop();
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
   } catch (armErr) {
     resetAutonomyToSafe('Arming failed during goal dispatch');
     return res.status(500).json({ ok: false, error: `Failed to arm rover for navigation: ${armErr.message}` });
