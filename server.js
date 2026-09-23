@@ -4619,6 +4619,78 @@ app.post('/api/navigation/plan', (req, res) => {
   bridgeReq.end();
 });
 
+// ==============================================================================
+// Bounded Pre-Dispatch Localization Refresh
+// ==============================================================================
+async function requestAmclNoMotionUpdate(timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: 3005,
+      path: '/api/nav/nomotion_update',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': 0 },
+      timeout: timeoutMs
+    }, (res) => {
+      let body = '';
+      res.on('data', c => { body += c; });
+      res.on('end', () => {
+        if (resolved) return;
+        resolved = true;
+        try {
+          const parsed = JSON.parse(body);
+          resolve(parsed && parsed.ok === true);
+        } catch (_) {
+          resolve(false);
+        }
+      });
+    });
+    req.on('error', () => { if (!resolved) { resolved = true; resolve(false); } });
+    req.on('timeout', () => { if (!resolved) { resolved = true; req.destroy(); resolve(false); } });
+    req.end();
+  });
+}
+
+async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
+  const tStart = performance.now();
+
+  // 1. Request an instantaneous AMCL no-motion particle update via nav bridge
+  requestAmclNoMotionUpdate(1000).catch(() => {});
+
+  // 2. Poll freshest telemetry sample from odometry node until verified fresh
+  while ((performance.now() - tStart) < maxWaitMs) {
+    try {
+      await fetchRosOdometry();
+    } catch (_) {}
+
+    const isLoc = localizationState && localizationState.localized === true &&
+      (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
+    const age = (typeof localizationState.ageMs === 'number')
+      ? localizationState.ageMs
+      : (localizationState.lastUpdateMs > 0 ? Math.round(performance.now() - localizationState.lastUpdateMs) : 99999);
+
+    // Fresh valid sample: localized, valid coordinates, and age <= 1000 ms
+    // (guarantees >= 1000 ms headroom before the 2000 ms active-motion safety threshold)
+    if (isLoc && age <= 1000 && localizationState.x !== null && localizationState.y !== null && !isNaN(localizationState.x) && !isNaN(localizationState.y)) {
+      return { ok: true, age_ms: age, pose: localizationState };
+    }
+
+    await new Promise(r => setTimeout(r, 30));
+  }
+
+  // Final evaluation if loop elapsed
+  const isLoc = localizationState && localizationState.localized === true &&
+    (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
+  const age = (typeof localizationState.ageMs === 'number') ? localizationState.ageMs : 99999;
+  return {
+    ok: isLoc && age <= 1000,
+    age_ms: age,
+    details: localizationState?.details || 'Sample freshness timeout',
+    pose: localizationState
+  };
+}
+
 app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   // Safety check 1: Localization must be active and validated
   const isLocActive = localizationState && localizationState.localized && (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
@@ -4638,7 +4710,17 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     });
   }
 
-  // Atomic snapshot of source localization pose at dispatch initiation
+  // Safety check 3: Bounded Pre-Dispatch Localization Refresh
+  // Request AMCL no-motion update and await fresh sample (age <= 1000ms) BEFORE arming
+  const refreshResult = await refreshLocalizationBeforeDispatch(1500);
+  if (!refreshResult.ok) {
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Pre-dispatch localization refresh failed (sample age ${refreshResult.age_ms}ms > 1000ms limit). Drivetrain remains safely disarmed.`
+    });
+  }
+
+  // Atomic snapshot of source localization pose at dispatch initiation (using verified fresh sample)
   const snapshotPose = {
     x: Number(localizationState.x),
     y: Number(localizationState.y),
