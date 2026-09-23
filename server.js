@@ -4652,6 +4652,14 @@ async function requestAmclNoMotionUpdate(timeoutMs = 1200) {
   });
 }
 
+app.post(['/api/nav/nomotion_update', '/api/nav/refresh_localization'], async (req, res) => {
+  const success = await requestAmclNoMotionUpdate(1500);
+  res.status(success ? 200 : 503).json({
+    ok: success,
+    message: success ? 'AMCL no-motion update requested' : 'AMCL no-motion update failed or unavailable'
+  });
+});
+
 async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   const tStart = performance.now();
 
@@ -4690,6 +4698,11 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
     pose: localizationState
   };
 }
+
+app.post('/api/navigation/refresh_localization', async (req, res) => {
+  const refreshResult = await refreshLocalizationBeforeDispatch(1500);
+  res.status(refreshResult.ok ? 200 : 409).json(refreshResult);
+});
 
 app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   // Safety check 1: Localization must be active and validated
