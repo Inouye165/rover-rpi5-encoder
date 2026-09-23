@@ -240,7 +240,7 @@ class RoverNavBridge(Node):
     def request_nomotion_update(self, timeout_sec=1.5):
         """Requests an instantaneous AMCL no-motion particle filter update."""
         try:
-            if not self.nomotion_client.server_is_ready():
+            if not self.nomotion_client.service_is_ready():
                 if not self.nomotion_client.wait_for_service(timeout_sec=0.5):
                     return {"ok": False, "error": "AMCL /request_nomotion_update service not ready"}
             future = self.nomotion_client.call_async(Empty.Request())
