@@ -340,6 +340,21 @@ function updateLocalizationState(loc) {
     localizationState.sigmaYaw = loc.covariance.sigma_yaw;
   }
 
+  if (typeof loc.seq === 'number') {
+    localizationState.seq = loc.seq;
+  }
+  if (typeof loc.sample_timestamp === 'number') {
+    localizationState.sampleTimestamp = loc.sample_timestamp;
+  } else if (loc.pose && typeof loc.pose.timestamp === 'number') {
+    localizationState.sampleTimestamp = loc.pose.timestamp;
+  }
+  if (typeof loc.last_update_mono === 'number') {
+    if (loc.last_update_mono !== localizationState.lastUpdateMono) {
+      localizationState.lastUpdateMono = loc.last_update_mono;
+      localizationState.sampleCount = (localizationState.sampleCount || 0) + 1;
+    }
+  }
+
   // Fail-Safe: If rover was actively navigating and localization becomes lost:
   if (wasLocalized && !localizationState.localized) {
     if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
@@ -4663,14 +4678,29 @@ app.post(['/api/nav/nomotion_update', '/api/nav/refresh_localization'], async (r
 async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   const tStart = performance.now();
 
+  const baselineSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+  const baselineTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+  const baselineMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+  const baselineCount = localizationState.sampleCount || 0;
+
   // 1. Request an instantaneous AMCL no-motion particle update via nav bridge
   requestAmclNoMotionUpdate(1000).catch(() => {});
 
-  // 2. Poll freshest telemetry sample from odometry node until verified fresh
+  // 2. Poll freshest telemetry sample from odometry node until verified fresh and advanced
   while ((performance.now() - tStart) < maxWaitMs) {
     try {
       await fetchRosOdometry();
     } catch (_) {}
+
+    const currSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+    const currTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+    const currMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+    const currCount = localizationState.sampleCount || 0;
+
+    const hasAdvanced = (baselineSeq >= 0 && currSeq > baselineSeq) ||
+                        (baselineTimestamp >= 0 && currTimestamp > baselineTimestamp) ||
+                        (baselineMono >= 0 && currMono > baselineMono) ||
+                        (currCount > baselineCount);
 
     const isLoc = localizationState && localizationState.localized === true &&
       (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
@@ -4678,23 +4708,38 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
       ? localizationState.ageMs
       : (localizationState.lastUpdateMs > 0 ? Math.round(performance.now() - localizationState.lastUpdateMs) : 99999);
 
-    // Fresh valid sample: localized, valid coordinates, and age <= 1000 ms
+    // Fresh valid sample: advanced timestamp/seq, localized, valid coordinates, and age <= 1000 ms
     // (guarantees >= 1000 ms headroom before the 2000 ms active-motion safety threshold)
-    if (isLoc && age <= 1000 && localizationState.x !== null && localizationState.y !== null && !isNaN(localizationState.x) && !isNaN(localizationState.y)) {
-      return { ok: true, age_ms: age, pose: localizationState };
+    if (hasAdvanced && isLoc && age <= 1000 && localizationState.x !== null && localizationState.y !== null && !isNaN(localizationState.x) && !isNaN(localizationState.y)) {
+      return { ok: true, age_ms: age, advanced: true, pose: localizationState };
     }
 
-    await new Promise(r => setTimeout(r, 30));
+    await new Promise(r => setTimeout(r, 25));
   }
 
   // Final evaluation if loop elapsed
+  const currSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+  const currTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+  const currMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+  const currCount = localizationState.sampleCount || 0;
+  const hasAdvanced = (baselineSeq >= 0 && currSeq > baselineSeq) ||
+                      (baselineTimestamp >= 0 && currTimestamp > baselineTimestamp) ||
+                      (baselineMono >= 0 && currMono > baselineMono) ||
+                      (currCount > baselineCount);
   const isLoc = localizationState && localizationState.localized === true &&
     (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
   const age = (typeof localizationState.ageMs === 'number') ? localizationState.ageMs : 99999;
+
+  let failReason = 'Sample freshness timeout';
+  if (!hasAdvanced) failReason = 'AMCL sample timestamp/sequence did not advance after no-motion request';
+  else if (age > 1000) failReason = `Sample age ${age}ms exceeds 1000ms freshness limit`;
+  else if (!isLoc) failReason = 'Rover not localized after refresh';
+
   return {
-    ok: isLoc && age <= 1000,
+    ok: hasAdvanced && isLoc && age <= 1000,
     age_ms: age,
-    details: localizationState?.details || 'Sample freshness timeout',
+    advanced: hasAdvanced,
+    details: failReason,
     pose: localizationState
   };
 }
@@ -4705,16 +4750,7 @@ app.post('/api/navigation/refresh_localization', async (req, res) => {
 });
 
 app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
-  // Safety check 1: Localization must be active and validated
-  const isLocActive = localizationState && localizationState.localized && (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
-  if (!isLocActive) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Cannot dispatch Nav2 goal: Rover is not localized with active AMCL pose.'
-    });
-  }
-
-  // Safety check 2: Rover must be stationary
+  // Pre-condition: Rover must be stationary at rest before dispatch (while disarmed)
   const isStat = localizationState.is_stationary !== false && localizationState.isStationary !== false;
   if (!isStat) {
     return res.status(409).json({
@@ -4723,13 +4759,25 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     });
   }
 
-  // Safety check 3: Bounded Pre-Dispatch Localization Refresh
-  // Request AMCL no-motion update and await fresh sample (age <= 1000ms) BEFORE arming
+  // Step 1: Bounded Pre-Dispatch Localization Refresh WHILE DISARMED
+  // (Request AMCL no-motion update and await fresh advancing sample BEFORE validating or arming)
   const refreshResult = await refreshLocalizationBeforeDispatch(1500);
   if (!refreshResult.ok) {
     return res.status(409).json({
       ok: false,
-      error: `Cannot dispatch Nav2 goal: Pre-dispatch localization refresh failed (sample age ${refreshResult.age_ms}ms > 1000ms limit). Drivetrain remains safely disarmed.`
+      error: `Cannot dispatch Nav2 goal: Pre-dispatch localization refresh failed (${refreshResult.details || 'sample freshness not achieved'}). Drivetrain remains safely disarmed.`
+    });
+  }
+
+  // Step 2: Normal Localization Validation AFTER refresh (still disarmed)
+  const isLocActive = localizationState && localizationState.localized &&
+    (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk) &&
+    localizationState.x !== null && localizationState.y !== null &&
+    !isNaN(localizationState.x) && !isNaN(localizationState.y);
+  if (!isLocActive) {
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot dispatch Nav2 goal: Rover is not localized with valid AMCL pose after refresh. Drivetrain remains safely disarmed.'
     });
   }
 
