@@ -370,12 +370,13 @@ function updateLocalizationState(loc) {
 
 function abortAutonomyDueToLocalizationLost(reason = 'Localization lost during autonomous navigation') {
   console.error(`[Localization Safety] Fail-safe stop triggered: ${reason}`);
+  const wasArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
   resetAutonomyToSafe(reason);
   autonomyState.state = 'FAULT';
   autonomyState.lastRejectionReason = reason;
 
-  if (latestNormalDriveStatus && latestNormalDriveStatus.armed) {
-    latestNormalDriveStatus = { armed: false };
+  if (wasArmed || (latestNormalDriveStatus && latestNormalDriveStatus.armed)) {
+    latestNormalDriveStatus = { ...(latestNormalDriveStatus || {}), armed: false, mode: 0 };
     broadcastAutoCalibStatus();
     if (serialPort && serialPort.isOpen) {
       const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
@@ -4763,6 +4764,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   // (Request AMCL no-motion update and await fresh advancing sample BEFORE validating or arming)
   const refreshResult = await refreshLocalizationBeforeDispatch(1500);
   if (!refreshResult.ok) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Pre-dispatch localization refresh failed while armed: ${refreshResult.details || 'sample freshness not achieved'}`);
+    }
     return res.status(409).json({
       ok: false,
       error: `Cannot dispatch Nav2 goal: Pre-dispatch localization refresh failed (${refreshResult.details || 'sample freshness not achieved'}). Drivetrain remains safely disarmed.`
@@ -4775,6 +4780,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     localizationState.x !== null && localizationState.y !== null &&
     !isNaN(localizationState.x) && !isNaN(localizationState.y);
   if (!isLocActive) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost('Post-refresh localization validation failed while armed');
+    }
     return res.status(409).json({
       ok: false,
       error: 'Cannot dispatch Nav2 goal: Rover is not localized with valid AMCL pose after refresh. Drivetrain remains safely disarmed.'
