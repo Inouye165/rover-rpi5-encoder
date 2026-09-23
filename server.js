@@ -940,8 +940,8 @@ function startDriveKeepaliveLoop() {
         broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
       }
     } else if (autonomyState.state === 'READY_ARMED') {
-      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > 5000) {
-        resetAutonomyToSafe('Awaiting initial Nav2 cmd_vel timed out (5000ms)');
+      if (!autonomyState.enabled || (monoNow - autonomyState.lastCmdTime) > 20000) {
+        resetAutonomyToSafe('Awaiting initial Nav2 cmd_vel timed out (20000ms)');
         autonomyState.state = 'STALE';
         broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
       }
@@ -4530,6 +4530,7 @@ app.get('/api/navigation/map', (req, res) => {
 });
 
 app.post('/api/navigation/plan', (req, res) => {
+  const t_start = Date.now();
   const body = req.body || {};
   let planMeta = null;
   if (body.relative_distance !== undefined && body.relative_distance !== null && localizationState && localizationState.x !== null) {
@@ -4569,6 +4570,7 @@ app.post('/api/navigation/plan', (req, res) => {
       }
     };
   }
+  const t_loc_done = Date.now();
   const payload = JSON.stringify(body);
   const options = {
     hostname: '127.0.0.1',
@@ -4581,10 +4583,12 @@ app.post('/api/navigation/plan', (req, res) => {
     },
     timeout: 3000
   };
+  const t_bridge_sent = Date.now();
   const bridgeReq = http.request(options, (bridgeRes) => {
     let data = '';
     bridgeRes.on('data', chunk => { data += chunk; });
     bridgeRes.on('end', () => {
+      const t_bridge_done = Date.now();
       try {
         const parsed = JSON.parse(data);
         if (planMeta) {
@@ -4593,6 +4597,11 @@ app.post('/api/navigation/plan', (req, res) => {
           parsed.relative_distance = planMeta.relative_distance;
           parsed.resolved_target = planMeta.resolved_target;
         }
+        parsed.backend_timing = {
+          loc_check_ms: t_loc_done - t_start,
+          bridge_roundtrip_ms: t_bridge_done - t_bridge_sent,
+          total_backend_ms: t_bridge_done - t_start
+        };
         res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {
         res.status(502).json({ ok: false, error: `Invalid JSON from nav bridge plan: ${err.message}` });
@@ -4720,9 +4729,22 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
         }
         normalDriveEvents.on('status', onArmStatus);
       });
-      autonomyState.state = 'READY_ARMED';
-      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
+
+    // Unconditionally configure and arm autonomy intake state for incoming Nav2 commands
+    autonomyState.enabled = true;
+    autonomyState.state = 'READY_ARMED';
+    autonomyState.active = false;
+    autonomyState.lastCmdTime = performance.now();
+    autonomyState.zeroHandshakeCount = 0;
+    autonomyState.rejectedCount = 0;
+    autonomyState.lastRejectionReason = null;
+    cmdSource = 'ROS_AUTONOMY';
+    targetLinear = 0.0;
+    targetAngular = 0.0;
+    watchdogFired = false;
+    startDriveKeepaliveLoop();
+    broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
   } catch (armErr) {
     resetAutonomyToSafe('Arming failed during goal dispatch');
     return res.status(500).json({ ok: false, error: `Failed to arm rover for navigation: ${armErr.message}` });

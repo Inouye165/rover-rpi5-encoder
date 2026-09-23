@@ -6880,7 +6880,7 @@ function updateLocalizationUI(loc) {
   let mapData = null;
   let mapBitmap = null;
   let currentRobotPose = { x: 1.133, y: -0.075, yawDeg: 2.5 };
-  let savedHomePose = { x: 1.167, y: -0.111, yawDeg: -8.34 }; // Authoritative tape mark
+  let savedHomePose = { x: 1.194, y: -0.045, yawDeg: -5.05 }; // Authoritative tape mark
   let currentGoalPose = { x: 1.833, y: -0.075, yawDeg: 2.5 };
   let previewPath = [];
   let activeGlobalPath = [];
@@ -7178,37 +7178,53 @@ function updateLocalizationUI(loc) {
     return { tx, ty, tyawDeg, tyawRad: syawRad, sx: pose.x, sy: pose.y, syawRad };
   }
 
+  let isPreviewPlanning = false;
+
   async function requestPlanPreview() {
-    let tx, ty, tyawDeg, tyawRad, sx, sy, syawRad;
-
-    if (activeRelativePresetDistance !== null) {
-      const calc = await computeAndApplyRelativeTarget(activeRelativePresetDistance);
-      tx = calc.tx;
-      ty = calc.ty;
-      tyawDeg = calc.tyawDeg;
-      tyawRad = calc.tyawRad;
-      sx = calc.sx;
-      sy = calc.sy;
-      syawRad = calc.syawRad;
-    } else {
-      tx = parseFloat(document.getElementById('nav-input-x').value);
-      ty = parseFloat(document.getElementById('nav-input-y').value);
-      tyawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
-      tyawRad = tyawDeg * (Math.PI / 180.0);
-
-      const pose = await getFreshestPose();
-      sx = pose.x;
-      sy = pose.y;
-      syawRad = (pose.yawDeg || 0) * (Math.PI / 180.0);
+    if (isPreviewPlanning) {
+      console.warn("[NavPreview] Duplicate preview click ignored while planning in progress.");
+      return;
     }
-
-    currentGoalPose = { x: tx, y: ty, yawDeg: tyawDeg };
-    renderMap();
+    isPreviewPlanning = true;
+    const t_click = performance.now();
 
     const btn = document.getElementById('btn-nav-preview');
-    if (btn) btn.textContent = '⏳ Planning...';
+    if (btn) {
+      btn.textContent = '⏳ Planning...';
+      btn.disabled = true;
+      btn.style.opacity = '0.7';
+    }
+    const timingEl = document.getElementById('v2-nav-timing-val');
+    if (timingEl) timingEl.textContent = 'Planning Smac2D...';
+
+    let tx, ty, tyawDeg, tyawRad, sx, sy, syawRad;
 
     try {
+      if (activeRelativePresetDistance !== null) {
+        const calc = await computeAndApplyRelativeTarget(activeRelativePresetDistance);
+        tx = calc.tx;
+        ty = calc.ty;
+        tyawDeg = calc.tyawDeg;
+        tyawRad = calc.tyawRad;
+        sx = calc.sx;
+        sy = calc.sy;
+        syawRad = calc.syawRad;
+      } else {
+        tx = parseFloat(document.getElementById('nav-input-x').value);
+        ty = parseFloat(document.getElementById('nav-input-y').value);
+        tyawDeg = parseFloat(document.getElementById('nav-input-yaw').value);
+        tyawRad = tyawDeg * (Math.PI / 180.0);
+
+        const pose = await getFreshestPose();
+        sx = pose.x;
+        sy = pose.y;
+        syawRad = (pose.yawDeg || 0) * (Math.PI / 180.0);
+      }
+
+      currentGoalPose = { x: tx, y: ty, yawDeg: tyawDeg };
+      renderMap();
+
+      const t_fetch_start = performance.now();
       const res = await fetch('/api/navigation/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7225,7 +7241,13 @@ function updateLocalizationUI(loc) {
           relative_distance: activeRelativePresetDistance
         })
       });
+      const t_fetch_end = performance.now();
+
+      const t_parse_start = performance.now();
       const data = await res.json();
+      const t_parse_end = performance.now();
+
+      const t_render_start = performance.now();
       if (data && data.ok) {
         previewPath = data.waypoints || [];
         const ptsEl = document.getElementById('v2-nav-points-val');
@@ -7240,13 +7262,51 @@ function updateLocalizationUI(loc) {
         if (lenEl) lenEl.textContent = `${Number(curvedDist).toFixed(2)} m`;
 
         renderMap();
+        const t_render_end = performance.now();
+
+        // 6-stage telemetry calculation
+        const stage1_click_to_req_ms = Math.max(0, t_fetch_start - t_click);
+        const stage2_backend_loc_ms = data.backend_timing?.loc_check_ms || 0;
+        const stage3_wait_planner_ms = (data.timing_bridge?.wait_server_ms || 0) + (data.timing_bridge?.goal_accept_ms || 0);
+        const stage4_computepath_ms = data.timing_bridge?.computepath_action_ms || 0;
+        const stage5_resp_tx_ms = Math.max(0, (t_fetch_end - t_fetch_start) - (data.backend_timing?.total_backend_ms || 0));
+        const stage6_browser_render_ms = (t_parse_end - t_parse_start) + (t_render_end - t_render_start);
+        const total_elapsed_ms = t_render_end - t_click;
+
+        const timingReport = {
+          "1. Click to HTTP Request (ms)": Number(stage1_click_to_req_ms.toFixed(2)),
+          "2. Backend Validation & Loc (ms)": Number(stage2_backend_loc_ms.toFixed(2)),
+          "3. Wait Nav2 Planner Action (ms)": Number(stage3_wait_planner_ms.toFixed(2)),
+          "4. ComputePathToPose Planning (ms)": Number(stage4_computepath_ms.toFixed(2)),
+          "5. Backend Response Tx (ms)": Number(stage5_resp_tx_ms.toFixed(2)),
+          "6. Browser Parse & Render (ms)": Number(stage6_browser_render_ms.toFixed(2)),
+          "TOTAL Elapsed (ms)": Number(total_elapsed_ms.toFixed(2)),
+          "Waypoints Count": previewPath.length,
+          "Path Length (m)": Number(curvedDist).toFixed(2)
+        };
+        window.__lastPreviewTiming = timingReport;
+        console.log("[NavPreview Instrumentation Report]", timingReport);
+
+        if (timingEl) {
+          timingEl.textContent = `${total_elapsed_ms.toFixed(0)}ms (Plan: ${stage4_computepath_ms.toFixed(0)}ms, Net: ${(t_fetch_end - t_fetch_start).toFixed(0)}ms)`;
+        }
       } else {
-        alert(`Planner error: ${data.error || 'Path planning failed'}`);
+        const errMsg = (data && data.error) || 'Path planning failed';
+        if (timingEl) timingEl.textContent = `Error: ${errMsg}`;
+        console.error("[NavPreview Error]", errMsg, data);
+        alert(`Planner error: ${errMsg}`);
       }
     } catch (err) {
+      if (timingEl) timingEl.textContent = `Request error: ${err.message}`;
+      console.error("[NavPreview Request Error]", err);
       alert(`Plan request error: ${err.message}`);
     } finally {
-      if (btn) btn.textContent = '🔍 Preview Plan (Disarmed)';
+      isPreviewPlanning = false;
+      if (btn) {
+        btn.textContent = '🔍 Preview Plan (Disarmed)';
+        btn.disabled = false;
+        btn.style.opacity = '1.0';
+      }
     }
   }
 
@@ -7394,17 +7454,17 @@ function updateLocalizationUI(loc) {
   });
 
   // Relative Forward 0.70m from live pose
-  document.getElementById('btn-preset-fwd-070')?.addEventListener('click', async () => {
+  document.getElementById('btn-preset-fwd-070')?.addEventListener('click', () => {
     activeRelativePresetDistance = 0.70;
-    await computeAndApplyRelativeTarget(0.70);
-    await requestPlanPreview();
+    updatePresetModeDisplay();
+    requestPlanPreview();
   });
 
   // Relative Forward 0.60m from live pose
-  document.getElementById('btn-preset-fwd-060')?.addEventListener('click', async () => {
+  document.getElementById('btn-preset-fwd-060')?.addEventListener('click', () => {
     activeRelativePresetDistance = 0.60;
-    await computeAndApplyRelativeTarget(0.60);
-    await requestPlanPreview();
+    updatePresetModeDisplay();
+    requestPlanPreview();
   });
 
   // Fixed Corridor Destination (2.154, -0.235)
@@ -7426,9 +7486,9 @@ function updateLocalizationUI(loc) {
       document.getElementById('nav-input-y').value = savedHomePose.y.toFixed(3);
       document.getElementById('nav-input-yaw').value = savedHomePose.yawDeg.toFixed(1);
     } else {
-      document.getElementById('nav-input-x').value = '1.167';
-      document.getElementById('nav-input-y').value = '-0.111';
-      document.getElementById('nav-input-yaw').value = '-8.3';
+      document.getElementById('nav-input-x').value = '1.194';
+      document.getElementById('nav-input-y').value = '-0.045';
+      document.getElementById('nav-input-yaw').value = '-5.0';
     }
     requestPlanPreview();
   });
@@ -7470,9 +7530,9 @@ function updateLocalizationUI(loc) {
       const legInfo = { index: idx + 1, command: cmd, start: { x: currX, y: currY, yaw: currYaw } };
 
       if (cLower.includes('home')) {
-        const tx = (savedHomePose && savedHomePose.x) || 1.166746;
-        const ty = (savedHomePose && savedHomePose.y) || -0.110614;
-        const tyaw = (savedHomePose && savedHomePose.yawDeg !== undefined) ? (savedHomePose.yawDeg * Math.PI / 180.0) : -0.14556;
+        const tx = (savedHomePose && savedHomePose.x) || 1.193853;
+        const ty = (savedHomePose && savedHomePose.y) || -0.045221;
+        const tyaw = (savedHomePose && savedHomePose.yawDeg !== undefined) ? (savedHomePose.yawDeg * Math.PI / 180.0) : -0.088087;
         legInfo.type = 'RETURN_HOME';
         legInfo.target = { x: tx, y: ty, yaw: tyaw };
         legs.push(legInfo);
