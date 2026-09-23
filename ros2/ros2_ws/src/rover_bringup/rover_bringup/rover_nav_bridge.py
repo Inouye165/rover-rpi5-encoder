@@ -237,6 +237,22 @@ class RoverNavBridge(Node):
 
         return {"ok": True, "status": "EXECUTING", "target": self.active_target}
 
+    def request_nomotion_update(self, timeout_sec=1.5):
+        """Requests an instantaneous AMCL no-motion particle filter update."""
+        try:
+            if not self.nomotion_client.service_is_ready():
+                if not self.nomotion_client.wait_for_service(timeout_sec=0.5):
+                    return {"ok": False, "error": "AMCL /request_nomotion_update service not ready"}
+            future = self.nomotion_client.call_async(Empty.Request())
+            t0 = time.time()
+            while not future.done() and (time.time() - t0) < timeout_sec:
+                time.sleep(0.01)
+            if not future.done():
+                return {"ok": False, "error": f"AMCL /request_nomotion_update service call timed out after {timeout_sec}s"}
+            return {"ok": True, "message": "AMCL no-motion update requested"}
+        except Exception as err:
+            return {"ok": False, "error": f"Error calling nomotion service: {err}"}
+
     def cancel_goal(self):
         cancelled = False
         if self.active_goal_handle is not None:
@@ -381,6 +397,10 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/nav/cancel':
             cancel_res = bridge_node.cancel_goal()
             self._send_json(200, cancel_res)
+
+        elif self.path in ['/api/nav/nomotion_update', '/api/nav/refresh_localization']:
+            nomotion_res = bridge_node.request_nomotion_update()
+            self._send_json(200 if nomotion_res.get('ok') else 503, nomotion_res)
 
         else:
             self._send_json(404, {"ok": False, "error": "Endpoint not found"})

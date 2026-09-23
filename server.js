@@ -340,6 +340,21 @@ function updateLocalizationState(loc) {
     localizationState.sigmaYaw = loc.covariance.sigma_yaw;
   }
 
+  if (typeof loc.seq === 'number') {
+    localizationState.seq = loc.seq;
+  }
+  if (typeof loc.sample_timestamp === 'number') {
+    localizationState.sampleTimestamp = loc.sample_timestamp;
+  } else if (loc.pose && typeof loc.pose.timestamp === 'number') {
+    localizationState.sampleTimestamp = loc.pose.timestamp;
+  }
+  if (typeof loc.last_update_mono === 'number') {
+    if (loc.last_update_mono !== localizationState.lastUpdateMono) {
+      localizationState.lastUpdateMono = loc.last_update_mono;
+      localizationState.sampleCount = (localizationState.sampleCount || 0) + 1;
+    }
+  }
+
   // Fail-Safe: If rover was actively navigating and localization becomes lost:
   if (wasLocalized && !localizationState.localized) {
     if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
@@ -355,12 +370,13 @@ function updateLocalizationState(loc) {
 
 function abortAutonomyDueToLocalizationLost(reason = 'Localization lost during autonomous navigation') {
   console.error(`[Localization Safety] Fail-safe stop triggered: ${reason}`);
+  const wasArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
   resetAutonomyToSafe(reason);
   autonomyState.state = 'FAULT';
   autonomyState.lastRejectionReason = reason;
 
-  if (latestNormalDriveStatus && latestNormalDriveStatus.armed) {
-    latestNormalDriveStatus = { armed: false };
+  if (wasArmed || (latestNormalDriveStatus && latestNormalDriveStatus.armed)) {
+    latestNormalDriveStatus = { ...(latestNormalDriveStatus || {}), armed: false, mode: 0 };
     broadcastAutoCalibStatus();
     if (serialPort && serialPort.isOpen) {
       const pkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
@@ -4619,17 +4635,123 @@ app.post('/api/navigation/plan', (req, res) => {
   bridgeReq.end();
 });
 
-app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
-  // Safety check 1: Localization must be active and validated
-  const isLocActive = localizationState && localizationState.localized && (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
-  if (!isLocActive) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Cannot dispatch Nav2 goal: Rover is not localized with active AMCL pose.'
+// ==============================================================================
+// Bounded Pre-Dispatch Localization Refresh
+// ==============================================================================
+async function requestAmclNoMotionUpdate(timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: 3005,
+      path: '/api/nav/nomotion_update',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': 0 },
+      timeout: timeoutMs
+    }, (res) => {
+      let body = '';
+      res.on('data', c => { body += c; });
+      res.on('end', () => {
+        if (resolved) return;
+        resolved = true;
+        try {
+          const parsed = JSON.parse(body);
+          resolve(parsed && parsed.ok === true);
+        } catch (_) {
+          resolve(false);
+        }
+      });
     });
+    req.on('error', () => { if (!resolved) { resolved = true; resolve(false); } });
+    req.on('timeout', () => { if (!resolved) { resolved = true; req.destroy(); resolve(false); } });
+    req.end();
+  });
+}
+
+app.post(['/api/nav/nomotion_update', '/api/nav/refresh_localization'], async (req, res) => {
+  const success = await requestAmclNoMotionUpdate(1500);
+  res.status(success ? 200 : 503).json({
+    ok: success,
+    message: success ? 'AMCL no-motion update requested' : 'AMCL no-motion update failed or unavailable'
+  });
+});
+
+async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
+  const tStart = performance.now();
+
+  const baselineSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+  const baselineTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+  const baselineMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+  const baselineCount = localizationState.sampleCount || 0;
+
+  // 1. Request an instantaneous AMCL no-motion particle update via nav bridge
+  requestAmclNoMotionUpdate(1000).catch(() => {});
+
+  // 2. Poll freshest telemetry sample from odometry node until verified fresh and advanced
+  while ((performance.now() - tStart) < maxWaitMs) {
+    try {
+      await fetchRosOdometry();
+    } catch (_) {}
+
+    const currSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+    const currTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+    const currMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+    const currCount = localizationState.sampleCount || 0;
+
+    const hasAdvanced = (baselineSeq >= 0 && currSeq > baselineSeq) ||
+                        (baselineTimestamp >= 0 && currTimestamp > baselineTimestamp) ||
+                        (baselineMono >= 0 && currMono > baselineMono) ||
+                        (currCount > baselineCount);
+
+    const isLoc = localizationState && localizationState.localized === true &&
+      (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
+    const age = (typeof localizationState.ageMs === 'number')
+      ? localizationState.ageMs
+      : (localizationState.lastUpdateMs > 0 ? Math.round(performance.now() - localizationState.lastUpdateMs) : 99999);
+
+    // Fresh valid sample: advanced timestamp/seq, localized, valid coordinates, and age <= 1000 ms
+    // (guarantees >= 1000 ms headroom before the 2000 ms active-motion safety threshold)
+    if (hasAdvanced && isLoc && age <= 1000 && localizationState.x !== null && localizationState.y !== null && !isNaN(localizationState.x) && !isNaN(localizationState.y)) {
+      return { ok: true, age_ms: age, advanced: true, pose: localizationState };
+    }
+
+    await new Promise(r => setTimeout(r, 25));
   }
 
-  // Safety check 2: Rover must be stationary
+  // Final evaluation if loop elapsed
+  const currSeq = typeof localizationState.seq === 'number' ? localizationState.seq : -1;
+  const currTimestamp = typeof localizationState.sampleTimestamp === 'number' ? localizationState.sampleTimestamp : -1;
+  const currMono = typeof localizationState.lastUpdateMono === 'number' ? localizationState.lastUpdateMono : -1;
+  const currCount = localizationState.sampleCount || 0;
+  const hasAdvanced = (baselineSeq >= 0 && currSeq > baselineSeq) ||
+                      (baselineTimestamp >= 0 && currTimestamp > baselineTimestamp) ||
+                      (baselineMono >= 0 && currMono > baselineMono) ||
+                      (currCount > baselineCount);
+  const isLoc = localizationState && localizationState.localized === true &&
+    (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk);
+  const age = (typeof localizationState.ageMs === 'number') ? localizationState.ageMs : 99999;
+
+  let failReason = 'Sample freshness timeout';
+  if (!hasAdvanced) failReason = 'AMCL sample timestamp/sequence did not advance after no-motion request';
+  else if (age > 1000) failReason = `Sample age ${age}ms exceeds 1000ms freshness limit`;
+  else if (!isLoc) failReason = 'Rover not localized after refresh';
+
+  return {
+    ok: hasAdvanced && isLoc && age <= 1000,
+    age_ms: age,
+    advanced: hasAdvanced,
+    details: failReason,
+    pose: localizationState
+  };
+}
+
+app.post('/api/navigation/refresh_localization', async (req, res) => {
+  const refreshResult = await refreshLocalizationBeforeDispatch(1500);
+  res.status(refreshResult.ok ? 200 : 409).json(refreshResult);
+});
+
+app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
+  // Pre-condition: Rover must be stationary at rest before dispatch (while disarmed)
   const isStat = localizationState.is_stationary !== false && localizationState.isStationary !== false;
   if (!isStat) {
     return res.status(409).json({
@@ -4638,7 +4760,37 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     });
   }
 
-  // Atomic snapshot of source localization pose at dispatch initiation
+  // Step 1: Bounded Pre-Dispatch Localization Refresh WHILE DISARMED
+  // (Request AMCL no-motion update and await fresh advancing sample BEFORE validating or arming)
+  const refreshResult = await refreshLocalizationBeforeDispatch(1500);
+  if (!refreshResult.ok) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Pre-dispatch localization refresh failed while armed: ${refreshResult.details || 'sample freshness not achieved'}`);
+    }
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Pre-dispatch localization refresh failed (${refreshResult.details || 'sample freshness not achieved'}). Drivetrain remains safely disarmed.`
+    });
+  }
+
+  // Step 2: Normal Localization Validation AFTER refresh (still disarmed)
+  const isLocActive = localizationState && localizationState.localized &&
+    (localizationState.state === 'LOCALIZED' || localizationState.fresh_validation_ok || localizationState.freshValidationOk) &&
+    localizationState.x !== null && localizationState.y !== null &&
+    !isNaN(localizationState.x) && !isNaN(localizationState.y);
+  if (!isLocActive) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost('Post-refresh localization validation failed while armed');
+    }
+    return res.status(409).json({
+      ok: false,
+      error: 'Cannot dispatch Nav2 goal: Rover is not localized with valid AMCL pose after refresh. Drivetrain remains safely disarmed.'
+    });
+  }
+
+  // Atomic snapshot of source localization pose at dispatch initiation (using verified fresh sample)
   const snapshotPose = {
     x: Number(localizationState.x),
     y: Number(localizationState.y),

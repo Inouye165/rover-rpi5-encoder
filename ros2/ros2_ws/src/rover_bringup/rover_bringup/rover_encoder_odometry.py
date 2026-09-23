@@ -218,6 +218,7 @@ class RoverEncoderOdometry(Node):
         self._amcl_lock = threading.Lock()
         self._last_amcl_pose = None
         self._last_amcl_time_mono = 0.0
+        self._amcl_seq = 0
         self._map_received = False
         self._map_time_mono = 0.0
         self._last_scan_time_mono = 0.0
@@ -732,6 +733,7 @@ class RoverEncoderOdometry(Node):
     def _amcl_callback(self, msg: PoseWithCovarianceStamped):
         with self._amcl_lock:
             self._last_amcl_time_mono = time.monotonic()
+            self._amcl_seq += 1
             cov = list(msg.pose.covariance)
             sx = math.sqrt(max(0.0, cov[0]))
             sy = math.sqrt(max(0.0, cov[7]))
@@ -898,11 +900,15 @@ class RoverEncoderOdometry(Node):
             "dynamic_tf_age_ms": tf_age_ms,
             "scan_age_ms": scan_age_ms,
             "odom_age_ms": odom_age_ms,
+            "seq": self._amcl_seq,
+            "sample_timestamp": last_pose.get("timestamp", 0.0) if last_pose else 0.0,
+            "last_update_mono": last_time_mono,
             "pose": {
                 "x": last_pose["x"],
                 "y": last_pose["y"],
                 "yaw": last_pose["yaw"],
-                "yaw_deg": last_pose["yaw_deg"]
+                "yaw_deg": last_pose["yaw_deg"],
+                "timestamp": last_pose.get("timestamp", 0.0) if last_pose else 0.0
             },
             "covariance": {
                 "sigma_x": last_pose["sigma_x"],
