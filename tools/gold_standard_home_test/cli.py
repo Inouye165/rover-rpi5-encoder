@@ -91,7 +91,7 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     print(f"  • Continuous Crawling (<5cm/s): {crawl_res['max_continuous_s']:.2f}s (Threshold <= {crawl_res['max_allowed_s']:.1f}s) -> {'PASS' if crawl_res['passed'] else 'FAIL'}")
     
     rate_res = crit["recorder_sample_rate"]
-    print(f"  • Telemetry Sample Rate:     {rate_res['achieved_rate_hz']:.1f} Hz (Requirement >= {rate_res['threshold_hz']:.1f} Hz) -> {'PASS' if rate_res['passed'] else 'FAIL'}")
+    print(f"  • Telemetry Sample Rate:     Active motion: {rate_res.get('active_motion_rate_hz', rate_res['achieved_rate_hz']):.1f} Hz across {rate_res.get('active_span_s', 0.0):.2f}s | Whole-run coverage: {rate_res.get('whole_run_coverage_hz', 0.0):.2f} Hz across {rate_res.get('total_duration_s', 0.0):.2f}s (Threshold >= {rate_res['threshold_hz']:.1f} Hz) -> {'PASS' if rate_res['passed'] else 'FAIL'}")
 
     safe_res = crit["final_safe_state"]
     print(f"  • Safe Disarmed State:       armed={safe_res['armed']}, mode={safe_res['mode']} -> {'PASS' if safe_res['passed'] else 'FAIL'}")

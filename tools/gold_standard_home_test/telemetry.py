@@ -71,13 +71,30 @@ class TelemetryRecorder:
         filename = f"gold_standard_run_{run_id}.json"
         filepath = os.path.join(self.output_dir, filename)
         
+        t_now = time.monotonic()
+        total_duration_s = round(t_now - self.t0, 3)
+        total_frames = len(self.frames)
+        
+        # Calculate active-motion sampling rate across recorded frame span
+        if total_frames >= 2:
+            active_span_s = round(self.frames[-1]["t_rel_s"] - self.frames[0]["t_rel_s"], 4)
+            active_motion_rate_hz = round((total_frames - 1) / max(0.001, active_span_s), 2) if active_span_s > 0 else 0.0
+        else:
+            active_span_s = 0.0
+            active_motion_rate_hz = 0.0
+            
+        whole_run_coverage_hz = round(total_frames / max(0.001, total_duration_s), 2) if total_duration_s > 0 else 0.0
+
         payload = {
             "metadata": {
                 "run_id": run_id,
                 "start_epoch": self.start_epoch,
-                "duration_s": round(time.monotonic() - self.t0, 3),
-                "total_frames": len(self.frames),
-                "sample_rate_hz": round(len(self.frames) / max(0.001, (time.monotonic() - self.t0)), 2),
+                "duration_s": total_duration_s,
+                "active_span_s": active_span_s,
+                "total_frames": total_frames,
+                "active_motion_rate_hz": active_motion_rate_hz,
+                "whole_run_coverage_hz": whole_run_coverage_hz,
+                "sample_rate_hz": active_motion_rate_hz,
                 **self.metadata
             },
             "transitions": self.transitions,

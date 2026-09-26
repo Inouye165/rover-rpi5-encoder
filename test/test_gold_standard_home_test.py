@@ -1522,3 +1522,137 @@ class TestContractSchemasAndEdgeCases:
         assert perf["angular_settling_reversals"] == 1
         assert perf["settling_time_after_target_crossing_s"] == 1.0
 
+
+    def test_leg1_forward_dispatches_with_position_goal_checker(self):
+        """Prove Leg 1 dispatches to Nav2 with position_goal_checker to prevent terminal yaw reversal."""
+        mission = GoldStandardMission(dry_run=False)
+        dispatched_payloads = []
+
+        def mock_post(url, json=None, headers=None, timeout=None):
+            class MockResp:
+                status_code = 200
+                text = '{"ok": true, "goal_id": "test_goal_123"}'
+                def json(self):
+                    return {"ok": True, "goal_id": "test_goal_123"}
+            if "/api/navigation/dispatch" in url:
+                dispatched_payloads.append(json)
+            return MockResp()
+
+        nav_call_count = [0]
+        def mock_get(url, headers=None, timeout=None):
+            class MockGetResp:
+                status_code = 200
+                def json(self):
+                    if "/api/navigation/status" in url:
+                        nav_call_count[0] += 1
+                        st = "EXECUTING" if nav_call_count[0] == 1 else "SUCCEEDED"
+                        return {"ok": True, "status": st, "goal_id": "test_goal_123"}
+                    elif "/api/drive/status" in url:
+                        return {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"}
+                    return {"ok": True}
+            return MockGetResp()
+
+        mission._http_post = mock_post
+        mission._http_get = mock_get
+        # Short-circuit poll_all_telemetry and verify_safety_invariants for this unit test
+        mission.poll_all_telemetry = lambda: None
+        mission.verify_safety_invariants = lambda stage: None
+        mission.record_tick = lambda stage: None
+        mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"}
+
+        mission.execute_leg1_forward(target_x=1.7993, target_y=-0.1012, target_yaw=-0.0881)
+
+        assert len(dispatched_payloads) == 1
+        payload = dispatched_payloads[0]
+        assert payload["target_x"] == 1.7993
+        assert payload["target_y"] == -0.1012
+        assert payload["target_yaw"] == -0.0881
+        assert payload.get("goal_checker") == "position_goal_checker"
+
+    def test_sampling_rate_honesty_active_motion_vs_whole_run_coverage(self):
+        """
+        Prove the honest distinction between:
+        - Active motion sample rate: (N-1) / (t_last - t_first) = (437-1)/19.305 = 22.59 Hz
+        - Whole-run coverage rate: N / duration_s = 437 / 25.81 = 16.93 Hz
+        """
+        # 437 samples spanning from t_rel_s = 6.505 to 25.810 over duration 25.81s
+        samples = []
+        n_samples = 437
+        t_start = 6.5049
+        t_end = 25.8097
+        dt = (t_end - t_start) / (n_samples - 1)
+        for i in range(n_samples):
+            t = t_start + i * dt
+            samples.append({
+                "t_rel_s": t,
+                "mission_stage": "LEG1_FORWARD" if i < 200 else "LEG2_ROTATION",
+                "final_cmd": {"vx": 0.0, "wz": 0.0},
+                "amcl": {"x": 1.0, "y": 2.0, "yaw_deg": 0.0},
+                "drive": {"armed": False, "mode": 0, "bootCount": 1},
+                "to_home": {"pos_err_m": 0.0, "yaw_err_deg": 0.0}
+            })
+
+        run_data = {
+            "metadata": {
+                "duration_s": 25.81,
+                "total_frames": 437,
+                "sample_rate_hz": 22.59,
+                "active_motion_rate_hz": 22.59,
+                "whole_run_coverage_hz": 16.93
+            },
+            "samples": samples
+        }
+
+        grade = MissionGrader.grade_run(run_data)
+        rate_crit = grade["criteria"]["recorder_sample_rate"]
+        perf = grade["performance_metrics"]
+
+        assert rate_crit["active_motion_rate_hz"] == 22.59
+        assert rate_crit["whole_run_coverage_hz"] == 16.93
+        assert rate_crit["active_span_s"] == round(t_end - t_start, 2)
+        assert rate_crit["total_duration_s"] == 25.81
+        assert rate_crit["passed"] is True  # 22.59 >= 20.0 Hz threshold
+
+        assert perf["active_motion_rate_hz"] == 22.59
+        assert perf["whole_run_coverage_hz"] == 16.93
+
+    def test_telemetry_recorder_save_records_honest_sampling_metrics(self, tmp_path):
+        """Verify TelemetryRecorder saves both active-motion rate and whole-run coverage."""
+        from tools.gold_standard_home_test.telemetry import TelemetryRecorder, TelemetryFrame
+        rec = TelemetryRecorder(output_dir=str(tmp_path))
+        rec.t0 = 100.0
+        # Frame 0 at t=106.5s (after 6.5s preflight), Frame 1 at t=107.5s
+        frame0 = TelemetryFrame(
+            t_rel_s=6.5, timestamp_epoch=1700000006.5, mission_stage="BASELINE",
+            raw_cmd={"vx": 0, "wz": 0}, smoothed_cmd=None, final_cmd={"vx": 0, "wz": 0},
+            cmd_source="NONE", amcl={}, odom={}, encoders=None, imu={}, drive={},
+            collision_monitor={}, to_home={}
+        )
+        frame1 = TelemetryFrame(
+            t_rel_s=7.5, timestamp_epoch=1700000007.5, mission_stage="LEG1_FORWARD",
+            raw_cmd={"vx": 0.2, "wz": 0}, smoothed_cmd=None, final_cmd={"vx": 0.2, "wz": 0},
+            cmd_source="ROS_AUTONOMY", amcl={}, odom={}, encoders=None, imu={}, drive={},
+            collision_monitor={}, to_home={}
+        )
+        rec.record_frame(frame0)
+        rec.record_frame(frame1)
+
+        import time
+        orig_monotonic = time.monotonic
+        try:
+            # Simulate total elapsed time of 10.0 seconds from rec.t0
+            time.monotonic = lambda: 110.0
+            filepath = rec.save(run_id="test_sampling_honesty")
+        finally:
+            time.monotonic = orig_monotonic
+
+        import json
+        with open(filepath, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+
+        meta = saved["metadata"]
+        assert meta["total_frames"] == 2
+        assert meta["duration_s"] == 10.0
+        assert meta["active_span_s"] == 1.0  # 7.5s - 6.5s
+        assert meta["active_motion_rate_hz"] == 1.0  # (2-1)/1.0s = 1.0 Hz
+        assert meta["whole_run_coverage_hz"] == 0.2  # 2 / 10.0s = 0.2 Hz

@@ -396,12 +396,16 @@ class RoverNavBridge(Node):
             "timing_bridge": timing_bridge
         }
 
-    def dispatch_goal(self, target_x, target_y, target_yaw, goal_id=None):
+    def dispatch_goal(self, target_x, target_y, target_yaw, goal_id=None, behavior_tree=None, goal_checker=None):
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/navigate_to_pose action server unavailable"}
 
         # Cancel any previous goal
         self.cancel_goal()
+
+        # If position_goal_checker is requested and no explicit BT provided, select position-only BT
+        if goal_checker == "position_goal_checker" and not behavior_tree:
+            behavior_tree = "/ros2_ws/src/rover_bringup/behavior_trees/navigate_to_pose_position_only.xml"
 
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -411,6 +415,8 @@ class RoverNavBridge(Node):
         goal.pose.pose.position.y = float(target_y)
         goal.pose.pose.orientation.z = math.sin(target_yaw / 2.0)
         goal.pose.pose.orientation.w = math.cos(target_yaw / 2.0)
+        if behavior_tree:
+            goal.behavior_tree = str(behavior_tree)
 
         future = self.nav_client.send_goal_async(goal)
         t0 = time.time()
@@ -604,8 +610,10 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             ty = float(req_json.get('target_y', -0.235))
             tyaw = float(req_json.get('target_yaw', -0.073))
             gid = req_json.get('goal_id')
+            bt = req_json.get('behavior_tree')
+            gc = req_json.get('goal_checker')
 
-            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw, goal_id=gid)
+            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw, goal_id=gid, behavior_tree=bt, goal_checker=gc)
             self._send_json(200 if dispatch_res.get('ok') else 400, dispatch_res)
 
         elif self.path == '/api/nav/cancel':

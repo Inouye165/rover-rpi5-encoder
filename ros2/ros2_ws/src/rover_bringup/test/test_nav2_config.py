@@ -26,6 +26,11 @@ def test_goal_checker_and_rotatetogoal_tolerances():
     assert ggc['xy_goal_tolerance'] <= 0.05, f"general_goal_checker xy_goal_tolerance too loose: {ggc['xy_goal_tolerance']}"
     assert ggc['yaw_goal_tolerance'] <= 0.088, f"general_goal_checker yaw_goal_tolerance too loose: {ggc['yaw_goal_tolerance']}"
 
+    assert 'position_goal_checker' in ctrl['goal_checker_plugins'], "position_goal_checker must be in goal_checker_plugins"
+    pgc = ctrl['position_goal_checker']
+    assert pgc['plugin'] == 'nav2_controller::PositionGoalChecker'
+    assert pgc['xy_goal_tolerance'] <= 0.05, f"position_goal_checker xy_goal_tolerance too loose: {pgc['xy_goal_tolerance']}"
+
     # 2. DWB parameters
     assert fp['xy_goal_tolerance'] <= 0.05, f"FollowPath xy_goal_tolerance too loose: {fp['xy_goal_tolerance']}"
     assert fp['yaw_goal_tolerance'] <= 0.088, f"FollowPath yaw_goal_tolerance too loose: {fp['yaw_goal_tolerance']}"

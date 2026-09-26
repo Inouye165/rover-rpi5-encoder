@@ -198,11 +198,17 @@ class MissionGrader:
         safety_interventions = resets_detected + watchdog_trips + rejections
 
         # 6. Sample Rate Verification
-        if len(samples) >= 2:
-            dt_span = samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0)
-            achieved_rate_hz = round((len(samples) - 1) / dt_span, 2) if dt_span > 0 else 0.0
+        total_time_s = metadata.get("duration_s", 0.0)
+        total_frames = len(samples)
+        if total_frames >= 2:
+            active_span_s = samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0)
+            active_motion_rate_hz = round((total_frames - 1) / max(0.001, active_span_s), 2) if active_span_s > 0 else 0.0
         else:
-            achieved_rate_hz = 0.0
+            active_span_s = 0.0
+            active_motion_rate_hz = 0.0
+
+        whole_run_coverage_hz = round(total_frames / max(0.001, total_time_s), 2) if total_time_s > 0 else 0.0
+        achieved_rate_hz = active_motion_rate_hz
 
         crit_final_pos = final_pos_err_m <= PASS_FINAL_POS_ERR_M
         crit_final_yaw = final_yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG
@@ -256,6 +262,10 @@ class MissionGrader:
                 },
                 "recorder_sample_rate": {
                     "achieved_rate_hz": achieved_rate_hz,
+                    "active_motion_rate_hz": active_motion_rate_hz,
+                    "whole_run_coverage_hz": whole_run_coverage_hz,
+                    "active_span_s": round(active_span_s, 2),
+                    "total_duration_s": round(total_time_s, 2),
                     "threshold_hz": PASS_MIN_RECORDER_RATE_HZ,
                     "passed": crit_rate
                 },
@@ -281,6 +291,8 @@ class MissionGrader:
                 "angular_settling_reversals": angular_settling_reversals,
                 "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2),
                 "total_mission_time_s": round(total_time_s, 2),
-                "achieved_rate_hz": achieved_rate_hz
+                "achieved_rate_hz": achieved_rate_hz,
+                "active_motion_rate_hz": active_motion_rate_hz,
+                "whole_run_coverage_hz": whole_run_coverage_hz
             }
         }

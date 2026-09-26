@@ -744,7 +744,7 @@ class GoldStandardMission:
         )
         self.recorder.record_frame(frame)
 
-    def dispatch_nav2_goal(self, target_x: float, target_y: float, target_yaw: float) -> str:
+    def dispatch_nav2_goal(self, target_x: float, target_y: float, target_yaw: float, goal_checker: Optional[str] = None) -> str:
         """
         Dispatches goal to production Nav2 via Cockpit /api/navigation/dispatch.
         Returns unique goal identifier (timestamp).
@@ -758,6 +758,8 @@ class GoldStandardMission:
             "target_y": target_y,
             "target_yaw": target_yaw
         }
+        if goal_checker:
+            payload["goal_checker"] = goal_checker
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
         try:
             r = self._http_post(f"{self.cockpit_url}/api/navigation/dispatch", json=payload, headers=headers, timeout=5.0)
@@ -1001,7 +1003,9 @@ class GoldStandardMission:
         print(f"\n[LEG 1] Dispatching forward 2.000 ft ({FORWARD_DISTANCE_M:.4f} m) -> ({target_x:.4f}, {target_y:.4f})...")
         self.recorder.record_transition("LEG1_FORWARD_START", {"target": (target_x, target_y, target_yaw)})
         
-        goal_id = self.dispatch_nav2_goal(target_x, target_y, target_yaw)
+        # Use position_goal_checker for Leg 1 outbound to achieve exact position arrival
+        # without commanding a terminal yaw correction immediately undone by the explicit 180° turn.
+        goal_id = self.dispatch_nav2_goal(target_x, target_y, target_yaw, goal_checker="position_goal_checker")
         self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG1_FORWARD_S, "LEG1_FORWARD", goal_id, 0.04)
         print("[LEG 1 COMPLETE] Reached turnaround point, Nav2 reported SUCCEEDED, rover finished disarmed.")
         self.recorder.record_transition("LEG1_FORWARD_END")

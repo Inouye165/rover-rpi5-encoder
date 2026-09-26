@@ -4870,6 +4870,8 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       atomic: false,
       source_pose: snapshotPose,
       relative_distance: null,
+      goal_checker: req.body.goal_checker || null,
+      behavior_tree: req.body.behavior_tree || null,
       resolved_target: {
         x: tx,
         y: ty,
