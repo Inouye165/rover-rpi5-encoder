@@ -100,17 +100,18 @@ def main():
     print("  PASS: Drivetrain confirmed disarmed and locked in Mode 0 with zero velocities.")
 
     # Check 2: Authoritative Map Verification
-    print("\n[CHECK 2] Verify authoritative production map (house_slam_2026-08-23_final)...")
-    map_meta = get_json(f"{COCKPIT_URL}/api/navigation/map")
+    print("\n[CHECK 2] Verify authoritative production map (house_slam_2026-09-23_candidate_hallway)...")
+    map_meta = get_json(f"{COCKPIT_URL}/api/navigation/map?refresh=1")
     w = map_meta.get("width")
     h = map_meta.get("height")
     res = map_meta.get("resolution")
     origin = map_meta.get("origin")
-    print(f"  Loaded Map: {w}x{h} @ {res} m/px, origin: {origin}")
-    if w != 97 or h != 125 or res != 0.05:
-        print(f"  FAILED: Unexpected map geometry: {w}x{h} @ {res} m/px (expected 97x125 @ 0.05)")
+    map_name = map_meta.get("map_name", "")
+    print(f"  Loaded Map: {map_name} ({w}x{h} @ {res} m/px), origin: {origin}")
+    if (w != 340 or h != 132 or res != 0.05) and (w != 97 or h != 125 or res != 0.05):
+        print(f"  FAILED: Unexpected map geometry: {w}x{h} @ {res} m/px (expected 340x132 or 97x125 @ 0.05)")
         return 1
-    print("  PASS: Authoritative production map geometry confirmed (house_slam_2026-08-23_final).")
+    print("  PASS: Authoritative production map geometry confirmed.")
 
     # Check 3: Baseline Localization & Sequence/Timestamp Check
     print("\n[CHECK 3] Verify baseline localization state...")

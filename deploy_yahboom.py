@@ -313,6 +313,7 @@ def main():
     exec_remote(client, f"cp /home/ron/yahboom-encoder/calibration_db.json {backup_dir}/ 2>/dev/null || true")
     exec_remote(client, f"cp /home/ron/yahboom-encoder/.env {backup_dir}/env_root.txt 2>/dev/null || true")
     exec_remote(client, f"mkdir -p {backup_dir}/maps && cp -r /home/ron/yahboom-encoder/ros2/maps/* {backup_dir}/maps/ 2>/dev/null || true")
+    exec_remote(client, f"mkdir -p {backup_dir}/volumes_maps && cp -r /home/ron/yahboom-encoder/ros2/volumes/maps/* {backup_dir}/volumes_maps/ 2>/dev/null || true")
     print(f"Backup created at: {backup_dir}")
 
     print("\n=== 3. Synchronizing Remote Pi Git Checkout ===")
