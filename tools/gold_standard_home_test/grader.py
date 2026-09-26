@@ -60,7 +60,7 @@ class MissionGrader:
             actual_outbound_dist = 0.0
         outbound_dist_err_m = abs(actual_outbound_dist - FORWARD_DISTANCE_M)
 
-        # Leg 2 180° CW Rotation
+        # Leg 2 180Â° CW Rotation
         leg2_samples = stage_samples.get("LEG2_ROTATION", [])
         if leg2_samples:
             start_rot = leg2_samples[0].get("imu", {}).get("raw_yaw_deg", 0.0)
@@ -108,17 +108,80 @@ class MissionGrader:
             else:
                 current_crawl_s = 0.0
 
-        # 4. Count Direction Reversals in Final Approach (Leg 3)
-        leg3_samples = stage_samples.get("LEG3_RETURN", [])
-        reversal_count = 0
-        last_sign_lin = 0
-        for s in leg3_samples:
-            vx = s.get("final_cmd", {}).get("vx", 0.0)
-            if abs(vx) > 0.01:
-                curr_sign = 1 if vx > 0 else -1
-                if last_sign_lin != 0 and curr_sign != last_sign_lin:
-                    reversal_count += 1
-                last_sign_lin = curr_sign
+        # 4. Count Direction Reversals (Linear and Angular Settling)
+        # Linear reversals across translation stages (LEG1_FORWARD and LEG3_RETURN)
+        linear_reversals = 0
+        for st_name in ("LEG1_FORWARD", "LEG3_RETURN"):
+            samples_st = stage_samples.get(st_name, [])
+            last_sign_lin = 0
+            for s in samples_st:
+                vx = s.get("final_cmd", {}).get("vx", 0.0)
+                if abs(vx) > 0.01:
+                    curr_sign = 1 if vx > 0 else -1
+                    if last_sign_lin != 0 and curr_sign != last_sign_lin:
+                        linear_reversals += 1
+                    last_sign_lin = curr_sign
+
+        # Angular settling reversals and settling time after first target crossing
+        # In Leg 2: target is 180° CW from start. Target crossing happens when turned_cw >= 180.0°.
+        # In Leg 4: target is saved HOME yaw. Target crossing happens when yaw error crosses 0°.
+        angular_settling_reversals = 0
+        total_settling_time_after_crossing_s = 0.0
+
+        # Leg 2 analysis
+        leg2_samples = stage_samples.get("LEG2_ROTATION", [])
+        if leg2_samples:
+            start_rot = leg2_samples[0].get("imu", {}).get("raw_yaw_deg", 0.0)
+            crossed_t = None
+            last_sign_ang = 0
+            for s in leg2_samples:
+                cur_rot = s.get("imu", {}).get("raw_yaw_deg", 0.0)
+                turned_cw = (start_rot - cur_rot) % 360.0
+                t = s.get("t_rel_s", 0.0)
+                wz = s.get("final_cmd", {}).get("wz", 0.0)
+                curr_sign = (1 if wz > 0 else -1) if abs(wz) > 0.01 else 0
+
+                if crossed_t is None and turned_cw >= 180.0:
+                    crossed_t = t
+
+                if crossed_t is not None and curr_sign != 0:
+                    if last_sign_ang != 0 and curr_sign != last_sign_ang:
+                        angular_settling_reversals += 1
+
+                if curr_sign != 0:
+                    last_sign_ang = curr_sign
+
+            if crossed_t is not None:
+                total_settling_time_after_crossing_s += max(0.0, leg2_samples[-1].get("t_rel_s", 0.0) - crossed_t)
+
+        # Leg 4 analysis
+        leg4_samples = stage_samples.get("LEG4_SETTLE", [])
+        if leg4_samples:
+            crossed_t = None
+            last_sign_ang = 0
+            prev_yaw_err = None
+            for s in leg4_samples:
+                yaw_err = s.get("to_home", {}).get("yaw_err_deg", 0.0)
+                t = s.get("t_rel_s", 0.0)
+                wz = s.get("final_cmd", {}).get("wz", 0.0)
+                curr_sign = (1 if wz > 0 else -1) if abs(wz) > 0.01 else 0
+
+                if crossed_t is None:
+                    if prev_yaw_err is not None and ((prev_yaw_err < 0 and yaw_err >= 0) or (prev_yaw_err > 0 and yaw_err <= 0)):
+                        crossed_t = t
+                    prev_yaw_err = yaw_err
+
+                if crossed_t is not None and curr_sign != 0:
+                    if last_sign_ang != 0 and curr_sign != last_sign_ang:
+                        angular_settling_reversals += 1
+
+                if curr_sign != 0:
+                    last_sign_ang = curr_sign
+
+            if crossed_t is not None:
+                total_settling_time_after_crossing_s += max(0.0, leg4_samples[-1].get("t_rel_s", 0.0) - crossed_t)
+
+        reversal_count = linear_reversals + angular_settling_reversals
 
         # 5. Safety Interventions & Resets
         first_sample = samples[0] if samples else {}
@@ -180,6 +243,9 @@ class MissionGrader:
                 },
                 "corrective_reversals": {
                     "count": reversal_count,
+                    "linear_reversals": linear_reversals,
+                    "angular_settling_reversals": angular_settling_reversals,
+                    "settling_time_after_crossing_s": round(total_settling_time_after_crossing_s, 2),
                     "max_allowed": PASS_MAX_CORRECTIVE_REVERSALS,
                     "passed": crit_reversals
                 },
@@ -203,11 +269,17 @@ class MissionGrader:
                 "outbound_distance_m": round(actual_outbound_dist, 4),
                 "outbound_distance_error_m": round(outbound_dist_err_m, 4),
                 "rotation_180_error_deg": round(rot_180_err_deg, 2),
+                "linear_reversals": linear_reversals,
+                "angular_settling_reversals": angular_settling_reversals,
+                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2),
             },
             "performance_metrics": {
                 "outbound_distance_m": round(actual_outbound_dist, 4),
                 "outbound_distance_error_m": round(outbound_dist_err_m, 4),
                 "rotation_180_error_deg": round(rot_180_err_deg, 2),
+                "linear_reversals": linear_reversals,
+                "angular_settling_reversals": angular_settling_reversals,
+                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2),
                 "total_mission_time_s": round(total_time_s, 2),
                 "achieved_rate_hz": achieved_rate_hz
             }

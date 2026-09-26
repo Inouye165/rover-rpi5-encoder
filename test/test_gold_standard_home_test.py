@@ -1414,3 +1414,111 @@ class TestContractSchemasAndEdgeCases:
         grade = MissionGrader.grade_run(run_data)
         assert math.isclose(grade["metrics"]["outbound_distance_m"], FORWARD_DISTANCE_M, abs_tol=1e-4)
         assert math.isclose(grade["metrics"]["outbound_distance_error_m"], 0.0, abs_tol=1e-4)
+
+    def test_delayed_stationary_telemetry_waits_and_dispatches(self):
+        """Contract: Runner waits on delayed is_stationary telemetry until production predicate passes, then proceeds."""
+        mission = GoldStandardMission(dry_run=False)
+        loc_calls = 0
+
+        with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
+            def mock_get_router(url, **kwargs):
+                nonlocal loc_calls
+                resp = MagicMock()
+                resp.status_code = 200
+                if "/api/localization/status" in url:
+                    loc_calls += 1
+                    # Delayed: first 4 calls return is_stationary=False, then True
+                    is_stat = (loc_calls >= 5)
+                    resp.json.return_value = {
+                        "ok": True, "localized": True, "state": "LOCALIZED",
+                        "is_stationary": is_stat, "isStationary": is_stat,
+                        "seq": loc_calls, "ageMs": 50, "x": 1.0, "y": 2.0, "yawDeg": 0.0
+                    }
+                elif "/api/drive/status" in url:
+                    resp.json.return_value = {
+                        "ok": True,
+                        "status": {
+                            "armed": False, "mode": 0, "cmdSource": "NONE",
+                            "reqLinear": 0.0, "reqAngular": 0.0,
+                            "limLinear": 0.0, "limAngular": 0.0,
+                            "seq": loc_calls
+                        }
+                    }
+                elif "/api/imu" in url:
+                    resp.json.return_value = {"raw_yaw_deg": 0.0, "gyro_z": 0.0, "serialConnected": True, "sequence": loc_calls}
+                else:
+                    resp.json.return_value = {}
+                return resp
+
+            mock_get.side_effect = mock_get_router
+            mock_post.return_value.status_code = 200
+
+            res = mission.wait_for_stationary_at_rest(timeout_s=3.0)
+            assert res is True
+            assert loc_calls >= 5
+
+    def test_stationary_telemetry_timeout_fails_closed_and_disarms(self):
+        """Contract: When is_stationary is never confirmed, wait_for_stationary_at_rest times out and disarms."""
+        mission = GoldStandardMission(dry_run=False)
+
+        with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
+            def mock_get_router(url, **kwargs):
+                resp = MagicMock()
+                resp.status_code = 200
+                if "/api/localization/status" in url:
+                    # Persistently not stationary
+                    resp.json.return_value = {
+                        "ok": True, "localized": True, "state": "LOCALIZED",
+                        "is_stationary": False, "isStationary": False,
+                        "seq": 100, "ageMs": 50
+                    }
+                elif "/api/drive/status" in url:
+                    resp.json.return_value = {
+                        "ok": True,
+                        "status": {"armed": False, "mode": 0, "cmdSource": "NONE", "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0}
+                    }
+                elif "/api/imu" in url:
+                    resp.json.return_value = {"raw_yaw_deg": 0.0, "gyro_z": 0.0, "serialConnected": True, "sequence": 100}
+                else:
+                    resp.json.return_value = {}
+                return resp
+
+            mock_get.side_effect = mock_get_router
+            mock_post.return_value.status_code = 200
+
+            with pytest.raises(MissionAbortException) as exc_info:
+                mission.wait_for_stationary_at_rest(timeout_s=0.2)
+            assert "waiting for Cockpit stationary-at-rest confirmation" in str(exc_info.value)
+
+    def test_grader_separately_reports_linear_and_angular_settling_reversals(self):
+        """Contract: MissionGrader separately reports linear reversals and angular settling reversals with settling time."""
+        run_data = {
+            "metadata": {"total_frames": 10, "duration_s": 10.0, "sample_rate_hz": 25.0},
+            "transitions": [],
+            "samples": [
+                # BASELINE
+                {"t_rel_s": 0.0, "mission_stage": "BASELINE", "amcl": {"x": 1.0, "y": 2.0, "yaw_deg": 0.0}, "drive": {"armed": False, "mode": 0}},
+                # Leg 1: contains 1 linear command reversal (+0.20 -> -0.05)
+                {"t_rel_s": 1.0, "mission_stage": "LEG1_FORWARD", "final_cmd": {"vx": 0.20, "wz": 0.0}, "amcl": {"x": 1.3, "y": 2.0}, "drive": {"armed": True, "mode": 3}},
+                {"t_rel_s": 2.0, "mission_stage": "LEG1_FORWARD", "final_cmd": {"vx": -0.05, "wz": 0.0}, "amcl": {"x": 1.6, "y": 2.0}, "drive": {"armed": True, "mode": 3}},
+                # Leg 2: starts rotation from 0°, crosses 180° at t=4.0, then reverses angular command (-0.18 -> +0.10)
+                {"t_rel_s": 3.0, "mission_stage": "LEG2_ROTATION", "imu": {"raw_yaw_deg": 0.0}, "final_cmd": {"vx": 0.0, "wz": -0.40}, "drive": {"armed": True, "mode": 3}},
+                {"t_rel_s": 4.0, "mission_stage": "LEG2_ROTATION", "imu": {"raw_yaw_deg": -180.0}, "final_cmd": {"vx": 0.0, "wz": -0.18}, "drive": {"armed": True, "mode": 3}},
+                {"t_rel_s": 5.0, "mission_stage": "LEG2_ROTATION", "imu": {"raw_yaw_deg": -182.0}, "final_cmd": {"vx": 0.0, "wz": 0.10}, "drive": {"armed": True, "mode": 3}},
+                # FINAL_DISARMED
+                {"t_rel_s": 6.0, "mission_stage": "FINAL_DISARMED", "to_home": {"pos_err_m": 0.0, "yaw_err_deg": 0.0}, "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0}}
+            ]
+        }
+
+        grade = MissionGrader.grade_run(run_data)
+        crit_rev = grade["criteria"]["corrective_reversals"]
+        perf = grade["performance_metrics"]
+
+        assert crit_rev["linear_reversals"] == 1
+        assert crit_rev["angular_settling_reversals"] == 1
+        assert crit_rev["count"] == 2
+        assert crit_rev["settling_time_after_crossing_s"] == 1.0 # 5.0s - 4.0s
+        assert perf["linear_reversals"] == 1
+        assert perf["angular_settling_reversals"] == 1
+        assert perf["settling_time_after_target_crossing_s"] == 1.0
+

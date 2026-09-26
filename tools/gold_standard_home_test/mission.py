@@ -462,6 +462,9 @@ class GoldStandardMission:
                     "cov_yaw": loc.get("sigmaYaw", 0.0),
                     "localized": loc.get("localized", False),
                     "state": loc.get("state", "UNKNOWN"),
+                    "is_stationary": loc.get("is_stationary", loc.get("isStationary", True)),
+                    "isStationary": loc.get("isStationary", loc.get("is_stationary", True)),
+                    "seq": loc.get("seq"),
                     "ageMs": loc.get("ageMs", 0)
                 }
         except Exception:
@@ -487,7 +490,8 @@ class GoldStandardMission:
 
                 self.latest_telemetry["imu"] = {
                     "raw_yaw_deg": raw_yaw,
-                    "rel_yaw_deg": self.yaw_tracker.update(math.radians(raw_yaw)),
+                    # Update yaw tracker with radians, but expose degrees in rel_yaw_deg
+                    "rel_yaw_deg": (self.yaw_tracker.update(math.radians(raw_yaw)), self.yaw_tracker.relative_yaw_deg)[1],
                     "gyro_z": gyro_z,
                     "serialConnected": imu.get("serialConnected", True),
                     "dataAgeMs": imu.get("dataAgeMs", 0),
@@ -935,6 +939,59 @@ class GoldStandardMission:
         self.disarm_and_stop()
         raise MissionAbortException(f"{stage_name} exceeded timeout ({timeout_s}s) waiting for goal {goal_id} to succeed!")
 
+    def wait_for_stationary_at_rest(self, timeout_s: float = 6.0) -> bool:
+        """
+        Maintains zero command, confirms Mode 0/disarmed, and waits on advancing real telemetry
+        until Cockpit's exact production stationary predicate is satisfied:
+        localizationState.is_stationary !== false && localizationState.isStationary !== false.
+        Uses a bounded timeout and fails closed if rest is never confirmed.
+        """
+        if self.dry_run:
+            return True
+
+        print("[WAIT] Awaiting Cockpit stationary-at-rest confirmation before Nav2 dispatch...")
+        t_start = time.monotonic()
+        last_seq = None
+        seq_advances = 0
+
+        while time.monotonic() - t_start < timeout_s:
+            t_cycle = time.monotonic()
+            self.poll_all_telemetry()
+            self.verify_safety_invariants("AWAIT_STATIONARY")
+            self.record_tick("AWAIT_STATIONARY")
+
+            drive = self.latest_telemetry.get("drive") or {}
+            amcl = self.latest_telemetry.get("amcl") or {}
+
+            # Verify drivetrain remains disarmed in Mode 0 with zero command
+            if drive.get("armed", True) is not False or drive.get("mode") != 0:
+                self.disarm()
+
+            # Check sequence advancement on real telemetry
+            curr_seq = amcl.get("seq") or drive.get("seq") or (self.latest_telemetry.get("imu") or {}).get("sequence")
+            if curr_seq is not None:
+                if last_seq is None or curr_seq != last_seq:
+                    last_seq = curr_seq
+                    seq_advances += 1
+            else:
+                seq_advances += 1
+
+            # Exact Cockpit production stationary predicate from server.js:4783:
+            # const isStat = localizationState.is_stationary !== false && localizationState.isStationary !== false;
+            is_stat = amcl.get("is_stationary") is not False and amcl.get("isStationary") is not False and (amcl.get("is_stationary") is True or amcl.get("isStationary") is True)
+            
+            if is_stat and seq_advances >= 2:
+                print(f"[WAIT] Confirmed stationary at rest in {time.monotonic() - t_start:.2f}s (seq={curr_seq}).")
+                return True
+
+            elapsed = time.monotonic() - t_cycle
+            time.sleep(max(0.002, (1.0 / TELEMETRY_RATE_HZ) - elapsed))
+
+        self.disarm_and_stop()
+        raise MissionAbortException(
+            f"Timed out ({timeout_s}s) waiting for Cockpit stationary-at-rest confirmation before dispatch! (is_stationary={amcl.get('is_stationary')})"
+        )
+
     def execute_leg1_forward(self, target_x: float, target_y: float, target_yaw: float):
         """
         Leg 1: Nav2 drives 2.000 ft (0.6096 m) outward along saved HOME heading.
@@ -986,10 +1043,11 @@ class GoldStandardMission:
                 self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
                 print(f"[LEG 2 COMPLETE] 180° CW rotation completed in {time.monotonic() - t_start:.2f}s (Traveled: {turned_cw:.1f}°).")
                 self.recorder.record_transition("LEG2_ROTATION_END")
-                time.sleep(0.5)
                 # Disarm explicitly and release ownership
                 self.disarm()
                 self.set_command_source("NONE")
+                # Wait for Cockpit stationary-at-rest predicate on advancing telemetry before Leg 3 dispatch
+                self.wait_for_stationary_at_rest(timeout_s=6.0)
                 return
 
             # Angular approach controller (Cruise 0.40 rad/s -> Creep ceiling 0.18 rad/s)

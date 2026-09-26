@@ -85,7 +85,7 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     print(f"  • Hardware Resets / Faults:  {reset_res['resets_detected']} resets, {reset_res['safety_interventions']} interventions -> {'PASS' if reset_res['passed'] else 'FAIL'}")
     
     rev_res = crit["corrective_reversals"]
-    print(f"  • Corrective Reversals:      {rev_res['count']} (Max allowed: {rev_res['max_allowed']}) -> {'PASS' if rev_res['passed'] else 'FAIL'}")
+    print(f"  • Corrective Reversals:      {rev_res['count']} (linear: {rev_res.get('linear_reversals', 0)}, angular settling: {rev_res.get('angular_settling_reversals', 0)}, settle time: {rev_res.get('settling_time_after_crossing_s', 0.0):.2f}s | Max allowed: {rev_res['max_allowed']}) -> {'PASS' if rev_res['passed'] else 'FAIL'}")
     
     crawl_res = crit["low_speed_crawling"]
     print(f"  • Continuous Crawling (<5cm/s): {crawl_res['max_continuous_s']:.2f}s (Threshold <= {crawl_res['max_allowed_s']:.1f}s) -> {'PASS' if crawl_res['passed'] else 'FAIL'}")
