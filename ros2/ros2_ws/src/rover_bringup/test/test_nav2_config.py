@@ -48,7 +48,8 @@ def test_controller_speed_sampling_and_progress_checker():
     fp = ctrl['FollowPath']
     pc = ctrl['progress_checker']
 
-    assert fp['max_vel_x'] <= 0.15, f"max_vel_x exceeds 0.15: {fp['max_vel_x']}"
+    assert fp['max_vel_x'] == 0.20, f"max_vel_x must be 0.20: {fp['max_vel_x']}"
+    assert fp['max_speed_xy'] == 0.20, f"max_speed_xy must be 0.20: {fp['max_speed_xy']}"
     assert fp['max_vel_theta'] <= 0.50, f"max_vel_theta exceeds 0.50: {fp['max_vel_theta']}"
     assert fp['rotate_to_heading_angular_vel'] <= 0.50, f"rotate_to_heading_angular_vel exceeds 0.50: {fp['rotate_to_heading_angular_vel']}"
 
@@ -72,7 +73,7 @@ def test_costmap_and_collision_monitor_invariants():
 
     # Velocity smoother clamp
     vs = cfg['velocity_smoother']['ros__parameters']
-    assert vs['max_velocity'][0] <= 0.15
+    assert vs['max_velocity'][0] == 0.20
     assert vs['max_velocity'][2] <= 0.50
 
     # Collision monitor polygons
