@@ -155,7 +155,7 @@ def run_cli():
     print(format_preview(targets, live_amcl, pos_err, yaw_err))
 
     # Evaluate Pre-Arm Gate
-    if not gate_ok and not args.test_safety:
+    if not gate_ok and not args.test_safety and not args.dry_run:
         print(f"[PRE-ARM GATE REFUSAL] Refusing to arm drivetrain: {gate_msg}")
         sys.exit(2)
 
@@ -202,6 +202,7 @@ def run_cli():
     try:
         # In dry run: simulate the 4 legs cleanly
         if args.dry_run:
+            mission.recorder.reset_start_baseline()
             base_x = targets["start_pose"]["x"]
             base_y = targets["start_pose"]["y"]
             mission.latest_telemetry["amcl"] = {"x": base_x, "y": base_y, "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
@@ -283,6 +284,7 @@ def run_cli():
             l3 = targets["leg3_return"]
 
             # Capture baseline telemetry frame before dispatch
+            mission.start_continuous_recording(rate_hz=25.0)
             mission.poll_all_telemetry()
             mission.record_tick("BASELINE")
             
@@ -306,6 +308,7 @@ def run_cli():
         print(f"\n[MISSION UNHANDLED EXCEPTION] {e}")
         aborted = True
     finally:
+        mission.stop_continuous_recording()
         mission.disarm_and_stop()
         report_path = mission.recorder.save()
         print(f"\nTelemetry saved to {report_path}")

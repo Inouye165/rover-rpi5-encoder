@@ -40,7 +40,7 @@ class MissionGrader:
         # Start pose: use BASELINE sample if captured, otherwise first sample
         base_samples = stage_samples.get("BASELINE", [])
         if base_samples:
-            base_amcl = base_samples[0].get("amcl", {})
+            base_amcl = base_samples[-1].get("amcl", {})
             start_x = base_amcl.get("x", samples[0].get("amcl", {}).get("x", 0.0) if samples else 0.0)
             start_y = base_amcl.get("y", samples[0].get("amcl", {}).get("y", 0.0) if samples else 0.0)
         elif samples:
@@ -125,8 +125,11 @@ class MissionGrader:
         # Angular settling reversals and settling time after first target crossing
         # In Leg 2: target is 180° CW from start. Target crossing happens when turned_cw >= 180.0°.
         # In Leg 4: target is saved HOME yaw. Target crossing happens when yaw error crosses 0°.
+        # If target was approached without crossing, report "no crossing" distinctly with no fabricated settling time.
         angular_settling_reversals = 0
         total_settling_time_after_crossing_s = 0.0
+        leg2_target_crossed = False
+        leg4_target_crossed = False
 
         # Leg 2 analysis
         leg2_samples = stage_samples.get("LEG2_ROTATION", [])
@@ -135,14 +138,21 @@ class MissionGrader:
             crossed_t = None
             last_sign_ang = 0
             for s in leg2_samples:
-                cur_rot = s.get("imu", {}).get("raw_yaw_deg", 0.0)
-                turned_cw = (start_rot - cur_rot) % 360.0
+                imu = s.get("imu", {})
+                if "rel_yaw_deg" in imu and imu["rel_yaw_deg"] is not None:
+                    turned_cw = -float(imu["rel_yaw_deg"])
+                else:
+                    cur_rot = float(imu.get("raw_yaw_deg", 0.0))
+                    diff = (start_rot - cur_rot) % 360.0
+                    turned_cw = diff if diff < 300.0 else 0.0
+
                 t = s.get("t_rel_s", 0.0)
                 wz = s.get("final_cmd", {}).get("wz", 0.0)
                 curr_sign = (1 if wz > 0 else -1) if abs(wz) > 0.01 else 0
 
-                if crossed_t is None and turned_cw >= 180.0:
+                if crossed_t is None and turned_cw >= ROTATION_TARGET_DEG:
                     crossed_t = t
+                    leg2_target_crossed = True
 
                 if crossed_t is not None and curr_sign != 0:
                     if last_sign_ang != 0 and curr_sign != last_sign_ang:
@@ -167,8 +177,9 @@ class MissionGrader:
                 curr_sign = (1 if wz > 0 else -1) if abs(wz) > 0.01 else 0
 
                 if crossed_t is None:
-                    if prev_yaw_err is not None and ((prev_yaw_err < 0 and yaw_err >= 0) or (prev_yaw_err > 0 and yaw_err <= 0)):
+                    if prev_yaw_err is not None and ((prev_yaw_err < -0.1 and yaw_err >= 0.0) or (prev_yaw_err > 0.1 and yaw_err <= 0.0)):
                         crossed_t = t
+                        leg4_target_crossed = True
                     prev_yaw_err = yaw_err
 
                 if crossed_t is not None and curr_sign != 0:
@@ -180,6 +191,8 @@ class MissionGrader:
 
             if crossed_t is not None:
                 total_settling_time_after_crossing_s += max(0.0, leg4_samples[-1].get("t_rel_s", 0.0) - crossed_t)
+
+        any_target_crossed = leg2_target_crossed or leg4_target_crossed
 
         reversal_count = linear_reversals + angular_settling_reversals
 
@@ -200,14 +213,21 @@ class MissionGrader:
         # 6. Sample Rate Verification
         total_time_s = metadata.get("duration_s", 0.0)
         total_frames = len(samples)
-        if total_frames >= 2:
-            active_span_s = samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0)
-            active_motion_rate_hz = round((total_frames - 1) / max(0.001, active_span_s), 2) if active_span_s > 0 else 0.0
-        else:
-            active_span_s = 0.0
-            active_motion_rate_hz = 0.0
 
-        whole_run_coverage_hz = round(total_frames / max(0.001, total_time_s), 2) if total_time_s > 0 else 0.0
+        active_motion_rate_hz = metadata.get("active_motion_rate_hz")
+        if active_motion_rate_hz is None:
+            if total_frames >= 2:
+                active_span_s = samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0)
+                active_motion_rate_hz = round((total_frames - 1) / max(0.001, active_span_s), 2) if active_span_s > 0 else 0.0
+            else:
+                active_span_s = 0.0
+                active_motion_rate_hz = 0.0
+        else:
+            active_span_s = metadata.get("active_span_s", samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0) if total_frames >= 2 else 0.0)
+
+        whole_run_coverage_hz = metadata.get("whole_run_coverage_hz")
+        if whole_run_coverage_hz is None:
+            whole_run_coverage_hz = round(total_frames / max(0.001, total_time_s), 2) if total_time_s > 0 else 0.0
         achieved_rate_hz = active_motion_rate_hz
 
         crit_final_pos = final_pos_err_m <= PASS_FINAL_POS_ERR_M
@@ -216,7 +236,8 @@ class MissionGrader:
         crit_reversals = reversal_count <= PASS_MAX_CORRECTIVE_REVERSALS
         crit_crawling = max_continuous_crawl_s <= PASS_MAX_CRAWL_WINDOW_SEC
         crit_safe_stop = final_state_safe
-        crit_rate = achieved_rate_hz >= PASS_MIN_RECORDER_RATE_HZ
+        # Require BOTH active-motion sampling and baseline-to-final whole-run coverage to be at least 20 Hz; 11.1 Hz must not pass
+        crit_rate = (active_motion_rate_hz >= PASS_MIN_RECORDER_RATE_HZ) and (whole_run_coverage_hz >= PASS_MIN_RECORDER_RATE_HZ)
 
         all_passed = (
             crit_final_pos and
@@ -251,7 +272,9 @@ class MissionGrader:
                     "count": reversal_count,
                     "linear_reversals": linear_reversals,
                     "angular_settling_reversals": angular_settling_reversals,
-                    "settling_time_after_crossing_s": round(total_settling_time_after_crossing_s, 2),
+                    "target_crossed": any_target_crossed,
+                    "target_crossing_status": "crossed" if any_target_crossed else "no crossing",
+                    "settling_time_after_crossing_s": round(total_settling_time_after_crossing_s, 2) if any_target_crossed else None,
                     "max_allowed": PASS_MAX_CORRECTIVE_REVERSALS,
                     "passed": crit_reversals
                 },
@@ -281,7 +304,8 @@ class MissionGrader:
                 "rotation_180_error_deg": round(rot_180_err_deg, 2),
                 "linear_reversals": linear_reversals,
                 "angular_settling_reversals": angular_settling_reversals,
-                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2),
+                "target_crossing_status": "crossed" if any_target_crossed else "no crossing",
+                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2) if any_target_crossed else None,
             },
             "performance_metrics": {
                 "outbound_distance_m": round(actual_outbound_dist, 4),
@@ -289,7 +313,8 @@ class MissionGrader:
                 "rotation_180_error_deg": round(rot_180_err_deg, 2),
                 "linear_reversals": linear_reversals,
                 "angular_settling_reversals": angular_settling_reversals,
-                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2),
+                "target_crossing_status": "crossed" if any_target_crossed else "no crossing",
+                "settling_time_after_target_crossing_s": round(total_settling_time_after_crossing_s, 2) if any_target_crossed else None,
                 "total_mission_time_s": round(total_time_s, 2),
                 "achieved_rate_hz": achieved_rate_hz,
                 "active_motion_rate_hz": active_motion_rate_hz,

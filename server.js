@@ -5039,7 +5039,8 @@ app.get('/api/navigation/status', (req, res) => {
           parsed.status === 'FAILED' ||
           (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED'))
         );
-        if (isTerminal) {
+        const matchesCurrentGoal = !lastDispatchedNav || !parsed.goal_id || (parsed.goal_id === lastDispatchedNav.goal_id);
+        if (isTerminal && matchesCurrentGoal) {
           if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
             triggerNav2Cancel();
             autonomyState.enabled = false;

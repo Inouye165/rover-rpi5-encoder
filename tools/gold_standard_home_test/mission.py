@@ -6,6 +6,7 @@ Deterministic 4-leg mission with strict pre-arm validation, production API dispa
 import os
 import sys
 import time
+import threading
 import math
 import requests
 from typing import Dict, Any, Optional, Tuple, Callable
@@ -112,6 +113,9 @@ class GoldStandardMission:
         self.active_nav2_goal: bool = False
         self.current_cmd_source: str = "NONE"
         self.latest_exact_cmd: Dict[str, float] = {"vx": 0.0, "wz": 0.0}
+        self.current_stage: str = "BASELINE"
+        self._stop_telemetry_event: Optional[threading.Event] = None
+        self._recorder_thread: Optional[threading.Thread] = None
 
         # Watchdog baselines
         self.initial_boot_count: Optional[int] = None
@@ -135,6 +139,40 @@ class GoldStandardMission:
             "cm": None,
             "last_packet_monotonic": time.monotonic()
         }
+
+    def start_continuous_recording(self, rate_hz: float = 25.0):
+        """
+        Starts an independent background thread that continuously records telemetry
+        from BASELINE through FINAL_DISARMED at >= 20 Hz (target 25 Hz), including all waits
+        and blocking calls. Preflight before BASELINE is cleanly excluded.
+        """
+        self.recorder.reset_start_baseline()
+        self.current_stage = "BASELINE"
+        self._stop_telemetry_event = threading.Event()
+        self._telemetry_interval = 1.0 / max(1.0, rate_hz)
+
+        def _recorder_worker():
+            while not self._stop_telemetry_event.is_set():
+                t_start = time.monotonic()
+                try:
+                    self.poll_all_telemetry()
+                    self.record_tick(self.current_stage)
+                except Exception:
+                    pass
+                elapsed = time.monotonic() - t_start
+                sleep_time = max(0.005, self._telemetry_interval - elapsed)
+                time.sleep(sleep_time)
+
+        self._recorder_thread = threading.Thread(target=_recorder_worker, daemon=True)
+        self._recorder_thread.start()
+
+    def stop_continuous_recording(self):
+        """Stops the continuous background telemetry recording thread."""
+        if self._stop_telemetry_event is not None:
+            self._stop_telemetry_event.set()
+        if self._recorder_thread is not None and self._recorder_thread.is_alive():
+            self._recorder_thread.join(timeout=1.0)
+            self._recorder_thread = None
 
     def _http_get(self, *args, **kwargs):
         if _is_mocked(requests.get, _orig_requests_get):
@@ -410,9 +448,11 @@ class GoldStandardMission:
 
             self.active_nav2_goal = False
             self.current_cmd_source = "NONE"
+            self.current_stage = "FINAL_DISARMED"
 
             # Record the confirmed final telemetry frame before writing the report
             self.record_tick("FINAL_DISARMED")
+            self.stop_continuous_recording()
         finally:
             self._in_disarm_and_stop = False
 
@@ -882,15 +922,20 @@ class GoldStandardMission:
                         # Stale status from earlier goal or missing ID; do not accept
                         pass
                     else:
-                        # Phase 1: Verify goal becomes active
+                        # Phase 1: Verify goal becomes active or is immediately rejected
                         if not goal_observed_active:
                             if status_str in ("EXECUTING", "ACTIVE"):
                                 goal_observed_active = True
-                            elif status_str in ("IDLE", "CANCELLED", "STOPPED"):
-                                # Still in initial / stale pre-start state: DO NOT accept as complete
+                            elif status_str in ("ABORTED", "FAILED"):
+                                # Nav2 immediately aborted the newly dispatched goal (fail closed)
+                                self.disarm_and_stop()
+                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
+                            elif status_str in ("IDLE", "CANCELLED", "STOPPED", "DISPATCHING"):
+                                # Still in pre-start or stale status from a previous cancellation:
+                                # DO NOT accept stale CANCELLED as completing or aborting the new goal!
                                 pass
                         
-                        # Phase 2: Once active, require SUCCEEDED
+                        # Phase 2: Once active, require SUCCEEDED or genuine abort/cancel
                         if goal_observed_active:
                             if status_str == "SUCCEEDED":
                                 # Post-goal zero and disarm verification:
@@ -927,7 +972,7 @@ class GoldStandardMission:
                                 self.active_nav2_goal = False
                                 self.current_cmd_source = "NONE"
                                 return True
-                            elif status_str in ("ABORTED", "FAILED", "CANCELLED"):
+                            elif status_str in ("ABORTED", "FAILED", "CANCELLED") or status_str.startswith("STOPPED"):
                                 self.disarm_and_stop()
                                 raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
             except Exception as e:
@@ -951,6 +996,7 @@ class GoldStandardMission:
         if self.dry_run:
             return True
 
+        self.current_stage = "AWAIT_STATIONARY"
         print("[WAIT] Awaiting Cockpit stationary-at-rest confirmation before Nav2 dispatch...")
         t_start = time.monotonic()
         last_seq = None
@@ -1000,6 +1046,7 @@ class GoldStandardMission:
         Rover starts disarmed. Dispatching Nav2 refreshes localization and arms to Mode 3.
         On success, Nav2 completes and Cockpit disarms hardware.
         """
+        self.current_stage = "LEG1_FORWARD"
         print(f"\n[LEG 1] Dispatching forward 2.000 ft ({FORWARD_DISTANCE_M:.4f} m) -> ({target_x:.4f}, {target_y:.4f})...")
         self.recorder.record_transition("LEG1_FORWARD_START", {"target": (target_x, target_y, target_yaw)})
         
@@ -1020,6 +1067,7 @@ class GoldStandardMission:
         4. Execute rotation using CALIBRATION_TEST commands.
         5. Stop, disarm to Mode 0, release ownership.
         """
+        self.current_stage = "LEG2_ROTATION"
         print(f"\n[LEG 2] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership...")
         self.recorder.record_transition("LEG2_ROTATION_START", {"target_deg": -target_cw_deg})
 
@@ -1078,6 +1126,7 @@ class GoldStandardMission:
         3. Nav2 drives to HOME coordinates retaining return heading.
         4. Nav2 reports SUCCEEDED and Cockpit disarms hardware.
         """
+        self.current_stage = "LEG3_RETURN"
         print(f"\n[LEG 3] Verifying zero handshake and dispatching Nav2 return to HOME (retaining return heading: {math.degrees(return_yaw):+.2f}°)...")
         self.recorder.record_transition("LEG3_RETURN_START", {"home": (home_x, home_y, return_yaw)})
 
@@ -1103,6 +1152,7 @@ class GoldStandardMission:
         5. Stop within 3.0° and settle for 1.5s. Timeout fails the test.
         6. Disarm to Mode 0, release ownership.
         """
+        self.current_stage = "LEG4_SETTLE"
         print(f"\n[LEG 4] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership for final HOME yaw alignment...")
         self.recorder.record_transition("LEG4_SETTLE_START")
 

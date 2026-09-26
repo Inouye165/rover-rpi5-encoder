@@ -1611,7 +1611,8 @@ class TestContractSchemasAndEdgeCases:
         assert rate_crit["whole_run_coverage_hz"] == 16.93
         assert rate_crit["active_span_s"] == round(t_end - t_start, 2)
         assert rate_crit["total_duration_s"] == 25.81
-        assert rate_crit["passed"] is True  # 22.59 >= 20.0 Hz threshold
+        # Now requires BOTH active-motion sampling and whole-run coverage >= 20 Hz (16.93 Hz fails)
+        assert rate_crit["passed"] is False
 
         assert perf["active_motion_rate_hz"] == 22.59
         assert perf["whole_run_coverage_hz"] == 16.93
@@ -1656,3 +1657,175 @@ class TestContractSchemasAndEdgeCases:
         assert meta["active_span_s"] == 1.0  # 7.5s - 6.5s
         assert meta["active_motion_rate_hz"] == 1.0  # (2-1)/1.0s = 1.0 Hz
         assert meta["whole_run_coverage_hz"] == 0.2  # 2 / 10.0s = 0.2 Hz
+
+class TestDefectCorrectionsAndRegressions:
+    def test_new_goal_generation_isolation(self):
+        """Verify that new dispatch in rover_nav_bridge increments generation and does not leak prior CANCELLED status."""
+        import sys
+        import os
+        from unittest.mock import MagicMock
+        for mod in [
+            'rclpy', 'rclpy.node', 'rclpy.action', 'rclpy.qos',
+            'nav2_msgs', 'nav2_msgs.action', 'nav2_msgs.srv',
+            'lifecycle_msgs', 'lifecycle_msgs.srv',
+            'std_srvs', 'std_srvs.srv',
+            'nav_msgs', 'nav_msgs.msg',
+            'sensor_msgs', 'sensor_msgs.msg',
+            'geometry_msgs', 'geometry_msgs.msg'
+        ]:
+            if mod not in sys.modules:
+                sys.modules[mod] = MagicMock()
+        sys.modules['rclpy.node'].Node = type('Node', (), {'__init__': lambda self, *args, **kwargs: None})
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bridge_path = os.path.join(repo_root, 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        if bridge_path not in sys.path:
+            sys.path.insert(0, bridge_path)
+        if 'rover_bringup.rover_nav_bridge' in sys.modules:
+            del sys.modules['rover_bringup.rover_nav_bridge']
+        from rover_bringup.rover_nav_bridge import RoverNavBridge
+        bridge = RoverNavBridge.__new__(RoverNavBridge)
+        bridge.active_goal_handle = None
+        bridge.active_goal_id = None
+        bridge.active_goal_generation = 0
+        bridge.active_goal_status = "IDLE"
+        bridge.active_target = None
+        bridge.nav_client = MagicMock()
+        bridge.nav_client.wait_for_server.return_value = True
+
+        # Simulate dispatch goal 1
+        mock_future = MagicMock()
+        mock_future.done.return_value = True
+        mock_future.result.return_value.accepted = True
+        mock_future.result.return_value.get_result_async.return_value = MagicMock()
+        bridge.nav_client.send_goal_async.return_value = mock_future
+        bridge.get_clock = MagicMock()
+
+        res1 = bridge.dispatch_goal(1.0, 2.0, 0.0, goal_id="goal_gen_1")
+        assert res1["ok"] is True
+        assert res1["generation"] == 1
+        assert bridge.active_goal_id == "goal_gen_1"
+        assert bridge.active_goal_status == "EXECUTING"
+
+        # Cancel goal 1
+        res_cancel = bridge.cancel_goal()
+        assert res_cancel["status"] == "CANCELLED"
+        assert bridge.active_goal_status == "CANCELLED"
+
+        # Dispatch goal 2: must advance generation and NOT start in CANCELLED status
+        res2 = bridge.dispatch_goal(3.0, 4.0, 0.0, goal_id="goal_gen_2")
+        assert res2["ok"] is True
+        assert res2["generation"] == 2
+        assert bridge.active_goal_id == "goal_gen_2"
+        assert bridge.active_goal_status == "EXECUTING"
+        assert bridge.active_goal_status != "CANCELLED"
+    def test_stale_cancelled_status_rejected_by_runner(self):
+        """Verify runner rejects stale CANCELLED status before goal is active and never hides genuine cancellations."""
+        mission = GoldStandardMission(cockpit_url="http://mock-cockpit", dry_run=False)
+        target_goal_id = "goal_leg3_test"
+
+        # Sequence:
+        # Poll 1: Stale status from previous goal (CANCELLED under old goal ID) -> ignored
+        # Poll 2: Stale CANCELLED under matching goal_id before EXECUTING -> ignored
+        # Poll 3: Goal becomes EXECUTING -> observed active
+        # Poll 4: Goal genuinely CANCELLED -> aborts with genuine cancellation
+        poll_count = 0
+        def mock_status_get(*args, **kwargs):
+            nonlocal poll_count
+            poll_count += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if poll_count == 1:
+                resp.json.return_value = {"ok": True, "status": "CANCELLED", "goal_id": "old_stale_goal"}
+            elif poll_count == 2:
+                resp.json.return_value = {"ok": True, "status": "CANCELLED", "goal_id": target_goal_id}
+            elif poll_count == 3:
+                resp.json.return_value = {"ok": True, "status": "EXECUTING", "goal_id": target_goal_id}
+            else:
+                resp.json.return_value = {"ok": True, "status": "CANCELLED", "goal_id": target_goal_id}
+            return resp
+
+        mission._http_get = mock_status_get
+        mission.poll_all_telemetry = MagicMock()
+        mission.verify_safety_invariants = MagicMock()
+        mission.record_tick = MagicMock()
+        mission.disarm_and_stop = MagicMock()
+
+        with pytest.raises(MissionAbortException) as exc_info:
+            mission.wait_for_nav2_completion_and_zero(timeout_s=1.0, stage_name="LEG3_RETURN", goal_id=target_goal_id)
+
+        assert "Nav2 goal aborted by navigation stack: CANCELLED" in str(exc_info.value)
+        assert poll_count >= 4  # Proves poll 1 and 2 were rejected as stale before poll 3 observed active
+
+    def test_continuous_telemetry_during_blocking_waits(self):
+        """Verify continuous telemetry background recording from BASELINE to FINAL_DISARMED at >= 20 Hz."""
+        mission = GoldStandardMission(cockpit_url="http://mock-cockpit", dry_run=False)
+        mission.poll_all_telemetry = MagicMock()
+        mission.record_tick = MagicMock()
+
+        # Start continuous recording at 25 Hz
+        mission.start_continuous_recording(rate_hz=25.0)
+        assert mission._recorder_thread is not None
+        assert mission._recorder_thread.is_alive()
+        assert mission.current_stage == "BASELINE"
+
+        # Simulate blocking wait (e.g. 0.2s sleep during a blocking API call)
+        time.sleep(0.2)
+
+        # Transition stage
+        mission.current_stage = "LEG1_FORWARD"
+        time.sleep(0.2)
+
+        mission.stop_continuous_recording()
+        assert not mission._recorder_thread
+
+        # Verify frames were recorded continuously in background
+        assert mission.poll_all_telemetry.call_count >= 8
+
+    def test_outbound_distance_calculation(self):
+        """Verify outbound distance measures accurately from settled BASELINE AMCL pose to end of Leg 1."""
+        samples = [
+            {"mission_stage": "BASELINE", "t_rel_s": 0.0, "amcl": {"x": 1.2135, "y": -0.0614, "yaw_deg": -5.05}, "drive": {"armed": False, "mode": 0}},
+            {"mission_stage": "LEG1_FORWARD", "t_rel_s": 0.5, "amcl": {"x": 1.5000, "y": -0.0800, "yaw_deg": -5.05}, "drive": {"armed": True, "mode": 3}},
+            {"mission_stage": "LEG1_FORWARD", "t_rel_s": 2.5, "amcl": {"x": 1.7583, "y": -0.1417, "yaw_deg": -17.5}, "drive": {"armed": False, "mode": 0}},
+        ]
+        run_data = {
+            "metadata": {"duration_s": 2.5, "active_motion_rate_hz": 25.0, "whole_run_coverage_hz": 25.0},
+            "samples": samples
+        }
+        grade = MissionGrader.grade_run(run_data)
+        outbound_dist = grade["metrics"]["outbound_distance_m"]
+        expected_dist = round(math.hypot(1.7583 - 1.2135, -0.1417 - (-0.0614)), 4)
+        assert outbound_dist == expected_dist
+        assert outbound_dist == 0.5507  # Exactly 0.5507 m (stopping 5.89 cm short of 0.6096 m)
+
+    def test_target_crossing_metrics_no_crossing_reported(self):
+        """Verify target crossing metrics report 'no crossing' when target approached without overshoot."""
+        # Simulated run where Leg 2 stopped at 178.8 deg CW without crossing 180 deg,
+        # with small sensor noise near start that previously caused 359.999%360 false crossing
+        leg2_samples = [
+            {"mission_stage": "LEG2_ROTATION", "t_rel_s": 10.0, "imu": {"raw_yaw_deg": 7.797, "rel_yaw_deg": 0.0}, "final_cmd": {"wz": 0.0}},
+            {"mission_stage": "LEG2_ROTATION", "t_rel_s": 10.1, "imu": {"raw_yaw_deg": 7.798, "rel_yaw_deg": -0.001}, "final_cmd": {"wz": -0.4}},
+            {"mission_stage": "LEG2_ROTATION", "t_rel_s": 12.0, "imu": {"raw_yaw_deg": -82.0, "rel_yaw_deg": -90.0}, "final_cmd": {"wz": -0.4}},
+            {"mission_stage": "LEG2_ROTATION", "t_rel_s": 18.26, "imu": {"raw_yaw_deg": -171.0, "rel_yaw_deg": -178.8}, "final_cmd": {"wz": 0.0}},
+        ]
+        run_data = {
+            "metadata": {
+                "duration_s": 49.889,
+                "active_motion_rate_hz": 23.37,
+                "whole_run_coverage_hz": 11.1  # 11.1 Hz whole-run coverage must NOT pass
+            },
+            "samples": leg2_samples
+        }
+        grade = MissionGrader.grade_run(run_data)
+        rev_crit = grade["criteria"]["corrective_reversals"]
+        assert rev_crit["target_crossed"] is False
+        assert rev_crit["target_crossing_status"] == "no crossing"
+        assert rev_crit["settling_time_after_crossing_s"] is None  # Does NOT fabricate 8.26s!
+        assert grade["metrics"]["settling_time_after_target_crossing_s"] is None
+
+        # 11.1 Hz whole-run coverage must fail
+        rate_crit = grade["criteria"]["recorder_sample_rate"]
+        assert rate_crit["whole_run_coverage_hz"] == 11.1
+        assert rate_crit["passed"] is False
+        assert grade["overall_status"] == "FAIL"

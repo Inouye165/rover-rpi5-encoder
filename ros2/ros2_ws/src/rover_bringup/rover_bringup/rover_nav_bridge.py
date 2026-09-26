@@ -50,6 +50,8 @@ class RoverNavBridge(Node):
         self.latest_global_plan = []
         self.latest_local_plan = []
         self.active_goal_handle = None
+        self.active_goal_id = None
+        self.active_goal_generation = 0
         self.active_goal_status = "IDLE"
         self.active_target = None
 
@@ -400,8 +402,22 @@ class RoverNavBridge(Node):
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/navigate_to_pose action server unavailable"}
 
-        # Cancel any previous goal
-        self.cancel_goal()
+        # Advance generation for the new dispatch
+        self.active_goal_generation += 1
+        current_gen = self.active_goal_generation
+        new_goal_id = str(goal_id) if goal_id else f"goal_{int(time.time()*1000)}_{current_gen}"
+
+        # Cleanly cancel any previous active handle without leaking CANCELLED status into new_goal_id
+        if self.active_goal_handle is not None:
+            try:
+                self.active_goal_handle.cancel_goal_async()
+            except Exception:
+                pass
+            self.active_goal_handle = None
+
+        self.active_goal_id = new_goal_id
+        self.active_goal_status = "DISPATCHING"
+        self.active_target = {"x": target_x, "y": target_y, "yaw": target_yaw}
 
         # If position_goal_checker is requested and no explicit BT provided, select position-only BT
         if goal_checker == "position_goal_checker" and not behavior_tree:
@@ -424,14 +440,32 @@ class RoverNavBridge(Node):
             time.sleep(0.02)
 
         if not future.done() or not future.result().accepted:
-            return {"ok": False, "error": "Goal was rejected by /navigate_to_pose action server"}
+            if self.active_goal_generation == current_gen:
+                self.active_goal_status = "REJECTED"
+                self.active_goal_handle = None
+            return {
+                "ok": False,
+                "error": "Goal was rejected by /navigate_to_pose action server",
+                "goal_id": new_goal_id,
+                "generation": current_gen
+            }
+
+        if self.active_goal_generation != current_gen:
+            # Superseded by newer dispatch
+            return {
+                "ok": False,
+                "error": "Superseded by newer dispatch",
+                "goal_id": new_goal_id,
+                "generation": current_gen
+            }
 
         self.active_goal_handle = future.result()
-        self.active_goal_id = str(goal_id) if goal_id else str(uuid.uuid4())
         self.active_goal_status = "EXECUTING"
-        self.active_target = {"x": target_x, "y": target_y, "yaw": target_yaw}
 
-        def _on_done(f):
+        def _on_done(f, gen=current_gen, gid=new_goal_id):
+            if self.active_goal_generation != gen:
+                # Stale completion from an earlier goal generation; ignore!
+                return
             try:
                 res = f.result()
                 status = res.status
@@ -440,6 +474,8 @@ class RoverNavBridge(Node):
                     self.active_goal_status = "SUCCEEDED"
                 elif status == 5:
                     self.active_goal_status = "CANCELLED"
+                elif status == 6:
+                    self.active_goal_status = "ABORTED"
                 else:
                     self.active_goal_status = f"STOPPED_STATUS_{status}"
             except Exception:
@@ -449,7 +485,13 @@ class RoverNavBridge(Node):
         res_fut = self.active_goal_handle.get_result_async()
         res_fut.add_done_callback(_on_done)
 
-        return {"ok": True, "status": "EXECUTING", "goal_id": self.active_goal_id, "target": self.active_target}
+        return {
+            "ok": True,
+            "status": "EXECUTING",
+            "goal_id": self.active_goal_id,
+            "generation": current_gen,
+            "target": self.active_target
+        }
 
     def request_nomotion_update(self, timeout_sec=1.5):
         """Requests an instantaneous AMCL no-motion particle filter update."""
@@ -467,8 +509,18 @@ class RoverNavBridge(Node):
         except Exception as err:
             return {"ok": False, "error": f"Error calling nomotion service: {err}"}
 
-    def cancel_goal(self):
+    def cancel_goal(self, target_goal_id=None):
         cancelled = False
+        if target_goal_id and self.active_goal_id and self.active_goal_id != target_goal_id:
+            return {
+                "ok": True,
+                "status": self.active_goal_status,
+                "cancelled": False,
+                "ignored": "goal_id_mismatch",
+                "goal_id": self.active_goal_id
+            }
+
+        cancelled_id = self.active_goal_id
         if self.active_goal_handle is not None:
             try:
                 self.active_goal_handle.cancel_goal_async()
@@ -485,9 +537,14 @@ class RoverNavBridge(Node):
             pass
 
         self.active_goal_status = "CANCELLED"
-        self.active_goal_id = None
         self.latest_local_plan = []
-        return {"ok": True, "status": "CANCELLED", "cancelled": cancelled}
+        return {
+            "ok": True,
+            "status": "CANCELLED",
+            "cancelled": cancelled,
+            "goal_id": cancelled_id,
+            "generation": self.active_goal_generation
+        }
 
 
 bridge_node = None
@@ -562,6 +619,7 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "status": bridge_node.active_goal_status,
                 "goal_id": getattr(bridge_node, 'active_goal_id', None),
+                "generation": getattr(bridge_node, 'active_goal_generation', 0),
                 "target": bridge_node.active_target,
                 "distance_remaining_m": round(dist_rem, 3),
                 "global_path": bridge_node.latest_global_plan,
