@@ -5055,19 +5055,7 @@ app.get('/api/navigation/status', (req, res) => {
               const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
               serialPort.write(disarmPkt);
             }
-            if (latestNormalDriveStatus) {
-              latestNormalDriveStatus = {
-                ...latestNormalDriveStatus,
-                armed: false,
-                mode: 0,
-                reqLinear: 0.0,
-                reqAngular: 0.0,
-                limLinear: 0.0,
-                limAngular: 0.0,
-                cmdSource: 'NONE'
-              };
-            }
-            broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0, mode: 0, cmdSource: 'NONE' });
+
             broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
           }
         }

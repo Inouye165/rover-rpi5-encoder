@@ -1136,10 +1136,11 @@ class TestContractSchemasAndEdgeCases:
         mission = GoldStandardMission(dry_run=False)
         target_goal_id = "dispatch_unique_999"
         nav_poll_count = 0
+        drive_poll_count = 0
         status_seq = 0
 
         def mock_get(url, **kwargs):
-            nonlocal nav_poll_count, status_seq
+            nonlocal nav_poll_count, drive_poll_count, status_seq
             status_seq += 1
             resp = MagicMock()
             resp.status_code = 200
@@ -1156,8 +1157,10 @@ class TestContractSchemasAndEdgeCases:
                         "ok": True, "status": "SUCCEEDED", "goal_id": target_goal_id, "distance_remaining_m": 0.0
                     }
             elif "/api/drive/status" in url:
-                # During ACTIVE (nav_poll <= 2), armed Mode 3; on SUCCEEDED (nav_poll > 2), Cockpit disarms to Mode 0 NONE
-                is_armed = (nav_poll_count <= 2)
+                drive_poll_count += 1
+                # Status remains armed immediately after SUCCEEDED until simulated ESP32 packet confirms disarm
+                # (drive_poll_count <= 4 simulates ESP32 packet delay; drive_poll_count >= 5 confirms disarm)
+                is_armed = (drive_poll_count <= 4)
                 resp.json.return_value = {
                     "ok": True,
                     "status": {
@@ -1190,8 +1193,76 @@ class TestContractSchemasAndEdgeCases:
              patch("time.sleep", return_value=None):
             res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_LEG", goal_id=target_goal_id)
             assert res is True
+            assert drive_poll_count >= 5  # Proves runner waited through initial armed samples for ESP32 confirmation
             assert mission.active_nav2_goal is False
             assert mission.current_cmd_source == "NONE"
+
+    def test_nav2_disarm_timeout_fails_closed_if_esp32_never_confirms(self):
+        """Contract: If ESP32 telemetry never confirms disarm after Nav2 SUCCEEDED, verification times out and fails closed."""
+        mission = GoldStandardMission(dry_run=False)
+        target_goal_id = "dispatch_unconfirmed_999"
+        status_seq = 0
+        m_time = 100.0
+
+        nav_polls = 0
+        def mock_get(url, **kwargs):
+            nonlocal status_seq, nav_polls
+            status_seq += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/navigation/status" in url:
+                nav_polls += 1
+                if nav_polls == 1:
+                    resp.json.return_value = {
+                        "ok": True, "status": "ACTIVE", "goal_id": target_goal_id, "distance_remaining_m": 0.30
+                    }
+                else:
+                    resp.json.return_value = {
+                        "ok": True, "status": "SUCCEEDED", "goal_id": target_goal_id, "distance_remaining_m": 0.0
+                    }
+            elif "/api/drive/status" in url:
+                # ESP32 NEVER confirms disarm: remains armed Mode 3
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": True,
+                        "mode": 3,
+                        "bootCount": 1,
+                        "reqLinear": 0.0,
+                        "reqAngular": 0.0,
+                        "limLinear": 0.0,
+                        "limAngular": 0.0,
+                        "cmdSource": "ROS_AUTONOMY",
+                        "seq": status_seq
+                    }
+                }
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "ageMs": 10}
+            elif "/api/imu" in url:
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": status_seq, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+            elif "/api/odom" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0}
+            elif "/api/encoders" in url:
+                resp.json.return_value = {"ok": True, "sequence": status_seq, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        def mock_time():
+            nonlocal m_time
+            m_time += 0.20  # Advance time so 3.0s verify window expires
+            return m_time
+
+        with patch("requests.get", side_effect=mock_get), \
+             patch("time.monotonic", side_effect=mock_time), \
+             patch("time.sleep", return_value=None), \
+             patch.object(mission, "disarm_and_stop") as mock_disarm:
+            with pytest.raises(MissionAbortException) as exc:
+                mission.wait_for_nav2_completion_and_zero(timeout_s=5.0, stage_name="TEST_LEG", goal_id=target_goal_id)
+            assert "post-goal check failed" in str(exc.value)
+            mock_disarm.assert_called_once()
 
     def test_missing_or_empty_goal_id_strictly_rejected(self):
         """Contract: Exact nonempty goal_id is required; missing or empty IDs fail closed immediately."""
