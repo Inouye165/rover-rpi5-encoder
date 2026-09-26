@@ -9,6 +9,7 @@ import time
 import argparse
 import math
 import json
+import requests
 from typing import Dict, Any
 
 from .constants import (
@@ -130,16 +131,25 @@ def run_cli():
         sys.exit(1)
 
     # Query current AMCL pose
-    initial_amcl = {"x": mission.home_pose["x"], "y": mission.home_pose["y"], "yaw_deg": mission.home_pose["yaw_deg"]}
+    initial_amcl = {
+        "x": mission.home_pose["x"],
+        "y": mission.home_pose["y"],
+        "yaw_deg": mission.home_pose["yaw_deg"],
+        "yaw_rad": mission.home_pose["yaw_rad"],
+    }
     try:
         r = requests.get(f"{args.cockpit_url}/api/localization/status", timeout=1.0)
         if r.status_code == 200:
             loc = r.json()
-            pose = loc.get("pose", {})
-            if pose and "x" in pose and "y" in pose:
-                initial_amcl = pose
-    except Exception:
-        pass
+            if "x" in loc and "y" in loc:
+                initial_amcl = {
+                    "x": float(loc.get("x", 0.0)),
+                    "y": float(loc.get("y", 0.0)),
+                    "yaw_deg": float(loc.get("yawDeg", loc.get("yaw_deg", 0.0))),
+                    "yaw_rad": float(loc.get("yaw", loc.get("yaw_rad", 0.0))),
+                }
+    except Exception as e:
+        print(f"[WARN] Could not fetch AMCL status from {args.cockpit_url}: {e}")
 
     gate_ok, gate_msg, pos_err, yaw_err = mission.check_pre_arm_gate(initial_amcl)
     
