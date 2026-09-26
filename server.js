@@ -4516,9 +4516,11 @@ app.get('/api/localization/status', (req, res) => {
 // ────────────────────────────────────────────────────────────
 const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 let cachedNavMap = null;
+let cachedNavMapTime = 0;
 
 app.get('/api/navigation/map', (req, res) => {
-  if (cachedNavMap) {
+  const now = Date.now();
+  if (cachedNavMap && (now - cachedNavMapTime < 2000) && req.query.refresh !== '1') {
     return res.json(cachedNavMap);
   }
   const httpReq = http.get(`${ROVER_NAV_BRIDGE_URL}/api/nav/map`, { timeout: 3000 }, (bridgeRes) => {
@@ -4529,6 +4531,7 @@ app.get('/api/navigation/map', (req, res) => {
         const parsed = JSON.parse(data);
         if (parsed && parsed.ok) {
           cachedNavMap = parsed;
+          cachedNavMapTime = Date.now();
         }
         res.status(bridgeRes.statusCode).json(parsed);
       } catch (err) {

@@ -16,7 +16,17 @@ def generate_launch_description():
     nav2_bringup_share = get_package_share_directory('nav2_bringup')
 
     default_params_file = os.path.join(pkg_share, 'config', 'nav2_params.yaml')
-    default_map_file = os.path.join('/ros2_ws', 'maps', 'house_slam_2026-08-23_final.yaml')
+    candidate_map_file = os.path.join('/ros2_ws', 'maps', 'house_slam_2026-09-23_candidate_hallway.yaml')
+    active_txt = os.path.join('/ros2_ws', 'maps', 'active_map_path.txt')
+    default_map_file = candidate_map_file
+    if os.path.exists(active_txt):
+        try:
+            with open(active_txt, 'r') as f:
+                val = f.read().strip()
+                if val and os.path.exists(val):
+                    default_map_file = val
+        except Exception:
+            pass
 
     params_file = LaunchConfiguration('params_file')
     map_yaml_file = LaunchConfiguration('map')

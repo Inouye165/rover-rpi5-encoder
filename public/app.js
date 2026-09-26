@@ -6888,7 +6888,17 @@ function updateLocalizationUI(loc) {
   let navStatus = "IDLE";
   let pollInterval = null;
 
-  const SCALE = 5.0;
+  let SCALE = 3.5;
+
+  function updateCanvasDimensions() {
+    if (!mapData || !canvas) return;
+    const cardEl = document.getElementById('autonomy-map-card');
+    const availWidth = cardEl ? cardEl.clientWidth - 380 : (window.innerWidth - 450);
+    const maxTargetWidth = Math.max(600, Math.min(availWidth, 1200));
+    SCALE = Math.max(2.0, Math.min(5.0, Math.round((maxTargetWidth / mapData.width) * 10) / 10));
+    canvas.width = Math.round(mapData.width * SCALE);
+    canvas.height = Math.round(mapData.height * SCALE);
+  }
 
   function worldToCanvas(x, y) {
     if (!mapData) return [0, 0];
@@ -7098,10 +7108,11 @@ function updateLocalizationUI(loc) {
 
   async function fetchMap() {
     try {
-      const res = await fetch('/api/navigation/map');
+      const res = await fetch('/api/navigation/map?refresh=1');
       const data = await res.json();
       if (data && data.ok) {
         mapData = data;
+        updateCanvasDimensions();
         buildMapBitmap();
         const badge = document.getElementById('v2-map-badge');
         if (badge) {
@@ -7755,6 +7766,13 @@ function updateLocalizationUI(loc) {
     currentRobotPose.yawDeg = yawDeg;
     renderMap();
   };
+
+  window.addEventListener('resize', () => {
+    if (mapData) {
+      updateCanvasDimensions();
+      renderMap();
+    }
+  });
 
   fetchMap();
   fetchHome();

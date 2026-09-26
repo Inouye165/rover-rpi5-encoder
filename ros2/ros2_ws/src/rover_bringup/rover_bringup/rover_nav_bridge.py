@@ -13,7 +13,9 @@ import os
 import json
 import time
 import math
+import subprocess
 import threading
+import yaml
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 
@@ -27,8 +29,8 @@ from nav_msgs.msg import Path
 
 DEFAULT_PORT = 3005
 ODOM_API_URL = "http://127.0.0.1:3003/api/odom"
-MAP_YAML_PATH = "/ros2_ws/maps/house_slam_2026-08-23_final.yaml"
-MAP_PGM_PATH = "/ros2_ws/maps/house_slam_2026-08-23_final.pgm"
+MAP_YAML_PATH = "/ros2_ws/maps/house_slam_2026-09-23_candidate_hallway.yaml"
+MAP_PGM_PATH = "/ros2_ws/maps/house_slam_2026-09-23_candidate_hallway.pgm"
 
 class RoverNavBridge(Node):
     def __init__(self):
@@ -68,12 +70,59 @@ class RoverNavBridge(Node):
     def _local_plan_cb(self, msg: Path):
         self.latest_local_plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses]
 
+    def _get_active_home_pose_path(self):
+        pointer_files = [
+            "/ros2_ws/maps/home_pose_slam_2026-09-23_candidate_hallway.json",
+            "/ros2_ws/maps/home_pose_slam.json",
+            "/ros2_ws/maps/home_pose_slam_2026-08-23_final.json",
+            "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam_2026-09-23_candidate_hallway.json",
+            "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam.json",
+            "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam_2026-08-23_final.json",
+            "/home/ron/yahboom-encoder/home_pose_slam.json",
+        ]
+        for pf in pointer_files:
+            if os.path.exists(pf):
+                return pf
+        return "/ros2_ws/maps/home_pose_slam.json"
+
+    def _get_active_yaml_path(self):
+        pointer_files = [
+            "/ros2_ws/maps/active_map_path.txt",
+            "/tmp/active_map_path.txt",
+            "/home/ron/yahboom-encoder/ros2/volumes/maps/active_map_path.txt"
+        ]
+        for pf in pointer_files:
+            if os.path.exists(pf):
+                try:
+                    with open(pf, "r") as f:
+                        val = f.read().strip()
+                        if val and os.path.exists(val):
+                            return val
+                except Exception:
+                    pass
+        return os.environ.get("ROVER_ACTIVE_MAP_YAML", MAP_YAML_PATH)
+
     def _load_map(self):
         try:
-            pgm_path = MAP_PGM_PATH if os.path.exists(MAP_PGM_PATH) else "/home/ron/yahboom-encoder/ros2/volumes/maps/house_slam_2026-08-23_final.pgm"
+            yaml_path = self._get_active_yaml_path()
+            if not os.path.exists(yaml_path):
+                self.get_logger().warn(f"Map YAML not found at {yaml_path}")
+                return getattr(self, 'map_cache', None)
+
+            mtime = os.path.getmtime(yaml_path)
+            if getattr(self, 'active_yaml_path', None) == yaml_path and getattr(self, 'active_yaml_mtime', None) == mtime and getattr(self, 'map_cache', None):
+                return self.map_cache
+
+            with open(yaml_path, 'r') as f:
+                ydata = yaml.safe_load(f)
+
+            res = float(ydata.get('resolution', 0.05))
+            origin = [float(x) for x in ydata.get('origin', [-0.746, -5.035, 0.0])]
+            img_rel = ydata.get('image', '')
+            pgm_path = os.path.join(os.path.dirname(yaml_path), img_rel)
             if not os.path.exists(pgm_path):
-                self.get_logger().warn(f"Map PGM file not found at {pgm_path}")
-                return None
+                self.get_logger().warn(f"Map PGM not found at {pgm_path}")
+                return getattr(self, 'map_cache', None)
 
             with open(pgm_path, "rb") as f:
                 buf = f.read()
@@ -88,21 +137,26 @@ class RoverNavBridge(Node):
                         break
 
             header_str = buf[:header_end].decode('ascii', errors='ignore')
-            lines = [l.strip() for l in header_str.split('\n') if l.strip() and not l.startswith('#')]
+            lines = [l.strip() for l in header_str.splitlines() if l.strip() and not l.startswith('#')]
             w, h = map(int, lines[1].split())
             pixels = list(buf[header_end:])
 
-            return {
+            self.active_yaml_path = yaml_path
+            self.active_yaml_mtime = mtime
+            self.map_cache = {
                 "ok": True,
+                "map_name": os.path.basename(yaml_path),
                 "width": w,
                 "height": h,
-                "resolution": 0.050,
-                "origin": [-0.746, -5.035, 0.0],
+                "resolution": res,
+                "origin": origin,
                 "pixels": pixels
             }
+            self.get_logger().info(f"Loaded active map from {yaml_path}: {w}x{h} @ {res}m/px, origin={origin}")
+            return self.map_cache
         except Exception as e:
             self.get_logger().error(f"Failed to load map: {e}")
-            return None
+            return getattr(self, 'map_cache', None)
 
     def compute_plan(self, start_x, start_y, start_yaw, target_x, target_y, target_yaw):
         t_req_start = time.perf_counter()
@@ -293,16 +347,15 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             self._send_json(503, {"ok": False, "error": "Bridge node uninitialized"})
             return
 
-        if self.path == '/api/nav/map':
-            if bridge_node.map_cache:
-                self._send_json(200, bridge_node.map_cache)
+        if self.path.startswith('/api/nav/map'):
+            map_data = bridge_node._load_map()
+            if map_data:
+                self._send_json(200, map_data)
             else:
                 self._send_json(404, {"ok": False, "error": "Map not loaded"})
 
         elif self.path == '/api/nav/home':
-            home_path = "/ros2_ws/maps/home_pose_slam_2026-08-23_final.json"
-            if not os.path.exists(home_path):
-                home_path = "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam_2026-08-23_final.json"
+            home_path = bridge_node._get_active_home_pose_path()
             if os.path.exists(home_path):
                 try:
                     with open(home_path, "r") as f:
@@ -312,11 +365,11 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                     self._send_json(200, {
                         "ok": True,
                         "home": {
-                            "x": pos.get("x", 1.166746),
-                            "y": pos.get("y", -0.110614),
-                            "yaw_deg": ori.get("yaw_deg", -8.3401),
-                            "yaw_rad": ori.get("yaw_rad", -0.145563),
-                            "description": home_json.get("description", "Permanent verified HOME pose")
+                            "x": pos.get("x", 1.193853),
+                            "y": pos.get("y", -0.045221),
+                            "yaw_deg": ori.get("yaw_deg", -5.047),
+                            "yaw_rad": ori.get("yaw_rad", -0.088087),
+                            "description": home_json.get("description", "Permanent verified HOME pose settled on floor at x=1.193853, y=-0.045221, yaw=-5.047 deg")
                         }
                     })
                     return

@@ -9,11 +9,17 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     pkg_share = get_package_share_directory('rover_bringup')
 
-    default_map = os.path.join(
-        '/ros2_ws',
-        'maps',
-        'house_slam_2026-08-23_final.yaml'
-    )
+    candidate_map = os.path.join('/ros2_ws', 'maps', 'house_slam_2026-09-23_candidate_hallway.yaml')
+    active_txt = os.path.join('/ros2_ws', 'maps', 'active_map_path.txt')
+    default_map = candidate_map
+    if os.path.exists(active_txt):
+        try:
+            with open(active_txt, 'r') as f:
+                val = f.read().strip()
+                if val and os.path.exists(val):
+                    default_map = val
+        except Exception:
+            pass
     default_params = os.path.join(pkg_share, 'config', 'nav2_params.yaml')
 
     map_arg = DeclareLaunchArgument(
