@@ -5003,11 +5003,11 @@ app.get('/api/navigation/home', (req, res) => {
     });
   });
   httpReq.on('error', (err) => {
-    res.status(503).json({ ok: false, error: err.message });
+    if (!res.headersSent) res.status(503).json({ ok: false, error: err.message });
   });
   httpReq.on('timeout', () => {
     httpReq.destroy();
-    res.status(504).json({ ok: false, error: 'Home request timed out' });
+    if (!res.headersSent) res.status(504).json({ ok: false, error: 'Home request timed out' });
   });
 });
 
@@ -5042,11 +5042,11 @@ app.get('/api/navigation/status', (req, res) => {
     });
   });
   httpReq.on('error', (err) => {
-    res.status(503).json({ ok: false, error: err.message });
+    if (!res.headersSent) res.status(503).json({ ok: false, error: err.message });
   });
   httpReq.on('timeout', () => {
     httpReq.destroy();
-    res.status(504).json({ ok: false, error: 'Status timed out' });
+    if (!res.headersSent) res.status(504).json({ ok: false, error: 'Status timed out' });
   });
 });
 
