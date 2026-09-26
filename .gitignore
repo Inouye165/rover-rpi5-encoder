@@ -77,7 +77,9 @@ deploy_via_ssh*.js
 run_deploy_transcript.ps1
 *.before_*
 ros2/ros2_ws/core
-ros2/maps/
+ros2/maps/*
+!ros2/maps/production/
+!ros2/maps/production/**
 serialize_map_service.py
 ros2/ros2_ws/src/rover_bringup/rover_bringup/measure_tf_lag.py
 

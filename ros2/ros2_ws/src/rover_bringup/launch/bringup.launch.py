@@ -49,6 +49,8 @@ def generate_launch_description():
         launch_arguments={
             'map': LaunchConfiguration('map'),
             'params_file': LaunchConfiguration('params_file'),
+            'autostart_navigation': 'true',
+            'autostart': 'true',
         }.items()
     )
 

@@ -325,6 +325,20 @@ def main():
         sys.exit(1)
     print("Remote git checkout updated successfully.")
 
+    print("\n=== 3b. Installing Canonical Production Maps to Volumes ===")
+    install_map_cmd = """
+    mkdir -p /home/ron/yahboom-encoder/ros2/volumes/maps && \
+    cp -u /home/ron/yahboom-encoder/ros2/maps/production/* /home/ron/yahboom-encoder/ros2/volumes/maps/ 2>/dev/null || \
+    cp /home/ron/yahboom-encoder/ros2/maps/production/* /home/ron/yahboom-encoder/ros2/volumes/maps/ && \
+    chmod 664 /home/ron/yahboom-encoder/ros2/volumes/maps/* 2>/dev/null || true
+    """
+    exit_code, out, err = exec_remote(client, install_map_cmd, password)
+    if exit_code != 0:
+        print(f"ERROR: Failed to install canonical maps to volumes:\n{err}", file=sys.stderr)
+        client.close()
+        sys.exit(1)
+    print(" [OK] Canonical production map assets verified installed in ros2/volumes/maps")
+
     exit_code, pi_head, _ = exec_remote(client, "cd /home/ron/yahboom-encoder && git rev-parse HEAD")
     pi_head = pi_head.strip()
     print(f"Remote Pi HEAD: {pi_head}")
