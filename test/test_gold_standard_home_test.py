@@ -1295,3 +1295,122 @@ class TestContractSchemasAndEdgeCases:
         assert last_frame["smoothed_cmd"] is None
         assert last_frame["final_cmd"]["vx"] == 0.0
         assert last_frame["final_cmd"]["wz"] == 0.35  # Must capture real limited angular velocity!
+
+    def test_delayed_esp32_disarm_confirmation_retries_and_succeeds(self):
+        """Contract: disarm() does not abort on immediate stale sample; retries and waits for ESP32 confirmation."""
+        mission = GoldStandardMission(dry_run=False)
+        poll_count = 0
+        status_seq = 0
+
+        def mock_get(url, **kwargs):
+            nonlocal poll_count, status_seq
+            status_seq += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/drive/status" in url:
+                poll_count += 1
+                # Polls 1-3: ESP32 has not processed disarm yet; still reports armed Mode 3
+                # Poll 4+: ESP32 telemetry packet confirms disarmed Mode 0
+                is_armed = (poll_count <= 3)
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": is_armed,
+                        "mode": 3 if is_armed else 0,
+                        "bootCount": 1,
+                        "reqLinear": 0.0,
+                        "reqAngular": 0.0,
+                        "limLinear": 0.0,
+                        "limAngular": 0.0,
+                        "cmdSource": "ROS_AUTONOMY" if is_armed else "NONE",
+                        "seq": status_seq
+                    }
+                }
+            elif "/api/imu" in url:
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": status_seq, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        post_disarm_count = 0
+        def mock_post(url, **kwargs):
+            nonlocal post_disarm_count
+            if "/api/drive/disarm" in url:
+                post_disarm_count += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get), \
+             patch("requests.post", side_effect=mock_post), \
+             patch("time.sleep", return_value=None):
+            res = mission.disarm(timeout_s=3.0)
+            assert res is True
+            assert poll_count >= 4
+            assert post_disarm_count >= 1
+
+    def test_leg1_measures_distance_from_offset_start_pose_along_home_heading(self):
+        """Contract: Leg 1 measures 0.6096 m from fresh preflight AMCL start pose along saved HOME heading, while Leg 3 returns to saved HOME."""
+        mission = GoldStandardMission(dry_run=True)
+        h = mission.home_pose
+        # Start pose offset by +3.0 cm X, -2.0 cm Y from saved HOME (hypot = 3.6 cm <= 5.0 cm allowed)
+        offset_start = {
+            "x": h["x"] + 0.030,
+            "y": h["y"] - 0.020,
+            "yaw_deg": h["yaw_deg"],
+            "yaw_rad": h["yaw_rad"],
+            "localized": True,
+            "state": "LOCALIZED"
+        }
+        gate_ok, gate_msg, pos_err, yaw_err = mission.check_pre_arm_gate(offset_start)
+        assert gate_ok is True
+        assert pos_err < 0.05
+
+        targets = mission.compute_mission_targets(start_pose=offset_start)
+
+        # Leg 1 outbound starts from offset_start along saved HOME heading
+        expected_l1_x = offset_start["x"] + FORWARD_DISTANCE_M * math.cos(h["yaw_rad"])
+        expected_l1_y = offset_start["y"] + FORWARD_DISTANCE_M * math.sin(h["yaw_rad"])
+        assert math.isclose(targets["leg1_outbound"]["x"], expected_l1_x, abs_tol=1e-4)
+        assert math.isclose(targets["leg1_outbound"]["y"], expected_l1_y, abs_tol=1e-4)
+        assert math.isclose(targets["leg1_outbound"]["yaw_rad"], h["yaw_rad"], abs_tol=1e-4)
+
+        # Leg 3 return MUST still target exact authoritative saved HOME coordinates (not offset start!)
+        assert math.isclose(targets["leg3_return"]["x"], h["x"], abs_tol=1e-4)
+        assert math.isclose(targets["leg3_return"]["y"], h["y"], abs_tol=1e-4)
+
+    def test_baseline_telemetry_frame_captured_and_graded(self):
+        """Contract: MissionGrader grades outbound distance relative to BASELINE telemetry frame."""
+        h_x, h_y = 1.0, 2.0
+        start_x, start_y = 1.03, 1.98 # Offset start pose
+        end_l1_x = start_x + FORWARD_DISTANCE_M
+        end_l1_y = start_y
+
+        run_data = {
+            "metadata": {"total_frames": 3, "sample_rate_hz": 25.0},
+            "transitions": [],
+            "samples": [
+                {
+                    "t_rel_s": 0.0, "mission_stage": "BASELINE",
+                    "amcl": {"x": start_x, "y": start_y, "yaw_deg": 0.0, "localized": True},
+                    "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"},
+                    "to_home": {"pos_err_m": 0.036, "yaw_err_deg": 0.0}
+                },
+                {
+                    "t_rel_s": 1.0, "mission_stage": "LEG1_FORWARD",
+                    "amcl": {"x": end_l1_x, "y": end_l1_y, "yaw_deg": 0.0, "localized": True},
+                    "drive": {"armed": True, "mode": 3, "reqLinear": 0.20, "reqAngular": 0, "limLinear": 0.20, "limAngular": 0, "cmdSource": "ROS_AUTONOMY"},
+                    "to_home": {"pos_err_m": 0.64, "yaw_err_deg": 0.0}
+                },
+                {
+                    "t_rel_s": 2.0, "mission_stage": "FINAL_DISARMED",
+                    "amcl": {"x": h_x, "y": h_y, "yaw_deg": 0.0, "localized": True},
+                    "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"},
+                    "to_home": {"pos_err_m": 0.0, "yaw_err_deg": 0.0}
+                }
+            ]
+        }
+        grade = MissionGrader.grade_run(run_data)
+        assert math.isclose(grade["metrics"]["outbound_distance_m"], FORWARD_DISTANCE_M, abs_tol=1e-4)
+        assert math.isclose(grade["metrics"]["outbound_distance_error_m"], 0.0, abs_tol=1e-4)

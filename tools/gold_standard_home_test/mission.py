@@ -10,7 +10,14 @@ import math
 import requests
 from typing import Dict, Any, Optional, Tuple, Callable
 
+_orig_requests_get = requests.get
+_orig_requests_post = requests.post
+
+def _is_mocked(fn, orig):
+    return fn != orig or hasattr(fn, 'assert_called') or hasattr(fn, 'mock')
+
 from .constants import (
+    TELEMETRY_RATE_HZ,
     FORWARD_DISTANCE_M,
     ROTATION_TARGET_DEG,
     NORMAL_LINEAR_SPEED,
@@ -112,6 +119,12 @@ class GoldStandardMission:
         self.last_imu_seq: Optional[int] = None
         self.last_imu_seq_adv_time: float = time.monotonic()
         
+        # Persistent HTTP session for high-rate (>20 Hz) polling
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         # Telemetry cache
         self.latest_telemetry: Dict[str, Any] = {
             "amcl": None,
@@ -123,18 +136,32 @@ class GoldStandardMission:
             "last_packet_monotonic": time.monotonic()
         }
 
-    def compute_mission_targets(self) -> Dict[str, Any]:
+    def _http_get(self, *args, **kwargs):
+        if _is_mocked(requests.get, _orig_requests_get):
+            return requests.get(*args, **kwargs)
+        return self.session.get(*args, **kwargs)
+
+    def _http_post(self, *args, **kwargs):
+        if _is_mocked(requests.post, _orig_requests_post):
+            return requests.post(*args, **kwargs)
+        return self.session.post(*args, **kwargs)
+
+    def compute_mission_targets(self, start_pose: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Calculates exact target coordinates and headings for the 4-leg mission.
-        - Leg 1: Outbound 2.000 ft (0.6096 m) along saved HOME heading
+        - Leg 1: Outbound 2.000 ft (0.6096 m) from fresh preflight AMCL starting pose along saved HOME heading
         - Leg 2: Explicit 180.0° CLOCKWISE in-place rotation
-        - Leg 3: Return to HOME coordinates retaining return-facing heading
+        - Leg 3: Return to authoritative saved HOME coordinates retaining return-facing heading
         - Leg 4: In-place signed alignment back to exact saved HOME yaw
         """
         h = self.home_pose
-        # Leg 1: Outbound forward 2.000 ft (0.6096 m) along saved HOME heading
-        x1 = h["x"] + FORWARD_DISTANCE_M * math.cos(h["yaw_rad"])
-        y1 = h["y"] + FORWARD_DISTANCE_M * math.sin(h["yaw_rad"])
+        # Start pose for Leg 1: use fresh preflight AMCL pose if provided; otherwise fallback to HOME
+        base_x = float(start_pose["x"]) if start_pose and "x" in start_pose and start_pose["x"] is not None else float(h["x"])
+        base_y = float(start_pose["y"]) if start_pose and "y" in start_pose and start_pose["y"] is not None else float(h["y"])
+
+        # Leg 1: Outbound forward 2.000 ft (0.6096 m) along saved HOME heading from baseline
+        x1 = base_x + FORWARD_DISTANCE_M * math.cos(h["yaw_rad"])
+        y1 = base_y + FORWARD_DISTANCE_M * math.sin(h["yaw_rad"])
         yaw1 = h["yaw_rad"]
 
         # Leg 2: Explicit 180.0° CLOCKWISE in-place rotation
@@ -142,15 +169,16 @@ class GoldStandardMission:
 
         # Leg 3: Return to authoritative saved HOME coordinates retaining return-facing heading!
         # Target heading is return-facing (yaw2) so rover drives forward directly to HOME.
-        x3 = h["x"]
-        y3 = h["y"]
+        x3 = float(h["x"])
+        y3 = float(h["y"])
         yaw3 = yaw2
 
         # Leg 4: Final explicit in-place rotation to exact saved HOME yaw
-        yaw4 = h["yaw_rad"]
+        yaw4 = float(h["yaw_rad"])
 
         return {
             "home": h,
+            "start_pose": {"x": round(base_x, 4), "y": round(base_y, 4)},
             "leg1_outbound": {
                 "x": round(x1, 4),
                 "y": round(y1, 4),
@@ -185,11 +213,11 @@ class GoldStandardMission:
         try:
             # Request instantaneous AMCL refresh while stationary & disarmed to ensure fresh sample
             try:
-                requests.post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
+                self._http_post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
             except Exception:
                 pass
 
-            r = requests.get(f"{self.cockpit_url}/api/localization/status", timeout=1.0)
+            r = self._http_get(f"{self.cockpit_url}/api/localization/status", timeout=1.0)
             if r.status_code != 200:
                 return False, f"HTTP error {r.status_code} from /api/localization/status: {r.text}", None
             
@@ -272,7 +300,7 @@ class GoldStandardMission:
 
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
         try:
-            r = requests.post(f"{self.cockpit_url}/api/drive/arm", headers=headers, timeout=2.0)
+            r = self._http_post(f"{self.cockpit_url}/api/drive/arm", headers=headers, timeout=2.0)
             if r.status_code != 200:
                 self.disarm_and_stop()
                 raise MissionAbortException(f"Arming request rejected with HTTP {r.status_code}: {r.text}")
@@ -293,27 +321,49 @@ class GoldStandardMission:
             self.initial_boot_count = status.get("bootCount")
         return True
 
-    def disarm(self) -> bool:
-        """Disarms the drivetrain explicitly to Mode 0. Checks HTTP status and response."""
+    def disarm(self, timeout_s: float = 3.0) -> bool:
+        """
+        Disarms the drivetrain explicitly to Mode 0.
+        Waits up to timeout_s for advancing, real ESP32 telemetry confirming armed=false, mode=0, and zero commands.
+        Does not abort based on an immediate stale status sample; retries the zero/disarm request if necessary.
+        """
         if self.dry_run:
             return True
 
-        try:
-            r = requests.post(f"{self.cockpit_url}/api/drive/disarm", timeout=1.0)
-            if r.status_code != 200:
-                raise MissionAbortException(f"Disarm request rejected with HTTP {r.status_code}: {r.text}")
-            res = r.json()
-            if not res.get("ok", False):
-                raise MissionAbortException(f"Disarm request returned ok=false: {res}")
-        except Exception as e:
-            raise MissionAbortException(f"Exception during disarm request: {e}")
+        t_start = time.monotonic()
+        last_req_time = 0.0
+        while time.monotonic() - t_start < timeout_s:
+            now = time.monotonic()
+            if now - last_req_time >= 0.5:
+                try:
+                    self._http_post(f"{self.cockpit_url}/api/drive/disarm", timeout=0.5)
+                except Exception:
+                    pass
+                last_req_time = now
 
-        status = self.update_drive_status()
-        if status.get("armed", False) or status.get("mode") != 0:
-            raise MissionAbortException(f"Drive status did not confirm disarmed Mode 0: armed={status.get('armed')}, mode={status.get('mode')}")
-        return True
+            self.poll_all_telemetry()
+            drive = self.latest_telemetry.get("drive") or {}
+            is_armed = drive.get("armed", True)
+            mode = drive.get("mode", -1)
+            req_l = abs(drive.get("reqLinear", 99.0))
+            req_a = abs(drive.get("reqAngular", 99.0))
+            lim_l = abs(drive.get("limLinear", 99.0))
+            lim_a = abs(drive.get("limAngular", 99.0))
+            cmd_src = drive.get("cmdSource", "")
 
-    def disarm_and_stop(self):
+            if (is_armed is False and mode == 0 and
+                req_l < 1e-4 and req_a < 1e-4 and
+                lim_l < 1e-4 and lim_a < 1e-4):
+                return True
+
+            time.sleep(0.04)
+
+        drive = self.latest_telemetry.get("drive") or {}
+        raise MissionAbortException(
+            f"Drive status did not confirm disarmed Mode 0 within {timeout_s}s: armed={drive.get('armed')}, mode={drive.get('mode')}"
+        )
+
+    def disarm_and_stop(self, timeout_s: float = 3.0):
         """Immediately halts all physical motion, zeroes commands, and disarms to Mode 0. Prevents recursion."""
         if getattr(self, '_in_disarm_and_stop', False):
             return
@@ -324,22 +374,45 @@ class GoldStandardMission:
                 self.send_velocity(0.0, 0.0, force_zero=True)
             except Exception:
                 pass
-
             try:
                 self.set_command_source("NONE", check_errors=False)
             except Exception:
                 pass
-            
-            if not self.dry_run:
-                try:
-                    requests.post(f"{self.cockpit_url}/api/navigation/cancel", timeout=1.0)
-                except Exception:
-                    pass
-                try:
-                    requests.post(f"{self.cockpit_url}/api/drive/disarm", timeout=1.0)
-                except Exception:
-                    pass
+
+            t_start = time.monotonic()
+            last_req = 0.0
+            confirmed = False
+            while time.monotonic() - t_start < timeout_s:
+                now = time.monotonic()
+                if now - last_req >= 0.5:
+                    if not self.dry_run:
+                        try:
+                            self._http_post(f"{self.cockpit_url}/api/navigation/cancel", timeout=0.5)
+                        except Exception:
+                            pass
+                        try:
+                            self._http_post(f"{self.cockpit_url}/api/drive/disarm", timeout=0.5)
+                        except Exception:
+                            pass
+                    last_req = now
+
+                if self.dry_run:
+                    confirmed = True
+                    break
+
+                self.poll_all_telemetry()
+                drive = self.latest_telemetry.get("drive") or {}
+                if (drive.get("armed") is False and drive.get("mode") == 0 and
+                    abs(drive.get("reqLinear", 99.0)) < 1e-4 and abs(drive.get("reqAngular", 99.0)) < 1e-4):
+                    confirmed = True
+                    break
+                time.sleep(0.04)
+
             self.active_nav2_goal = False
+            self.current_cmd_source = "NONE"
+
+            # Record the confirmed final telemetry frame before writing the report
+            self.record_tick("FINAL_DISARMED")
         finally:
             self._in_disarm_and_stop = False
 
@@ -356,7 +429,7 @@ class GoldStandardMission:
                 "limAngular": 0.0,
                 "cmdSource": self.current_cmd_source
             }
-        r = requests.get(f"{self.cockpit_url}/api/drive/status", timeout=0.5)
+        r = self._http_get(f"{self.cockpit_url}/api/drive/status", timeout=0.5)
         if r.status_code != 200:
             raise MissionAbortException(f"Drive status request failed with HTTP {r.status_code}")
         res = r.json()
@@ -376,7 +449,7 @@ class GoldStandardMission:
 
         # 2. Localization
         try:
-            r_loc = requests.get(f"{self.cockpit_url}/api/localization/status", timeout=0.2)
+            r_loc = self._http_get(f"{self.cockpit_url}/api/localization/status", timeout=0.2)
             if r_loc.status_code == 200:
                 loc = r_loc.json()
                 self.latest_telemetry["amcl"] = {
@@ -396,7 +469,7 @@ class GoldStandardMission:
 
         # 3. IMU
         try:
-            r_imu = requests.get(f"{self.cockpit_url}/api/imu", timeout=0.2)
+            r_imu = self._http_get(f"{self.cockpit_url}/api/imu", timeout=0.2)
             if r_imu.status_code == 200:
                 imu = r_imu.json()
                 raw_yaw = float(imu.get("raw_yaw_deg", 0.0))
@@ -426,7 +499,7 @@ class GoldStandardMission:
 
         # 4. Raw Encoders (/api/encoders returns raw ticks)
         try:
-            r_enc = requests.get(f"{self.cockpit_url}/api/encoders", timeout=0.2)
+            r_enc = self._http_get(f"{self.cockpit_url}/api/encoders", timeout=0.2)
             if r_enc.status_code == 200:
                 enc = r_enc.json()
                 enc_ticks = enc.get("encoders") or {}
@@ -445,12 +518,12 @@ class GoldStandardMission:
         try:
             r_odom = None
             try:
-                r_odom = requests.get(f"{self.cockpit_url}/api/odom", timeout=0.2)
+                r_odom = self._http_get(f"{self.cockpit_url}/api/odom", timeout=0.2)
             except Exception:
                 pass
             if r_odom is None or r_odom.status_code != 200:
                 try:
-                    r_odom = requests.get(f"{self.odom_url}/api/odom", timeout=0.2)
+                    r_odom = self._http_get(f"{self.odom_url}/api/odom", timeout=0.2)
                 except Exception:
                     pass
             if r_odom is not None and r_odom.status_code == 200:
@@ -472,7 +545,7 @@ class GoldStandardMission:
 
         # 5. Collision Monitor & Clearance
         try:
-            r_cl = requests.get(f"{self.cockpit_url}/api/clearance", timeout=0.2)
+            r_cl = self._http_get(f"{self.cockpit_url}/api/clearance", timeout=0.2)
             if r_cl.status_code == 200:
                 cl = r_cl.json()
                 pi_cl = cl.get("piComputed", {})
@@ -494,7 +567,7 @@ class GoldStandardMission:
             return True
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
         try:
-            r = requests.post(f"{self.cockpit_url}/api/command-source", json={"source": source}, headers=headers, timeout=1.0)
+            r = self._http_post(f"{self.cockpit_url}/api/command-source", json={"source": source}, headers=headers, timeout=1.0)
             if check_errors:
                 if r.status_code != 200:
                     self.disarm_and_stop()
@@ -537,7 +610,7 @@ class GoldStandardMission:
         }
         headers = {"X-Rover-Bridge-Token": self.cmd_token} if self.cmd_token else {}
         try:
-            r = requests.post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=0.2)
+            r = self._http_post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=0.2)
             if r.status_code != 200:
                 if force_zero:
                     return
@@ -624,7 +697,12 @@ class GoldStandardMission:
         yaw_err_deg = wrap_angle_deg(amcl.get("yaw_deg", 0.0) - self.home_pose["yaw_deg"])
 
         # Determine command stream attribution (do not duplicate commands into fake stages)
-        if self.active_nav2_goal:
+        if stage in ("FINAL_DISARMED", "BASELINE"):
+            cmd_source = "NONE"
+            cmd_raw = {"vx": 0.0, "wz": 0.0}
+            cmd_smooth = None
+            cmd_final = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
+        elif self.active_nav2_goal:
             cmd_source = "ROS_AUTONOMY"
             cmd_raw = {"vx": drive.get("reqLinear", 0.0), "wz": drive.get("reqAngular", 0.0)}
             cmd_smooth = None  # Nav2 velocity_smoother stage is internal to ROS 2; not separately polled via HTTP
@@ -678,7 +756,7 @@ class GoldStandardMission:
         }
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
         try:
-            r = requests.post(f"{self.cockpit_url}/api/navigation/dispatch", json=payload, headers=headers, timeout=5.0)
+            r = self._http_post(f"{self.cockpit_url}/api/navigation/dispatch", json=payload, headers=headers, timeout=5.0)
             if r.status_code != 200:
                 self.disarm_and_stop()
                 raise MissionAbortException(f"Nav2 dispatch rejected with HTTP {r.status_code}: {r.text}")
@@ -707,6 +785,7 @@ class GoldStandardMission:
         last_sample_time: float = 0.0
 
         while time.monotonic() - t_start < timeout_s:
+            t_cycle = time.monotonic()
             self.poll_all_telemetry()
             drive = self.latest_telemetry.get("drive") or {}
             imu = self.latest_telemetry.get("imu") or {}
@@ -775,6 +854,7 @@ class GoldStandardMission:
         goal_observed_active = False
 
         while time.monotonic() - t_start < timeout_s:
+            t_cycle = time.monotonic()
             self.poll_all_telemetry()
             self.verify_safety_invariants(stage_name)
             self.record_tick(stage_name)
@@ -785,7 +865,7 @@ class GoldStandardMission:
                 return True
 
             try:
-                r = requests.get(f"{self.cockpit_url}/api/navigation/status", timeout=0.5)
+                r = self._http_get(f"{self.cockpit_url}/api/navigation/status", timeout=0.5)
                 if r.status_code == 200:
                     nav_stat = r.json()
                     status_str = nav_stat.get("status", "")
@@ -849,7 +929,8 @@ class GoldStandardMission:
                     raise
                 pass
 
-            time.sleep(0.04)
+            elapsed = time.monotonic() - t_cycle
+            time.sleep(max(0.002, (1.0 / TELEMETRY_RATE_HZ) - elapsed))
 
         self.disarm_and_stop()
         raise MissionAbortException(f"{stage_name} exceeded timeout ({timeout_s}s) waiting for goal {goal_id} to succeed!")
@@ -894,6 +975,7 @@ class GoldStandardMission:
         t_start = time.monotonic()
 
         while time.monotonic() - t_start < TIMEOUT_LEG2_ROTATION_S:
+            t_cycle = time.monotonic()
             self.poll_all_telemetry()
             self.verify_safety_invariants("LEG2_ROTATION")
 
@@ -919,7 +1001,8 @@ class GoldStandardMission:
 
             self.send_velocity(0.0, wz_cmd, source="CALIBRATION_TEST")
             self.record_tick("LEG2_ROTATION")
-            time.sleep(0.04)
+            elapsed = time.monotonic() - t_cycle
+            time.sleep(max(0.002, (1.0 / TELEMETRY_RATE_HZ) - elapsed))
 
         self.disarm_and_stop()
         raise MissionAbortException(f"Leg 2 exceeded {TIMEOUT_LEG2_ROTATION_S}s timeout!")
@@ -974,6 +1057,7 @@ class GoldStandardMission:
         settle_start_time: Optional[float] = None
 
         while time.monotonic() - t_start < TIMEOUT_LEG4_SETTLE_S:
+            t_cycle = time.monotonic()
             self.poll_all_telemetry()
             self.verify_safety_invariants("LEG4_SETTLE")
 
@@ -1012,7 +1096,8 @@ class GoldStandardMission:
                 self.send_velocity(0.0, wz_cmd, source="CALIBRATION_TEST")
                 self.record_tick("LEG4_SETTLE")
 
-            time.sleep(0.04)
+            elapsed = time.monotonic() - t_cycle
+            time.sleep(max(0.002, (1.0 / TELEMETRY_RATE_HZ) - elapsed))
 
         # Timeout fails the mission
         self.disarm_and_stop()

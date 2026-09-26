@@ -127,8 +127,6 @@ def run_cli():
         output_dir=args.report_dir
     )
 
-    targets = mission.compute_mission_targets()
-
     # Preflight Check: Poll status
     try:
         drive_stat = mission.update_drive_status()
@@ -151,6 +149,7 @@ def run_cli():
             live_amcl["state"] = "LOCALIZED"
 
     gate_ok, gate_msg, pos_err, yaw_err = mission.check_pre_arm_gate(live_amcl)
+    targets = mission.compute_mission_targets(start_pose=live_amcl)
     
     # Render Preview
     print(format_preview(targets, live_amcl, pos_err, yaw_err))
@@ -203,14 +202,20 @@ def run_cli():
     try:
         # In dry run: simulate the 4 legs cleanly
         if args.dry_run:
+            base_x = targets["start_pose"]["x"]
+            base_y = targets["start_pose"]["y"]
+            mission.latest_telemetry["amcl"] = {"x": base_x, "y": base_y, "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
+            mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "NONE"}
+            mission.record_tick("BASELINE")
+
             print("[DRY-RUN] Simulating Leg 1 (Outbound 0.6096 m via Nav2)...")
             mission.recorder.record_transition("LEG1_FORWARD")
             mission.active_nav2_goal = True
             for step in range(30):
                 progress = step / 29.0
                 curr_dist = progress * FORWARD_DISTANCE_M
-                sim_x = targets["home"]["x"] + curr_dist * math.cos(targets["home"]["yaw_rad"])
-                sim_y = targets["home"]["y"] + curr_dist * math.sin(targets["home"]["yaw_rad"])
+                sim_x = base_x + curr_dist * math.cos(targets["home"]["yaw_rad"])
+                sim_y = base_y + curr_dist * math.sin(targets["home"]["yaw_rad"])
                 mission.latest_telemetry["amcl"] = {"x": sim_x, "y": sim_y, "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
                 mission.latest_telemetry["drive"] = {"reqLinear": NORMAL_LINEAR_SPEED, "reqAngular": 0.0, "limLinear": NORMAL_LINEAR_SPEED, "limAngular": 0.0}
                 mission.record_tick("LEG1_FORWARD")
@@ -276,6 +281,10 @@ def run_cli():
             # Physical Execution across the 4 deterministic legs
             l1 = targets["leg1_outbound"]
             l3 = targets["leg3_return"]
+
+            # Capture baseline telemetry frame before dispatch
+            mission.poll_all_telemetry()
+            mission.record_tick("BASELINE")
             
             # Leg 1: Outbound Forward 2.000 ft (0.6096 m) along saved HOME heading
             mission.execute_leg1_forward(l1["x"], l1["y"], l1["yaw_rad"])

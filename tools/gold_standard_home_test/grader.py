@@ -37,11 +37,19 @@ class MissionGrader:
             st = s.get("mission_stage", "UNKNOWN")
             stage_samples.setdefault(st, []).append(s)
 
-        # Start pose
-        first_sample = samples[0] if samples else {}
-        start_amcl = first_sample.get("amcl", {})
-        start_x = start_amcl.get("x", 0.0)
-        start_y = start_amcl.get("y", 0.0)
+        # Start pose: use BASELINE sample if captured, otherwise first sample
+        base_samples = stage_samples.get("BASELINE", [])
+        if base_samples:
+            base_amcl = base_samples[0].get("amcl", {})
+            start_x = base_amcl.get("x", samples[0].get("amcl", {}).get("x", 0.0) if samples else 0.0)
+            start_y = base_amcl.get("y", samples[0].get("amcl", {}).get("y", 0.0) if samples else 0.0)
+        elif samples:
+            start_amcl = samples[0].get("amcl", {})
+            start_x = start_amcl.get("x", 0.0)
+            start_y = start_amcl.get("y", 0.0)
+        else:
+            start_x = 0.0
+            start_y = 0.0
 
         # Leg 1 Outbound Distance
         leg1_samples = stage_samples.get("LEG1_FORWARD", [])
@@ -113,6 +121,7 @@ class MissionGrader:
                 last_sign_lin = curr_sign
 
         # 5. Safety Interventions & Resets
+        first_sample = samples[0] if samples else {}
         initial_boot_count = first_sample.get("drive", {}).get("bootCount", 1)
         resets_detected = 0
         for s in samples:
@@ -189,6 +198,11 @@ class MissionGrader:
                     "mode": final_mode,
                     "passed": crit_safe_stop
                 }
+            },
+            "metrics": {
+                "outbound_distance_m": round(actual_outbound_dist, 4),
+                "outbound_distance_error_m": round(outbound_dist_err_m, 4),
+                "rotation_180_error_deg": round(rot_180_err_deg, 2),
             },
             "performance_metrics": {
                 "outbound_distance_m": round(actual_outbound_dist, 4),
