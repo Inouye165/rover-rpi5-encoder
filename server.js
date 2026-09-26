@@ -40,9 +40,10 @@ const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) ||
 
 function triggerNav2Cancel() {
   try {
+    const bridgeUrl = new URL(ROVER_NAV_BRIDGE_URL);
     const cancelReq = http.request({
-      hostname: '127.0.0.1',
-      port: 3005,
+      hostname: bridgeUrl.hostname || '127.0.0.1',
+      port: bridgeUrl.port || 3005,
       path: '/api/nav/cancel',
       method: 'POST',
       timeout: 500

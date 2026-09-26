@@ -13,6 +13,7 @@ const fs = require('fs');
 process.env.PORT = '3860';
 process.env.ROVER_INTERNAL_CMD_HOST = '127.0.0.1';
 process.env.ROVER_INTERNAL_CMD_PORT = '3861';
+process.env.ROVER_NAV_BRIDGE_URL = 'http://127.0.0.1:3865';
 
 const serverPath = fs.existsSync(path.join(__dirname, 'server.js'))
   ? './server.js'
@@ -30,7 +31,7 @@ const {
 } = serverModule;
 
 const PUBLIC_PORT = 3860;
-const NAV_BRIDGE_PORT = 3005;
+const NAV_BRIDGE_PORT = 3865;
 
 const FUNC_MOTION = 0x12;
 const FUNC_DISARM_NORMAL_DRIVE = 0x2D;
