@@ -16,9 +16,10 @@ from .constants import (
     FORWARD_DISTANCE_M,
     ROTATION_TARGET_DEG,
     NORMAL_LINEAR_SPEED,
-    NORMAL_ANGULAR_SPEED,
+    ROTATION_180_MAX_SPEED,
+    FINAL_YAW_ALIGNMENT_MAX_SPEED,
     FINAL_POS_CORRECTION_CEILING,
-    FINAL_YAW_CORRECTION_CEILING,
+    PASS_FINAL_YAW_ERR_DEG,
     COCKPIT_DEFAULT_URL,
     BRIDGE_DEFAULT_URL
 )
@@ -30,6 +31,7 @@ def format_preview(targets: Dict[str, Any], initial_amcl: Dict[str, Any], pos_er
     l1 = targets["leg1_outbound"]
     l2 = targets["leg2_rotation"]
     l3 = targets["leg3_return"]
+    l4 = targets["leg4_settle"]
     
     return f"""
 ========================================================================================
@@ -45,19 +47,20 @@ Current Localized AMCL Pose:
   • Heading:   {initial_amcl.get('yaw_deg', 0.0):+.2f}°
   • Error:     Position: {pos_err_m*100:.2f} cm (Limit <= 5.0 cm) | Yaw: {yaw_err_deg:.2f}° (Limit <= 5.0°)
 
-Planned Mission Legs (Frozen Production-Stack Kinematics):
-  1. LEG 1 (Outbound Forward 2.000 ft / {FORWARD_DISTANCE_M:.4f} m):
+Planned Mission Legs (Production Nav2 & Approach Distinctions):
+  1. LEG 1 (Outbound Forward 2.000 ft / {FORWARD_DISTANCE_M:.4f} m via Nav2):
      - Target:   ({l1['x']:.4f} m, {l1['y']:.4f} m, heading: {l1['yaw_deg']:+.2f}°)
-     - Velocity: Max {NORMAL_LINEAR_SPEED:.2f} m/s linear, vx ceiling {NORMAL_LINEAR_SPEED:.2f} m/s
-  2. LEG 2 (Explicit 180.0° CLOCKWISE In-Place Rotation):
-     - Target:   In-place rotation to {l2['yaw_deg']:+.2f}° (Delta: -180.0°)
-     - Velocity: Cruise {NORMAL_ANGULAR_SPEED:.2f} rad/s, Creep ceiling {FINAL_YAW_CORRECTION_CEILING:.2f} rad/s
-  3. LEG 3 (Return to Authoritative HOME):
+     - Velocity: Production Nav2 cap {NORMAL_LINEAR_SPEED:.2f} m/s linear, 0.50 rad/s angular
+  2. LEG 2 (Explicit 180.0° CLOCKWISE In-Place Rotation via Exact-Motion):
+     - Target:   In-place CW rotation to {l2['yaw_deg']:+.2f}° (Delta: -180.0°)
+     - Velocity: Cruise limit {ROTATION_180_MAX_SPEED:.2f} rad/s, Creep limit {FINAL_YAW_ALIGNMENT_MAX_SPEED:.2f} rad/s
+  3. LEG 3 (Return to HOME Coordinates via Nav2 - Retaining Return Heading):
      - Target:   ({l3['x']:.4f} m, {l3['y']:.4f} m, heading: {l3['yaw_deg']:+.2f}°)
-     - Velocity: Normal {NORMAL_LINEAR_SPEED:.2f} m/s, Final-pos ceiling {FINAL_POS_CORRECTION_CEILING:.2f} m/s
-  4. LEG 4 (Final Yaw Correction & Settle):
-     - Target:   Exact saved HOME yaw {h['yaw_deg']:+.2f}° (Yaw correction ceiling: {FINAL_YAW_CORRECTION_CEILING:.2f} rad/s)
-     - Safe Stop: Cancel goal, disarm drivetrain to Mode 0, verify zero commands.
+     - Velocity: Production Nav2 cap {NORMAL_LINEAR_SPEED:.2f} m/s linear (no direct velocity override)
+  4. LEG 4 (Final Signed In-Place Alignment to Saved HOME Yaw via Exact-Motion):
+     - Target:   Exact saved HOME yaw {h['yaw_deg']:+.2f}° (Signed shortest-angle <= {FINAL_YAW_ALIGNMENT_MAX_SPEED:.2f} rad/s)
+     - Settle:   Must stop within <= {PASS_FINAL_YAW_ERR_DEG:.1f}° and settle for 1.5s (Timeout fails mission)
+     - Safe Stop: Cancel goal, release command ownership, disarm drivetrain to Mode 0.
 ========================================================================================
 """
 
@@ -87,6 +90,9 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     crawl_res = crit["low_speed_crawling"]
     print(f"  • Continuous Crawling (<5cm/s): {crawl_res['max_continuous_s']:.2f}s (Threshold <= {crawl_res['max_allowed_s']:.1f}s) -> {'PASS' if crawl_res['passed'] else 'FAIL'}")
     
+    rate_res = crit["recorder_sample_rate"]
+    print(f"  • Telemetry Sample Rate:     {rate_res['achieved_rate_hz']:.1f} Hz (Requirement >= {rate_res['threshold_hz']:.1f} Hz) -> {'PASS' if rate_res['passed'] else 'FAIL'}")
+
     safe_res = crit["final_safe_state"]
     print(f"  • Safe Disarmed State:       armed={safe_res['armed']}, mode={safe_res['mode']} -> {'PASS' if safe_res['passed'] else 'FAIL'}")
     
@@ -130,31 +136,24 @@ def run_cli():
         print(f"[FAIL] Could not connect to Cockpit at {args.cockpit_url}: {e}")
         sys.exit(1)
 
-    # Query current AMCL pose
-    initial_amcl = {
-        "x": mission.home_pose["x"],
-        "y": mission.home_pose["y"],
-        "yaw_deg": mission.home_pose["yaw_deg"],
-        "yaw_rad": mission.home_pose["yaw_rad"],
-    }
-    try:
-        r = requests.get(f"{args.cockpit_url}/api/localization/status", timeout=1.0)
-        if r.status_code == 200:
-            loc = r.json()
-            if "x" in loc and "y" in loc:
-                initial_amcl = {
-                    "x": float(loc.get("x", 0.0)),
-                    "y": float(loc.get("y", 0.0)),
-                    "yaw_deg": float(loc.get("yawDeg", loc.get("yaw_deg", 0.0))),
-                    "yaw_rad": float(loc.get("yaw", loc.get("yaw_rad", 0.0))),
-                }
-    except Exception as e:
-        print(f"[WARN] Could not fetch AMCL status from {args.cockpit_url}: {e}")
+    # Query live AMCL pose with fail-closed guarantee (never substitutes HOME pose)
+    ok_amcl, amcl_err, live_amcl = mission.fetch_live_amcl_pose()
 
-    gate_ok, gate_msg, pos_err, yaw_err = mission.check_pre_arm_gate(initial_amcl)
+    if not ok_amcl or live_amcl is None:
+        if not args.test_safety:
+            print(f"\n[PREFLIGHT FAILED CLOSED] Cannot verify live AMCL starting pose: {amcl_err}")
+            print("Refusing to arm drivetrain. Never substituting HOME pose.\n")
+            sys.exit(2)
+        else:
+            # Fallback for synthetic safety test mode only
+            live_amcl = dict(mission.home_pose)
+            live_amcl["localized"] = True
+            live_amcl["state"] = "LOCALIZED"
+
+    gate_ok, gate_msg, pos_err, yaw_err = mission.check_pre_arm_gate(live_amcl)
     
     # Render Preview
-    print(format_preview(targets, initial_amcl, pos_err, yaw_err))
+    print(format_preview(targets, live_amcl, pos_err, yaw_err))
 
     # Evaluate Pre-Arm Gate
     if not gate_ok and not args.test_safety:
@@ -208,48 +207,71 @@ def run_cli():
 
         # In dry run: simulate the 4 legs cleanly
         if args.dry_run:
-            print("[DRY-RUN] Simulating Leg 1 (Outbound 0.6096 m)...")
+            print("[DRY-RUN] Simulating Leg 1 (Outbound 0.6096 m via Nav2)...")
             mission.recorder.record_transition("LEG1_FORWARD")
-            for step in range(25):
-                progress = step / 24.0
+            mission.active_nav2_goal = True
+            for step in range(30):
+                progress = step / 29.0
                 curr_dist = progress * FORWARD_DISTANCE_M
                 sim_x = targets["home"]["x"] + curr_dist * math.cos(targets["home"]["yaw_rad"])
                 sim_y = targets["home"]["y"] + curr_dist * math.sin(targets["home"]["yaw_rad"])
-                mission.latest_telemetry["amcl"] = {"x": sim_x, "y": sim_y, "yaw_deg": targets["home"]["yaw_deg"]}
-                mission.latest_telemetry["cmd_final"] = {"vx": NORMAL_LINEAR_SPEED, "wz": 0.0}
+                mission.latest_telemetry["amcl"] = {"x": sim_x, "y": sim_y, "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
+                mission.latest_telemetry["drive"] = {"reqLinear": NORMAL_LINEAR_SPEED, "reqAngular": 0.0, "limLinear": NORMAL_LINEAR_SPEED, "limAngular": 0.0}
                 mission.record_tick("LEG1_FORWARD")
-                time.sleep(0.04)
+                time.sleep(0.035)
 
-            print("[DRY-RUN] Simulating Leg 2 (180° CW Rotation)...")
+            # End of Leg 1 handshake
+            mission.active_nav2_goal = False
+
+            print("[DRY-RUN] Simulating Leg 2 (180° CW In-Place Rotation via Exact-Motion)...")
             mission.recorder.record_transition("LEG2_ROTATION")
-            for step in range(25):
-                progress = step / 24.0
+            mission.yaw_tracker.reset()
+            for step in range(30):
+                progress = step / 29.0
                 curr_turn = progress * 180.0
                 sim_yaw = targets["home"]["yaw_deg"] - curr_turn
-                mission.latest_telemetry["imu"] = {"raw_yaw_deg": sim_yaw, "gyro_z": -NORMAL_ANGULAR_SPEED}
-                mission.latest_telemetry["cmd_final"] = {"vx": 0.0, "wz": -NORMAL_ANGULAR_SPEED}
+                mission.latest_telemetry["imu"] = {"raw_yaw_deg": sim_yaw, "gyro_z": -ROTATION_180_MAX_SPEED, "serialConnected": True}
+                mission.latest_exact_cmd = {"vx": 0.0, "wz": -ROTATION_180_MAX_SPEED}
                 mission.record_tick("LEG2_ROTATION")
-                time.sleep(0.04)
+                time.sleep(0.035)
 
-            print("[DRY-RUN] Simulating Leg 3 (Return to HOME)...")
+            print("[DRY-RUN] Simulating Leg 3 (Return to HOME Coordinates via Nav2 - Retaining Return Heading)...")
             mission.recorder.record_transition("LEG3_RETURN")
-            for step in range(25):
-                progress = step / 24.0
+            mission.active_nav2_goal = True
+            ret_yaw_deg = targets["leg2_rotation"]["yaw_deg"]
+            for step in range(30):
+                progress = step / 29.0
                 curr_dist = (1.0 - progress) * FORWARD_DISTANCE_M
                 sim_x = targets["home"]["x"] + curr_dist * math.cos(targets["home"]["yaw_rad"])
                 sim_y = targets["home"]["y"] + curr_dist * math.sin(targets["home"]["yaw_rad"])
-                mission.latest_telemetry["amcl"] = {"x": sim_x, "y": sim_y, "yaw_deg": targets["home"]["yaw_deg"]}
-                mission.latest_telemetry["cmd_final"] = {"vx": NORMAL_LINEAR_SPEED, "wz": 0.0}
+                mission.latest_telemetry["amcl"] = {"x": sim_x, "y": sim_y, "yaw_deg": ret_yaw_deg, "localized": True, "state": "LOCALIZED"}
+                mission.latest_telemetry["drive"] = {"reqLinear": NORMAL_LINEAR_SPEED, "reqAngular": 0.0, "limLinear": NORMAL_LINEAR_SPEED, "limAngular": 0.0}
                 mission.record_tick("LEG3_RETURN")
-                time.sleep(0.04)
+                time.sleep(0.035)
 
-            print("[DRY-RUN] Simulating Leg 4 (Final Alignment & Settle)...")
+            # End of Leg 3 handshake
+            mission.active_nav2_goal = False
+
+            print("[DRY-RUN] Simulating Leg 4 (Final Signed Alignment to Saved HOME Yaw & Settle)...")
             mission.recorder.record_transition("LEG4_SETTLE")
-            mission.latest_telemetry["amcl"] = {"x": targets["home"]["x"], "y": targets["home"]["y"], "yaw_deg": targets["home"]["yaw_deg"]}
-            mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0}
-            mission.latest_telemetry["cmd_final"] = {"vx": 0.0, "wz": 0.0}
-            mission.record_tick("LEG4_SETTLE")
-            time.sleep(0.1)
+            # Turn in-place from ret_yaw_deg to saved HOME yaw
+            for step in range(25):
+                progress = step / 24.0
+                # CW turn completes the remaining 180 deg
+                curr_yaw = ret_yaw_deg - progress * 180.0
+                mission.latest_telemetry["amcl"] = {"x": targets["home"]["x"], "y": targets["home"]["y"], "yaw_deg": curr_yaw, "localized": True, "state": "LOCALIZED"}
+                mission.latest_exact_cmd = {"vx": 0.0, "wz": -FINAL_YAW_ALIGNMENT_MAX_SPEED}
+                mission.record_tick("LEG4_SETTLE")
+                time.sleep(0.035)
+
+            # Settle period (1.5s)
+            mission.latest_telemetry["amcl"] = {"x": targets["home"]["x"], "y": targets["home"]["y"], "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
+            mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0}
+            mission.latest_exact_cmd = {"vx": 0.0, "wz": 0.0}
+            for step in range(40):
+                mission.record_tick("LEG4_SETTLE")
+                time.sleep(0.038)
+
         else:
             # Physical Execution across the 4 deterministic legs
             l1 = targets["leg1_outbound"]
@@ -261,10 +283,10 @@ def run_cli():
             # Leg 2: Explicit 180.0° CLOCKWISE in-place rotation
             mission.execute_leg2_rotation(ROTATION_TARGET_DEG)
             
-            # Leg 3: Return to authoritative saved HOME coordinates
+            # Leg 3: Return to authoritative saved HOME coordinates (retaining return heading)
             mission.execute_leg3_return(l3["x"], l3["y"], l3["yaw_rad"])
             
-            # Leg 4: Final yaw alignment, verification, stop, cancel, and disarm to Mode 0
+            # Leg 4: Final signed in-place yaw alignment to saved HOME yaw and settle
             mission.execute_leg4_settle(targets["home"]["yaw_rad"])
 
     except MissionAbortException as mae:

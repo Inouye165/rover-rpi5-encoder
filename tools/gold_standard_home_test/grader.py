@@ -12,6 +12,7 @@ from .constants import (
     PASS_FINAL_YAW_ERR_DEG,
     PASS_MAX_CRAWL_WINDOW_SEC,
     PASS_MAX_CORRECTIVE_REVERSALS,
+    PASS_MIN_RECORDER_RATE_HZ,
     CRAWL_LINEAR_THRESHOLD,
     CRAWL_ANGULAR_THRESHOLD,
     STANDSTILL_LINEAR_EPSILON,
@@ -56,8 +57,7 @@ class MissionGrader:
         if leg2_samples:
             start_rot = leg2_samples[0].get("imu", {}).get("raw_yaw_deg", 0.0)
             end_rot = leg2_samples[-1].get("imu", {}).get("raw_yaw_deg", 0.0)
-            # Unwrap rotation delta
-            delta_rot = (start_rot - end_rot) % 360.0 # CW rotation is decreasing raw yaw
+            delta_rot = (start_rot - end_rot) % 360.0
             rot_180_err_deg = abs(delta_rot - ROTATION_TARGET_DEG)
         else:
             rot_180_err_deg = 180.0
@@ -77,7 +77,6 @@ class MissionGrader:
         final_state_safe = (not final_armed) and (final_mode == 0) and (abs(final_req_lin) < 0.001) and (abs(final_req_ang) < 0.001)
 
         # 3. Analyze Crawling & Low-Speed Duration
-        # Exclude first 1.0s of each leg (accel) and final 1.0s (decel)
         max_continuous_crawl_s = 0.0
         current_crawl_s = 0.0
         last_t = None
@@ -87,7 +86,6 @@ class MissionGrader:
             dt = (t - last_t) if last_t is not None else 0.0
             last_t = t
             
-            # Check if active motion
             cmd = s.get("final_cmd", {})
             vx = abs(cmd.get("vx", 0.0))
             wz = abs(cmd.get("wz", 0.0))
@@ -127,13 +125,20 @@ class MissionGrader:
         rejections = metadata.get("rejections", 0)
         safety_interventions = resets_detected + watchdog_trips + rejections
 
-        # 6. Evaluate Acceptance Criteria
+        # 6. Sample Rate Verification
+        if len(samples) >= 2:
+            dt_span = samples[-1].get("t_rel_s", 0.0) - samples[0].get("t_rel_s", 0.0)
+            achieved_rate_hz = round((len(samples) - 1) / dt_span, 2) if dt_span > 0 else 0.0
+        else:
+            achieved_rate_hz = 0.0
+
         crit_final_pos = final_pos_err_m <= PASS_FINAL_POS_ERR_M
         crit_final_yaw = final_yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG
         crit_resets = (resets_detected == 0) and (safety_interventions == 0)
         crit_reversals = reversal_count <= PASS_MAX_CORRECTIVE_REVERSALS
         crit_crawling = max_continuous_crawl_s <= PASS_MAX_CRAWL_WINDOW_SEC
         crit_safe_stop = final_state_safe
+        crit_rate = achieved_rate_hz >= PASS_MIN_RECORDER_RATE_HZ
 
         all_passed = (
             crit_final_pos and
@@ -141,7 +146,8 @@ class MissionGrader:
             crit_resets and
             crit_reversals and
             crit_crawling and
-            crit_safe_stop
+            crit_safe_stop and
+            crit_rate
         )
 
         return {
@@ -173,6 +179,11 @@ class MissionGrader:
                     "max_allowed_s": PASS_MAX_CRAWL_WINDOW_SEC,
                     "passed": crit_crawling
                 },
+                "recorder_sample_rate": {
+                    "achieved_rate_hz": achieved_rate_hz,
+                    "threshold_hz": PASS_MIN_RECORDER_RATE_HZ,
+                    "passed": crit_rate
+                },
                 "final_safe_state": {
                     "armed": final_armed,
                     "mode": final_mode,
@@ -183,6 +194,7 @@ class MissionGrader:
                 "outbound_distance_m": round(actual_outbound_dist, 4),
                 "outbound_distance_error_m": round(outbound_dist_err_m, 4),
                 "rotation_180_error_deg": round(rot_180_err_deg, 2),
-                "total_mission_time_s": round(total_time_s, 2)
+                "total_mission_time_s": round(total_time_s, 2),
+                "achieved_rate_hz": achieved_rate_hz
             }
         }
