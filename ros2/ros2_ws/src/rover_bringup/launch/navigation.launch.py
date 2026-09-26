@@ -83,8 +83,8 @@ def generate_launch_description():
 
     autostart_navigation_arg = DeclareLaunchArgument(
         'autostart_navigation',
-        default_value='false',
-        description='Automatically startup the navigation lifecycle nodes (defaults to false to wait for localization)'
+        default_value='true',
+        description='Automatically startup the navigation lifecycle nodes'
     )
     autostart_navigation = LaunchConfiguration('autostart_navigation')
 

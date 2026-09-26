@@ -1,0 +1,53 @@
+{
+  "manifest_version": "1.0",
+  "map_name": "house_slam_2026-09-23_candidate_hallway",
+  "status": "PRODUCTION_AUTHORITATIVE",
+  "promoted_date": "2026-09-26",
+  "description": "Authoritative room-to-room hallway map validated across office, hallway, bedroom, and HOME return",
+  "coordinate_frame": {
+    "frame_id": "map",
+    "child_frame_id": "base_link",
+    "resolution_m_per_px": 0.05,
+    "width_px": 340,
+    "height_px": 132,
+    "dimensions_m": [
+      17.0,
+      6.6
+    ],
+    "origin": [
+      -4.202,
+      -5.1,
+      0.0
+    ]
+  },
+  "home_pose": {
+    "x": 1.193853,
+    "y": -0.045221,
+    "z": 0.0,
+    "yaw_deg": -5.047,
+    "yaw_rad": -0.088087,
+    "qz": -0.044029,
+    "qw": 0.99903
+  },
+  "active_pointer": {
+    "target": "/ros2_ws/maps/house_slam_2026-09-23_candidate_hallway.yaml"
+  },
+  "files": {
+    "house_slam_2026-09-23_candidate_hallway.yaml": "a099c4206a6ace55ed91aa3a57183077859e6f92e8890bc6bd2dcb4a0de41385",
+    "house_slam_2026-09-23_candidate_hallway.pgm": "0a5cf03f98812dfd106f4f3bdfef2b994dc596d5d3ee62afd97b84ba7269daff",
+    "house_slam_2026-09-23_candidate_hallway.data": "7ca162432dd7b398a0b2148dcb4a36dced3700b4fab30877fa98f60f769bfd27",
+    "house_slam_2026-09-23_candidate_hallway.posegraph": "c7e329aa93e330e8ed2d4847a2ea2d18d9a68070b89b6a48bde78422a5611208",
+    "active_map_path.txt": "65a2d8f4c3174c251f2a26c63337b9244c2a34df4712beed43c69a72b36562f6",
+    "home_pose_slam_2026-09-23_candidate_hallway.json": "2ada2ec7b859ad7143c04fd28273af9516b345c8c9ac31f1b0a1ce0a2e3bcbd4",
+    "home_pose_slam.json": "2ada2ec7b859ad7143c04fd28273af9516b345c8c9ac31f1b0a1ce0a2e3bcbd4"
+  },
+  "file_sizes_bytes": {
+    "house_slam_2026-09-23_candidate_hallway.yaml": 161,
+    "house_slam_2026-09-23_candidate_hallway.pgm": 44895,
+    "house_slam_2026-09-23_candidate_hallway.data": 349769,
+    "house_slam_2026-09-23_candidate_hallway.posegraph": 7119855,
+    "active_map_path.txt": 58,
+    "home_pose_slam_2026-09-23_candidate_hallway.json": 929,
+    "home_pose_slam.json": 929
+  }
+}

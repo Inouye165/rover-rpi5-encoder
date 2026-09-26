@@ -31,5 +31,5 @@ services:
       fi
       source /opt/ros/jazzy/setup.bash
       source /ros2_ws/install/setup.bash
-      exec ros2 launch rover_bringup foundation.launch.py
+      exec ros2 launch rover_bringup bringup.launch.py
       '

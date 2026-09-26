@@ -1,0 +1,7 @@
+image: house_slam_2026-09-23_candidate_hallway.pgm
+mode: trinary
+resolution: 0.050
+origin: [-4.202, -5.100, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
