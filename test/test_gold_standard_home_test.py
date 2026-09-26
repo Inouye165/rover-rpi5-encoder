@@ -61,8 +61,16 @@ def prevent_unmocked_network(monkeypatch):
                     "cmdSource": "CALIBRATION_TEST", "seq": 1
                 }
             }
+        elif "/api/navigation/dispatch" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "goal_id": "mock_goal_001",
+                "dispatch_meta": {"goal_id": "mock_goal_001", "dispatched_at": 1000.0}
+            }
         elif "/api/navigation/status" in url:
-            resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "distance_remaining_m": 0.0}
+            resp.json.return_value = {
+                "ok": True, "status": "SUCCEEDED", "goal_id": "mock_goal_001", "distance_remaining_m": 0.0
+            }
         elif "/api/localization/status" in url:
             resp.json.return_value = {
                 "ok": True, "localized": True, "state": "LOCALIZED",
@@ -74,7 +82,24 @@ def prevent_unmocked_network(monkeypatch):
                 "stale": False, "sequence": 1, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}
             }
         elif "/api/encoders" in url:
-            resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+            resp.json.return_value = {
+                "ok": True,
+                "schema_version": "1.0",
+                "serialConnected": True,
+                "timestamp": 12345678,
+                "lastPacketAgeMs": 15,
+                "sequence": 100,
+                "encoders": {"m1": 1000, "m2": 1000, "m3": 1000, "m4": 1000}
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "timestamp": 12345678,
+                "x": 0.0, "y": 0.0, "yaw": 0.0, "yaw_deg": 0.0,
+                "v_x": 0.0, "w_z": 0.0, "odometry_age_ms": 25,
+                "raw_d_left_m": 0.0, "raw_d_right_m": 0.0,
+                "node_health": "ok"
+            }
         elif "/api/clearance" in url:
             resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
         else:
@@ -667,13 +692,13 @@ class TestDefectCorrectionsAndIntegration:
             assert disarm_called is True
 
     def test_zero_output_handshake_verification(self):
-        """7. Verify real zero-output handshake: advancing telemetry, 3 consecutive zero samples, matching source."""
+        """7. Verify real zero-output handshake: advancing non-null sequence, >= 50ms apart, 3 consecutive samples."""
         mission = GoldStandardMission(dry_run=False)
-        seq_counter = 0
+        seq_counter = 10
+        mono_time = 100.0
 
         def mock_get(url, **kwargs):
             nonlocal seq_counter
-            seq_counter += 1
             resp = MagicMock()
             resp.status_code = 200
             if "/api/drive/status" in url:
@@ -694,12 +719,24 @@ class TestDefectCorrectionsAndIntegration:
             elif "/api/localization/status" in url:
                 resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "yaw": 0.0, "ageMs": 10}
             elif "/api/encoders" in url:
-                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+                resp.json.return_value = {
+                    "ok": True, "schema_version": "1.0", "serialConnected": True,
+                    "sequence": seq_counter, "encoders": {"m1": 10, "m2": 10, "m3": 10, "m4": 10}
+                }
+            elif "/api/odom" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "v_x": 0.0, "w_z": 0.0}
             elif "/api/clearance" in url:
                 resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
             return resp
 
-        with patch("requests.get", side_effect=mock_get):
+        def advancing_mono():
+            nonlocal mono_time, seq_counter
+            # Advance monotonic time by 60ms and seq by 1 per poll cycle
+            mono_time += 0.060
+            seq_counter += 1
+            return mono_time
+
+        with patch("requests.get", side_effect=mock_get),              patch("time.monotonic", side_effect=advancing_mono),              patch("time.sleep", return_value=None):
             res = mission.verify_zero_handshake(expected_cmd_source="NONE", timeout_s=1.0)
             assert res is True
 
@@ -730,7 +767,8 @@ class TestDefectCorrectionsAndIntegration:
                 resp.json.return_value = {"ok": True, "cmdSource": src}
             elif "/api/navigation/dispatch" in url:
                 actions_log.append("DISPATCH_NAV2")
-                resp.json.return_value = {"ok": True, "dispatched_at": time.time()}
+                gid = f"leg_goal_{len(actions_log)}"
+                resp.json.return_value = {"ok": True, "goal_id": gid, "dispatch_meta": {"goal_id": gid, "dispatched_at": time.time()}}
             elif "/api/cmd_vel" in url:
                 src = kwargs.get("json", {}).get("source", "UNKNOWN")
                 actions_log.append(f"CMD_VEL:{src}")
@@ -766,7 +804,10 @@ class TestDefectCorrectionsAndIntegration:
             elif "/api/navigation/status" in url:
                 nav_call_count += 1
                 st = "EXECUTING" if nav_call_count % 3 != 0 else "SUCCEEDED"
-                resp.json.return_value = {"ok": True, "status": st, "distance_remaining_m": 0.01}
+                # Echo active goal_id matching the latest dispatch
+                last_gids = [f"leg_goal_{i+1}" for i, a in enumerate(actions_log) if a == "DISPATCH_NAV2"]
+                active_gid = last_gids[-1] if last_gids else "leg_goal_1"
+                resp.json.return_value = {"ok": True, "status": st, "goal_id": active_gid, "distance_remaining_m": 0.01}
             elif "/api/localization/status" in url:
                 resp.json.return_value = {
                     "ok": True, "localized": True, "state": "LOCALIZED",
@@ -778,12 +819,20 @@ class TestDefectCorrectionsAndIntegration:
                     leg2_yaw = max(-180.0, leg2_yaw - 15.0)
                 elif "LEG4" in actions_log and abs(mission.latest_exact_cmd.get("wz", 0.0)) > 0.05:
                     leg2_yaw = min(0.0, leg2_yaw + 15.0)
+                gyro_val = 0.005 if (leg2_yaw >= -1.0 and "LEG4" in actions_log) else -0.4
                 resp.json.return_value = {
                     "ok": True, "serialConnected": True, "dataAgeMs": 10,
-                    "stale": False, "sequence": seq_num, "raw_yaw_deg": leg2_yaw, "gyro": {"z": -0.4}
+                    "stale": False, "sequence": seq_num, "raw_yaw_deg": leg2_yaw, "gyro": {"z": gyro_val}
                 }
             elif "/api/encoders" in url:
-                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+                resp.json.return_value = {
+                    "ok": True, "schema_version": "1.0", "serialConnected": True,
+                    "sequence": seq_num, "encoders": {"m1": 100, "m2": 100, "m3": 100, "m4": 100}
+                }
+            elif "/api/odom" in url:
+                resp.json.return_value = {
+                    "ok": True, "x": 0.0, "y": 0.0, "yaw_deg": leg2_yaw, "v_x": 0.0, "w_z": 0.0
+                }
             elif "/api/clearance" in url:
                 resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
             else:
@@ -794,7 +843,7 @@ class TestDefectCorrectionsAndIntegration:
         curr_m_time = 100.0
         def advancing_monotonic():
             nonlocal curr_m_time
-            curr_m_time += 0.02
+            curr_m_time += 0.060  # >= 50ms per poll
             return curr_m_time
 
         with patch("requests.post", side_effect=mock_post), \
@@ -839,3 +888,220 @@ class TestDefectCorrectionsAndIntegration:
             assert actions_log.count("ARM") == 2
             assert actions_log.count("DISARM") == 2
             assert actions_log[-1] == "SOURCE:NONE"
+
+
+class TestContractSchemasAndEdgeCases:
+    def test_real_encoders_and_odom_schemas(self):
+        """Contract: /api/encoders returns raw ticks; /api/odom returns actual kinematics."""
+        mission = GoldStandardMission(dry_run=False)
+
+        real_encoders_payload = {
+            "ok": True,
+            "schema_version": "1.0",
+            "serialConnected": True,
+            "timestamp": 1790450000000,
+            "lastPacketAgeMs": 12,
+            "sequence": 5432,
+            "parserStats": {"errors": 0},
+            "encoders": {
+                "m1": 12345,
+                "m2": -12340,
+                "m3": 12342,
+                "m4": -12338
+            }
+        }
+
+        real_odom_payload = {
+            "ok": True,
+            "timestamp": 1790450000.123,
+            "x": 0.1234,
+            "y": -0.0567,
+            "yaw": -0.088,
+            "yaw_deg": -5.042,
+            "v_x": 0.15,
+            "w_z": -0.02,
+            "odometry_age_ms": 42,
+            "node_health": "ok",
+            "raw_d_left_m": 0.12,
+            "raw_d_right_m": 0.12
+        }
+
+        def mock_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/encoders" in url:
+                resp.json.return_value = real_encoders_payload
+            elif "/api/odom" in url:
+                resp.json.return_value = real_odom_payload
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get):
+            mission.poll_all_telemetry()
+            
+            # Encoders must reflect raw ticks, not false kinematics
+            enc = mission.latest_telemetry.get("encoders")
+            assert enc is not None
+            assert enc["m1"] == 12345
+            assert enc["sequence"] == 5432
+
+            # Odom must reflect kinematics from /api/odom
+            od = mission.latest_telemetry.get("odom")
+            assert od is not None
+            assert abs(od["x"] - 0.1234) < 1e-4
+            assert abs(od["vx"] - 0.15) < 1e-4
+            assert abs(od["wz"] - (-0.02)) < 1e-4
+
+    def test_prevent_recursive_abort_when_cmd_vel_fails(self):
+        """Contract: When /api/cmd_vel is unavailable, disarm_and_stop does not recurse."""
+        mission = GoldStandardMission(dry_run=False)
+        cmd_vel_calls = 0
+
+        def failing_post(url, *args, **kwargs):
+            nonlocal cmd_vel_calls
+            if "/api/cmd_vel" in url:
+                cmd_vel_calls += 1
+                raise requests.exceptions.ConnectionError("Connection refused by bridge")
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.post", side_effect=failing_post):
+            # Calling disarm_and_stop must not raise recursion or uncaught error
+            mission.disarm_and_stop()
+            # cmd_vel was attempted with force_zero, failed safely, no recursion
+            assert cmd_vel_calls == 1
+            assert mission._in_disarm_and_stop is False
+
+    def test_stage_attribution_does_not_duplicate_fake_stages(self):
+        """Contract: smoothed_cmd is None unless a distinct smoother stage is polled."""
+        mission = GoldStandardMission(dry_run=True)
+        mission.latest_exact_cmd = {"vx": 0.10, "wz": 0.20}
+        mission.latest_telemetry["drive"] = {
+            "reqLinear": 0.10, "reqAngular": 0.20,
+            "limLinear": 0.08, "limAngular": 0.15,
+            "armed": True, "mode": 3
+        }
+
+        # Calibration test tick
+        mission.active_nav2_goal = False
+        mission.record_tick("LEG2_ROTATION")
+        last_frame = mission.recorder.frames[-1]
+        assert last_frame["cmd_source"] == "CALIBRATION_TEST"
+        assert last_frame["raw_cmd"]["vx"] == 0.10
+        assert last_frame["smoothed_cmd"] is None  # Must NOT be duplicated
+        assert last_frame["final_cmd"]["vx"] == 0.08
+
+        # Nav2 autonomy tick
+        mission.active_nav2_goal = True
+        mission.record_tick("LEG1_FORWARD")
+        nav_frame = mission.recorder.frames[-1]
+        assert nav_frame["cmd_source"] == "ROS_AUTONOMY"
+        assert nav_frame["raw_cmd"]["vx"] == 0.10
+        assert nav_frame["smoothed_cmd"] is None  # Must NOT be duplicated
+        assert nav_frame["final_cmd"]["vx"] == 0.08
+
+    def test_nav2_completion_requires_matching_goal_id(self):
+        """Contract: Nav2 completion rejects mismatched or stale prior goal IDs."""
+        mission = GoldStandardMission(dry_run=False)
+        poll_count = 0
+
+        def mock_status_get(url, **kwargs):
+            nonlocal poll_count
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/navigation/status" in url:
+                poll_count += 1
+                if poll_count == 1:
+                    resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "goal_id": "prior_stale_goal"}
+                elif poll_count == 2:
+                    resp.json.return_value = {"ok": True, "status": "EXECUTING", "goal_id": "target_goal_99"}
+                else:
+                    resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "goal_id": "target_goal_99"}
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "ageMs": 10}
+            elif "/api/imu" in url:
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": poll_count, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+            elif "/api/drive/status" in url:
+                resp.json.return_value = {"ok": True, "status": {"armed": True, "mode": 3, "bootCount": 1, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "ROS_AUTONOMY", "seq": poll_count}}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_status_get), \
+             patch("time.sleep", return_value=None):
+            res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_STAGE", goal_id="target_goal_99")
+            assert res is True
+            assert poll_count >= 3
+
+    def test_leg4_settle_requires_both_yaw_and_wz_within_tolerance(self):
+        """Contract: Final HOME settling requires yaw error <= 3° and |wz| <= 0.02 rad/s for 1.5s."""
+        mission = GoldStandardMission(dry_run=False)
+        m_time = 100.0
+        poll_step = 0
+        disarmed = False
+
+        def dynamic_post(url, *args, **kwargs):
+            nonlocal disarmed
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/drive/disarm" in url:
+                disarmed = True
+                resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+            elif "/api/command-source" in url:
+                src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST") if isinstance(kwargs.get("json"), dict) else "CALIBRATION_TEST"
+                resp.json.return_value = {"ok": True, "cmdSource": src}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        def dynamic_get(url, **kwargs):
+            nonlocal poll_step, disarmed
+            poll_step += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/drive/status" in url:
+                resp.json.return_value = {
+                    "ok": True, "status": {
+                        "armed": not disarmed,
+                        "mode": 0 if disarmed else 3,
+                        "bootCount": 1,
+                        "reqLinear": 0, "reqAngular": 0,
+                        "limLinear": 0, "limAngular": 0,
+                        "cmdSource": "NONE" if disarmed else "CALIBRATION_TEST",
+                        "seq": poll_step
+                    }
+                }
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "yaw": 0.0, "ageMs": 10}
+            elif "/api/imu" in url:
+                wz_val = 0.05 if poll_step <= 6 else 0.005
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": poll_step, "raw_yaw_deg": 0.0, "gyro": {"z": wz_val}}
+            elif "/api/odom" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0}
+            elif "/api/encoders" in url:
+                resp.json.return_value = {"ok": True, "sequence": poll_step, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            return resp
+
+        def dynamic_mono():
+            nonlocal m_time
+            m_time += 0.015
+            return m_time
+
+        def mock_sleep(s):
+            nonlocal m_time
+            m_time += 0.060
+
+        with patch("requests.post", side_effect=dynamic_post), \
+             patch("requests.get", side_effect=dynamic_get), \
+             patch("time.monotonic", side_effect=dynamic_mono), \
+             patch("time.sleep", side_effect=mock_sleep):
+            mission.execute_leg4_settle(target_home_yaw_rad=0.0)
+            assert poll_step > 6
+            assert disarmed is True

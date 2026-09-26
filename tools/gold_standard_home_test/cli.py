@@ -199,12 +199,8 @@ def run_cli():
     print("\nStarting Gold Standard Mission...")
     mission.recorder.record_transition("MISSION_START", {"dry_run": args.dry_run})
 
+    aborted = False
     try:
-        # Pre-arm
-        if not mission.arm():
-            print("[ABORT] Failed to arm drivetrain.")
-            sys.exit(1)
-
         # In dry run: simulate the 4 legs cleanly
         if args.dry_run:
             print("[DRY-RUN] Simulating Leg 1 (Outbound 0.6096 m via Nav2)...")
@@ -264,13 +260,17 @@ def run_cli():
                 mission.record_tick("LEG4_SETTLE")
                 time.sleep(0.035)
 
-            # Settle period (1.5s)
+            # Settle period (1.5s): yaw error <= 3.0 deg and |wz| <= 0.02 rad/s continuously
             mission.latest_telemetry["amcl"] = {"x": targets["home"]["x"], "y": targets["home"]["y"], "yaw_deg": targets["home"]["yaw_deg"], "localized": True, "state": "LOCALIZED"}
-            mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0}
+            mission.latest_telemetry["drive"] = {"armed": True, "mode": 3, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0}
+            mission.latest_telemetry["imu"] = {"raw_yaw_deg": targets["home"]["yaw_deg"], "gyro_z": 0.005, "serialConnected": True, "sequence": 9999}
             mission.latest_exact_cmd = {"vx": 0.0, "wz": 0.0}
             for step in range(40):
                 mission.record_tick("LEG4_SETTLE")
                 time.sleep(0.038)
+            # Final safe disarmed state after settling
+            mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0}
+            mission.record_tick("LEG4_SETTLE")
 
         else:
             # Physical Execution across the 4 deterministic legs
@@ -292,6 +292,10 @@ def run_cli():
     except MissionAbortException as mae:
         print(f"\n[MISSION ABORT] Safety watchdog triggered: {mae}")
         mission.recorder.record_transition("ABORT", {"reason": str(mae)})
+        aborted = True
+    except Exception as e:
+        print(f"\n[MISSION UNHANDLED EXCEPTION] {e}")
+        aborted = True
     finally:
         mission.disarm_and_stop()
         report_path = mission.recorder.save()
@@ -302,6 +306,10 @@ def run_cli():
         run_data = json.load(f)
     grade = MissionGrader.grade_run(run_data)
     print_grade_report(grade, report_path)
+
+    if aborted or grade.get("overall_status") != "PASS":
+        print(f"[EXIT NONZERO] Acceptance test did not pass. (aborted={aborted}, status={grade.get('overall_status')})")
+        sys.exit(1)
 
 if __name__ == "__main__":
     run_cli()

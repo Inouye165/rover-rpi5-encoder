@@ -16,28 +16,31 @@ class TelemetryFrame:
     mission_stage: str
     
     # Velocity Commands
-    raw_cmd: Dict[str, float]       # vx, wz
-    smoothed_cmd: Dict[str, float]  # vx, wz
-    final_cmd: Dict[str, float]     # vx, wz
-    cmd_source: str                 # "ROS_AUTONOMY", "EXACT_MOTION", "NONE", etc.
+    raw_cmd: Dict[str, float]                 # vx, wz
+    smoothed_cmd: Optional[Dict[str, float]]  # vx, wz (None if no distinct smoothing stage sampled)
+    final_cmd: Dict[str, float]               # vx, wz
+    cmd_source: str                           # "ROS_AUTONOMY", "CALIBRATION_TEST", "NONE", etc.
     
     # AMCL Localization
-    amcl: Dict[str, Any]            # x, y, yaw_deg, cov_x, cov_y, cov_yaw, localized
+    amcl: Dict[str, Any]                      # x, y, yaw_deg, cov_x, cov_y, cov_yaw, localized
     
     # Odometry
-    odom: Dict[str, Any]            # x, y, yaw_deg, vx, wz, left_dist, right_dist
+    odom: Dict[str, Any]                      # x, y, yaw_deg, vx, wz, raw_d_left_m, raw_d_right_m
+    
+    # Raw Encoders
+    encoders: Optional[Dict[str, Any]]        # m1, m2, m3, m4, sequence, lastPacketAgeMs
     
     # IMU
-    imu: Dict[str, Any]             # raw_yaw_deg, rel_yaw_deg, gyro_z, non_magnetic_valid
+    imu: Dict[str, Any]                       # raw_yaw_deg, rel_yaw_deg, gyro_z, non_magnetic_valid
     
     # Motor & Drive Hardware
-    drive: Dict[str, Any]           # armed, mode, reqLinear, reqAngular, limLinear, limAngular, bootCount, resetReason, rtcResetReason, lockStatus
+    drive: Dict[str, Any]                     # armed, mode, reqLinear, reqAngular, limLinear, limAngular, bootCount, resetReason, rtcResetReason, lockStatus
     
     # Safety / Collision Monitor
-    collision_monitor: Dict[str, Any] # action, polygon
+    collision_monitor: Dict[str, Any]         # action, polygon
     
     # Distance / Heading to HOME
-    to_home: Dict[str, float]       # pos_err_m, pos_err_cm, yaw_err_deg
+    to_home: Dict[str, float]                 # pos_err_m, pos_err_cm, yaw_err_deg
 
 
 class TelemetryRecorder:

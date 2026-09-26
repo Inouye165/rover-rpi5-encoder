@@ -4828,6 +4828,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   };
 
   let dispatchMeta = null;
+  const dispatchGoalId = (req.body && req.body.goal_id) ? String(req.body.goal_id) : ('goal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+  if (!req.body) req.body = {};
+  req.body.goal_id = dispatchGoalId;
+
   if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null) {
     const d = Number(req.body.relative_distance);
     const tx = snapshotPose.x + d * Math.cos(snapshotPose.yaw);
@@ -4843,6 +4847,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     req.body.yaw = tyaw;
 
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: true,
       source_pose: snapshotPose,
       relative_distance: d,
@@ -4860,6 +4865,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     const ty = Number(req.body.target_y !== undefined ? req.body.target_y : req.body.y);
     const tyaw = Number(req.body.target_yaw !== undefined ? req.body.target_yaw : (req.body.yaw || 0));
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: false,
       source_pose: snapshotPose,
       relative_distance: null,
@@ -4949,6 +4955,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       try {
         const parsed = JSON.parse(data);
         if (dispatchMeta) {
+          parsed.goal_id = dispatchMeta.goal_id;
           parsed.dispatch_meta = dispatchMeta;
           parsed.source_pose = dispatchMeta.source_pose;
           parsed.relative_distance = dispatchMeta.relative_distance;
@@ -5020,6 +5027,7 @@ app.get('/api/navigation/status', (req, res) => {
         const parsed = JSON.parse(data);
         if (lastDispatchedNav) {
           parsed.last_dispatch = lastDispatchedNav;
+          parsed.goal_id = parsed.goal_id || lastDispatchedNav.goal_id;
         }
         if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
           if (autonomyState && autonomyState.state === 'READY_ARMED') {
@@ -5512,6 +5520,19 @@ app.get('/api/encoders', (req, res) => {
       m4: currentTicks[3]
     }
   });
+});
+
+app.get('/api/odom', async (req, res) => {
+  try {
+    const odom = await fetchRosOdometry();
+    if (odom && (odom.ok || odom.valid)) {
+      res.json(odom);
+    } else {
+      res.status(503).json({ ok: false, error: 'Odometry unavailable or stale', odom });
+    }
+  } catch (err) {
+    res.status(502).json({ ok: false, error: Failed to fetch odometry:  });
+  }
 });
 
 app.get('/api/imu', (req, res) => {

@@ -18,6 +18,7 @@ import threading
 import yaml
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+import uuid
 
 import rclpy
 from rclpy.node import Node
@@ -395,7 +396,7 @@ class RoverNavBridge(Node):
             "timing_bridge": timing_bridge
         }
 
-    def dispatch_goal(self, target_x, target_y, target_yaw):
+    def dispatch_goal(self, target_x, target_y, target_yaw, goal_id=None):
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/navigate_to_pose action server unavailable"}
 
@@ -420,6 +421,7 @@ class RoverNavBridge(Node):
             return {"ok": False, "error": "Goal was rejected by /navigate_to_pose action server"}
 
         self.active_goal_handle = future.result()
+        self.active_goal_id = str(goal_id) if goal_id else str(uuid.uuid4())
         self.active_goal_status = "EXECUTING"
         self.active_target = {"x": target_x, "y": target_y, "yaw": target_yaw}
 
@@ -441,7 +443,7 @@ class RoverNavBridge(Node):
         res_fut = self.active_goal_handle.get_result_async()
         res_fut.add_done_callback(_on_done)
 
-        return {"ok": True, "status": "EXECUTING", "target": self.active_target}
+        return {"ok": True, "status": "EXECUTING", "goal_id": self.active_goal_id, "target": self.active_target}
 
     def request_nomotion_update(self, timeout_sec=1.5):
         """Requests an instantaneous AMCL no-motion particle filter update."""
@@ -477,6 +479,7 @@ class RoverNavBridge(Node):
             pass
 
         self.active_goal_status = "CANCELLED"
+        self.active_goal_id = None
         self.latest_local_plan = []
         return {"ok": True, "status": "CANCELLED", "cancelled": cancelled}
 
@@ -552,6 +555,7 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             data = {
                 "ok": True,
                 "status": bridge_node.active_goal_status,
+                "goal_id": getattr(bridge_node, 'active_goal_id', None),
                 "target": bridge_node.active_target,
                 "distance_remaining_m": round(dist_rem, 3),
                 "global_path": bridge_node.latest_global_plan,
@@ -599,8 +603,9 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             tx = float(req_json.get('target_x', 2.154))
             ty = float(req_json.get('target_y', -0.235))
             tyaw = float(req_json.get('target_yaw', -0.073))
+            gid = req_json.get('goal_id')
 
-            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw)
+            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw, goal_id=gid)
             self._send_json(200 if dispatch_res.get('ok') else 400, dispatch_res)
 
         elif self.path == '/api/nav/cancel':

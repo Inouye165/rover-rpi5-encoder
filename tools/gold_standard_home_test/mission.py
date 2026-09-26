@@ -97,6 +97,10 @@ class GoldStandardMission:
         self.recorder.metadata["home_pose"] = self.home_pose
         self.yaw_tracker = ContinuousYawTracker()
 
+        # Sidecar / proxy endpoints
+        self.odom_url = "http://127.0.0.1:3003"
+        self._in_disarm_and_stop: bool = False
+
         # Command ownership & isolation state
         self.active_nav2_goal: bool = False
         self.current_cmd_source: str = "NONE"
@@ -112,6 +116,7 @@ class GoldStandardMission:
         self.latest_telemetry: Dict[str, Any] = {
             "amcl": None,
             "odom": None,
+            "encoders": None,
             "imu": None,
             "drive": None,
             "cm": None,
@@ -303,28 +308,34 @@ class GoldStandardMission:
         return True
 
     def disarm_and_stop(self):
-        """Immediately halts all physical motion, zeroes commands, and disarms to Mode 0."""
-        print("[SAFETY] Disarming drivetrain, zeroing commands, and locking Mode 0...")
+        """Immediately halts all physical motion, zeroes commands, and disarms to Mode 0. Prevents recursion."""
+        if getattr(self, '_in_disarm_and_stop', False):
+            return
+        self._in_disarm_and_stop = True
         try:
-            self.send_velocity(0.0, 0.0, force_zero=True)
-        except Exception:
-            pass
+            print("[SAFETY] Disarming drivetrain, zeroing commands, and locking Mode 0...")
+            try:
+                self.send_velocity(0.0, 0.0, force_zero=True)
+            except Exception:
+                pass
 
-        try:
-            self.set_command_source("NONE", check_errors=False)
-        except Exception:
-            pass
-        
-        if not self.dry_run:
             try:
-                requests.post(f"{self.cockpit_url}/api/navigation/cancel", timeout=1.0)
+                self.set_command_source("NONE", check_errors=False)
             except Exception:
                 pass
-            try:
-                requests.post(f"{self.cockpit_url}/api/drive/disarm", timeout=1.0)
-            except Exception:
-                pass
-        self.active_nav2_goal = False
+            
+            if not self.dry_run:
+                try:
+                    requests.post(f"{self.cockpit_url}/api/navigation/cancel", timeout=1.0)
+                except Exception:
+                    pass
+                try:
+                    requests.post(f"{self.cockpit_url}/api/drive/disarm", timeout=1.0)
+                except Exception:
+                    pass
+            self.active_nav2_goal = False
+        finally:
+            self._in_disarm_and_stop = False
 
     def update_drive_status(self) -> Dict[str, Any]:
         """Queries /api/drive/status to monitor hardware health and command echoes."""
@@ -407,19 +418,48 @@ class GoldStandardMission:
         except Exception:
             pass
 
-        # 4. Encoders & Odom
+        # 4. Raw Encoders (/api/encoders returns raw ticks)
         try:
             r_enc = requests.get(f"{self.cockpit_url}/api/encoders", timeout=0.2)
             if r_enc.status_code == 200:
                 enc = r_enc.json()
+                enc_ticks = enc.get("encoders") or {}
+                self.latest_telemetry["encoders"] = {
+                    "m1": enc_ticks.get("m1", 0),
+                    "m2": enc_ticks.get("m2", 0),
+                    "m3": enc_ticks.get("m3", 0),
+                    "m4": enc_ticks.get("m4", 0),
+                    "sequence": enc.get("sequence", 0),
+                    "lastPacketAgeMs": enc.get("lastPacketAgeMs", 0)
+                }
+        except Exception:
+            pass
+
+        # 5. Odometry (from Cockpit proxy /api/odom or sidecar port 3003)
+        try:
+            r_odom = None
+            try:
+                r_odom = requests.get(f"{self.cockpit_url}/api/odom", timeout=0.2)
+            except Exception:
+                pass
+            if r_odom is None or r_odom.status_code != 200:
+                try:
+                    r_odom = requests.get(f"{self.odom_url}/api/odom", timeout=0.2)
+                except Exception:
+                    pass
+            if r_odom is not None and r_odom.status_code == 200:
+                od = r_odom.json()
                 self.latest_telemetry["odom"] = {
-                    "x": enc.get("x", 0.0),
-                    "y": enc.get("y", 0.0),
-                    "yaw_deg": enc.get("yaw_deg", 0.0),
-                    "vx": enc.get("vx", 0.0),
-                    "wz": enc.get("wz", 0.0),
-                    "left_dist": enc.get("left_dist", 0.0),
-                    "right_dist": enc.get("right_dist", 0.0)
+                    "x": float(od.get("x", 0.0)),
+                    "y": float(od.get("y", 0.0)),
+                    "yaw_deg": float(od.get("yaw_deg", math.degrees(od.get("yaw", 0.0)))),
+                    "yaw_rad": float(od.get("yaw", math.radians(od.get("yaw_deg", 0.0)))),
+                    "vx": float(od.get("v_x", od.get("vx", 0.0))),
+                    "wz": float(od.get("w_z", od.get("wz", 0.0))),
+                    "raw_d_left_m": float(od.get("raw_d_left_m", 0.0)),
+                    "raw_d_right_m": float(od.get("raw_d_right_m", 0.0)),
+                    "odometry_age_ms": od.get("odometry_age_ms", 0),
+                    "node_health": od.get("node_health", "ok")
                 }
         except Exception:
             pass
@@ -493,15 +533,24 @@ class GoldStandardMission:
         try:
             r = requests.post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=0.2)
             if r.status_code != 200:
-                self.disarm_and_stop()
+                if force_zero:
+                    return
+                if not getattr(self, '_in_disarm_and_stop', False):
+                    self.disarm_and_stop()
                 raise MissionAbortException(f"Velocity command rejected by bridge (HTTP {r.status_code}): {r.text}")
             res = r.json()
             if not res.get("ok", False):
-                self.disarm_and_stop()
+                if force_zero:
+                    return
+                if not getattr(self, '_in_disarm_and_stop', False):
+                    self.disarm_and_stop()
                 raise MissionAbortException(f"Velocity command returned ok=false: {res}")
         except Exception as e:
+            if force_zero:
+                return
             if not isinstance(e, MissionAbortException):
-                self.disarm_and_stop()
+                if not getattr(self, '_in_disarm_and_stop', False):
+                    self.disarm_and_stop()
                 raise MissionAbortException(f"Exception sending velocity command: {e}")
             raise
 
@@ -568,17 +617,20 @@ class GoldStandardMission:
         pos_err_m = math.hypot(amcl.get("x", 0.0) - self.home_pose["x"], amcl.get("y", 0.0) - self.home_pose["y"])
         yaw_err_deg = wrap_angle_deg(amcl.get("yaw_deg", 0.0) - self.home_pose["yaw_deg"])
 
-        # Determine command stream attribution
+        # Determine command stream attribution (do not duplicate commands into fake stages)
         if self.active_nav2_goal:
             cmd_source = "ROS_AUTONOMY"
             cmd_raw = {"vx": drive.get("reqLinear", 0.0), "wz": drive.get("reqAngular", 0.0)}
-            cmd_smooth = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
+            cmd_smooth = None  # Nav2 velocity_smoother stage is internal to ROS 2; not separately polled via HTTP
             cmd_final = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
         else:
             cmd_source = "CALIBRATION_TEST"
             cmd_raw = dict(self.latest_exact_cmd)
-            cmd_smooth = dict(self.latest_exact_cmd)
-            cmd_final = dict(self.latest_exact_cmd)
+            cmd_smooth = None  # Direct test commands do not undergo intermediate velocity smoothing
+            if drive and "limLinear" in drive and abs(drive.get("limLinear", 0.0)) > 1e-4:
+                cmd_final = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
+            else:
+                cmd_final = dict(self.latest_exact_cmd)
 
         frame = TelemetryFrame(
             t_rel_s=t_rel,
@@ -590,6 +642,7 @@ class GoldStandardMission:
             cmd_source=cmd_source,
             amcl=amcl,
             odom=odom,
+            encoders=self.latest_telemetry.get("encoders"),
             imu=imu,
             drive=drive,
             collision_monitor=cm,
@@ -627,7 +680,7 @@ class GoldStandardMission:
                 raise MissionAbortException(f"Nav2 dispatch returned ok=false: {res}")
             
             self.active_nav2_goal = True
-            goal_id = str(res.get("dispatch_meta", {}).get("dispatched_at") or res.get("dispatched_at") or time.time())
+            goal_id = str(res.get("goal_id") or res.get("dispatch_meta", {}).get("goal_id") or res.get("dispatch_meta", {}).get("dispatched_at") or time.time())
             return goal_id
         except Exception as e:
             if not isinstance(e, MissionAbortException):
@@ -637,21 +690,30 @@ class GoldStandardMission:
 
     def verify_zero_handshake(self, expected_cmd_source: str, timeout_s: float = 3.0) -> bool:
         """
-        Requires advancing telemetry and at least 3 consecutive samples showing zero requested/limited velocity,
-        no active Nav2 goal, and the expected command source.
+        Requires advancing telemetry and at least 3 consecutive, non-null sequence samples at least 50 ms apart,
+        showing zero requested/limited velocity, no active Nav2 goal, and the expected command source.
         """
         t_start = time.monotonic()
         consecutive_zeros = 0
-        last_seen_seq = None
+        last_seen_seq: Optional[int] = None
+        last_sample_time: float = 0.0
 
         while time.monotonic() - t_start < timeout_s:
             self.poll_all_telemetry()
             drive = self.latest_telemetry.get("drive") or {}
             imu = self.latest_telemetry.get("imu") or {}
             
-            curr_seq = imu.get("sequence") or drive.get("seq")
-            advancing = (last_seen_seq is None) or (curr_seq != last_seen_seq) or self.dry_run
-            last_seen_seq = curr_seq
+            curr_seq = imu.get("sequence") if imu.get("sequence") is not None else drive.get("seq")
+            now = time.monotonic()
+
+            is_non_null = (curr_seq is not None)
+            is_advancing = (last_seen_seq is not None and curr_seq > last_seen_seq)
+            dt_ok = (last_sample_time == 0.0 or (now - last_sample_time >= 0.050))
+
+            if self.dry_run:
+                is_non_null = True
+                is_advancing = True
+                dt_ok = True
 
             req_l = abs(drive.get("reqLinear", 0.0))
             req_a = abs(drive.get("reqAngular", 0.0))
@@ -661,18 +723,28 @@ class GoldStandardMission:
 
             src_matches = (expected_cmd_source in (current_src, "ANY")) or self.dry_run
 
-            if (advancing and
-                req_l < 1e-4 and req_a < 1e-4 and
-                lim_l < 1e-4 and lim_a < 1e-4 and
-                not self.active_nav2_goal and
-                src_matches):
-                consecutive_zeros += 1
-                if consecutive_zeros >= 3:
-                    return True
-            else:
-                consecutive_zeros = 0
+            is_zero = (req_l < 1e-4 and req_a < 1e-4 and
+                       lim_l < 1e-4 and lim_a < 1e-4 and
+                       not self.active_nav2_goal and
+                       src_matches)
 
-            time.sleep(0.04)
+            if is_non_null and is_advancing and dt_ok:
+                if is_zero:
+                    consecutive_zeros += 1
+                    last_seen_seq = curr_seq
+                    last_sample_time = now
+                    if consecutive_zeros >= 3:
+                        return True
+                else:
+                    consecutive_zeros = 0
+                    last_seen_seq = curr_seq
+                    last_sample_time = now
+            elif last_seen_seq is None and is_non_null:
+                # Initialize baseline sequence
+                last_seen_seq = curr_seq
+                last_sample_time = now
+
+            time.sleep(0.025)
 
         self.disarm_and_stop()
         raise MissionAbortException(f"Zero-output handshake failed: could not confirm 3 consecutive zero samples for source {expected_cmd_source}")
@@ -703,25 +775,32 @@ class GoldStandardMission:
                     nav_stat = r.json()
                     status_str = nav_stat.get("status", "")
                     
-                    # Phase 1: Verify goal becomes active
-                    if not goal_observed_active:
-                        if status_str in ("EXECUTING", "ACTIVE"):
-                            goal_observed_active = True
-                        elif status_str in ("IDLE", "CANCELLED", "STOPPED"):
-                            # Still in initial / stale pre-start state: DO NOT accept as complete
-                            pass
+                    reported_goal_id = str(nav_stat.get("goal_id") or nav_stat.get("last_dispatch", {}).get("goal_id") or "")
                     
-                    # Phase 2: Once active, require SUCCEEDED
-                    if goal_observed_active:
-                        if status_str == "SUCCEEDED":
-                            # Goal succeeded. Cockpit automatically initiates disarm on SUCCEEDED.
-                            self.active_nav2_goal = False
-                            time.sleep(0.1)
-                            self.poll_all_telemetry()
-                            return True
-                        elif status_str in ("ABORTED", "FAILED"):
-                            self.disarm_and_stop()
-                            raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
+                    # Verify reporting matches this specific dispatched goal
+                    if reported_goal_id and reported_goal_id != goal_id:
+                        # Stale status from earlier goal; ignore
+                        pass
+                    else:
+                        # Phase 1: Verify goal becomes active
+                        if not goal_observed_active:
+                            if status_str in ("EXECUTING", "ACTIVE"):
+                                goal_observed_active = True
+                            elif status_str in ("IDLE", "CANCELLED", "STOPPED"):
+                                # Still in initial / stale pre-start state: DO NOT accept as complete
+                                pass
+                        
+                        # Phase 2: Once active, require SUCCEEDED
+                        if goal_observed_active:
+                            if status_str == "SUCCEEDED":
+                                # Goal succeeded. Cockpit automatically initiates disarm on SUCCEEDED.
+                                self.active_nav2_goal = False
+                                time.sleep(0.1)
+                                self.poll_all_telemetry()
+                                return True
+                            elif status_str in ("ABORTED", "FAILED"):
+                                self.disarm_and_stop()
+                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
             except Exception as e:
                 if isinstance(e, MissionAbortException):
                     raise
@@ -862,13 +941,17 @@ class GoldStandardMission:
             delta_yaw = wrap_angle_rad(target_home_yaw_rad - cur_th)
             yaw_err_deg = abs(math.degrees(delta_yaw))
 
-            if yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG:
+            # Measure physical angular rate from IMU gyro
+            measured_wz = abs(self.latest_telemetry.get("imu", {}).get("gyro_z", 0.0))
+            is_settled_reading = (yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG) and (measured_wz <= 0.02)
+
+            if is_settled_reading:
                 self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
                 self.record_tick("LEG4_SETTLE")
                 if settle_start_time is None:
                     settle_start_time = time.monotonic()
                 elif time.monotonic() - settle_start_time >= 1.5:
-                    print(f"[LEG 4 COMPLETE] Settled at HOME with yaw error {yaw_err_deg:.2f}° (Limit <= 3.0°).")
+                    print(f"[LEG 4 COMPLETE] Settled at HOME with yaw error {yaw_err_deg:.2f}° and |wz| {measured_wz:.3f} rad/s (Limits <= 3.0°, <= 0.02 rad/s).")
                     self.recorder.record_transition("LEG4_SETTLE_END")
                     self.disarm()
                     self.set_command_source("NONE")
