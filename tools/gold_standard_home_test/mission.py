@@ -183,6 +183,12 @@ class GoldStandardMission:
         fields are missing/stale, refuses to arm and NEVER substitutes HOME coordinates.
         """
         try:
+            # Request instantaneous AMCL refresh while stationary & disarmed to ensure fresh sample
+            try:
+                requests.post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
+            except Exception:
+                pass
+
             r = requests.get(f"{self.cockpit_url}/api/localization/status", timeout=1.0)
             if r.status_code != 200:
                 return False, f"HTTP error {r.status_code} from /api/localization/status: {r.text}", None
