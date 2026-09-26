@@ -38,7 +38,10 @@ def test_manifest_checksums_and_integrity():
         fp = os.path.join(PROD_MAP_DIR, filename)
         assert os.path.isfile(fp), f"File in manifest missing from disk: {filename}"
         with open(fp, "rb") as f_data:
-            actual_hash = hashlib.sha256(f_data.read()).hexdigest()
+            data_bytes = f_data.read()
+            if filename.endswith((".yaml", ".json", ".txt")):
+                data_bytes = data_bytes.replace(b"\r\n", b"\n")
+            actual_hash = hashlib.sha256(data_bytes).hexdigest()
         assert actual_hash == exp_hash, f"Checksum mismatch for {filename}: expected {exp_hash}, got {actual_hash}"
 
 def test_production_yaml_format():

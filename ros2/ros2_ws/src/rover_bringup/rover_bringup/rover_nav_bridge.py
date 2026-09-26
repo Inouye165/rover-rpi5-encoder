@@ -21,10 +21,11 @@ import requests
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rclpy.action import ActionClient
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from nav2_msgs.srv import ManageLifecycleNodes, ClearEntireCostmap
+from nav2_msgs.srv import ManageLifecycleNodes, ClearEntireCostmap, SetInitialPose
 from lifecycle_msgs.srv import GetState
 from std_srvs.srv import Empty
 from nav_msgs.msg import Path
@@ -54,8 +55,15 @@ class RoverNavBridge(Node):
         # Pre-load and cache map
         self.map_cache = self._load_map()
 
+        # Latched initialpose publisher for cold-start and AMCL seeding
+        latched_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
+        self.pub_initialpose = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', latched_qos)
+
         # Warm up action clients in background so first request is instant
         threading.Thread(target=self._warm_up_clients, daemon=True).start()
+
+        # Automated cold-start boot initializer
+        threading.Thread(target=self._auto_init_worker, daemon=True).start()
 
         self.get_logger().info("RoverNavBridge initialized. Subscribed to /plan, /local_plan.")
 
@@ -65,6 +73,94 @@ class RoverNavBridge(Node):
             self.nav_client.wait_for_server(timeout_sec=2.0)
         except Exception:
             pass
+
+    def _auto_init_worker(self):
+        """Automated cold-start boot initializer: waits for AMCL, applies verified HOME, converges particles, and ensures Nav2 is active."""
+        self.get_logger().info("Cold-start auto-initializer starting background monitor...")
+        time.sleep(3.0)
+
+        # Wait for AMCL or /set_initial_pose
+        set_pose_cli = self.create_client(SetInitialPose, '/set_initial_pose')
+        service_ready = set_pose_cli.wait_for_service(timeout_sec=15.0)
+
+        # Load active HOME pose
+        home_path = self._get_active_home_pose_path()
+        hx, hy, hyaw_deg = 1.193853, -0.045221, -5.047
+        qz, qw = -0.044029, 0.999030
+        if os.path.exists(home_path):
+            try:
+                with open(home_path, 'r') as f:
+                    hj = json.load(f)
+                pos = hj.get('pose', {}).get('position', {})
+                ori = hj.get('pose', {}).get('orientation', {})
+                hx = float(pos.get('x', hx))
+                hy = float(pos.get('y', hy))
+                hyaw_deg = float(hj.get('pose', {}).get('yaw_deg', hyaw_deg))
+                qz = float(ori.get('z', qz))
+                qw = float(ori.get('w', qw))
+            except Exception as e:
+                self.get_logger().warn(f"Failed parsing home file {home_path}: {e}")
+
+        # Construct PoseWithCovarianceStamped msg
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = hx
+        msg.pose.pose.position.y = hy
+        msg.pose.pose.position.z = 0.0
+        msg.pose.pose.orientation.z = qz
+        msg.pose.pose.orientation.w = qw
+        msg.pose.covariance = [0.0] * 36
+        msg.pose.covariance[0] = 0.01
+        msg.pose.covariance[7] = 0.01
+        msg.pose.covariance[35] = 0.003
+
+        # Publish on /initialpose topic repeatedly
+        for _ in range(5):
+            msg.header.stamp = self.get_clock().now().to_msg()
+            self.pub_initialpose.publish(msg)
+            time.sleep(0.1)
+
+        if service_ready:
+            req = SetInitialPose.Request()
+            req.pose = msg
+            fut = set_pose_cli.call_async(req)
+            t0 = time.time()
+            while not fut.done() and (time.time() - t0) < 3.0:
+                time.sleep(0.05)
+            self.get_logger().info(f"Cold-start auto-init: /set_initial_pose handshake sent for HOME ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg)")
+        else:
+            self.get_logger().info(f"Cold-start auto-init: published /initialpose for HOME ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg)")
+
+        # Wait 2 seconds for AMCL to publish map->odom and for planner_server to activate
+        time.sleep(2.0)
+
+        # Send 5 stationary no-motion updates to converge particles
+        for i in range(5):
+            self.request_nomotion_update()
+            time.sleep(0.25)
+
+        # Ensure lifecycle_manager_navigation is active
+        try:
+            mgr_cli = self.create_client(ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
+            if mgr_cli.wait_for_service(timeout_sec=2.0):
+                req_mgr = ManageLifecycleNodes.Request()
+                req_mgr.command = 0  # STARTUP
+                mgr_cli.call_async(req_mgr)
+        except Exception:
+            pass
+
+        # Clear costmaps
+        for cm_srv in ['/global_costmap/clear_entirely_global_costmap', '/local_costmap/clear_entirely_local_costmap']:
+            try:
+                cm_cli = self.create_client(ClearEntireCostmap, cm_srv)
+                if cm_cli.wait_for_service(timeout_sec=2.0):
+                    cm_cli.call_async(ClearEntireCostmap.Request())
+            except Exception:
+                pass
+
+        self.get_logger().info("Cold-start auto-initializer: Nav2 activation and HOME convergence complete.")
+
 
     def _plan_cb(self, msg: Path):
         self.latest_global_plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses]
@@ -491,87 +587,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-    def _auto_init_worker(self):
-        """Automated cold-start boot initializer: waits for AMCL, applies verified HOME, converges particles, and ensures Nav2 is active."""
-        self.get_logger().info("Cold-start auto-initializer starting background monitor...")
-        time.sleep(3.0)
-
-        # 1. Wait for AMCL or initialpose service readiness
-        from nav2_msgs.srv import SetInitialPose
-        set_pose_cli = self.create_client(SetInitialPose, '/set_initial_pose')
-        ready = set_pose_cli.wait_for_service(timeout_sec=25.0)
-        if not ready:
-            self.get_logger().warn("Cold-start auto-init: /set_initial_pose service unavailable after 25s timeout; skipping automated seeding.")
-            return
-
-        # 2. Check if already localized
-        try:
-            r = requests.get(ODOM_API_URL, timeout=1.0).json()
-            if r.get('localization', {}).get('localized'):
-                self.get_logger().info("Cold-start auto-init: rover is already localized; skipping automated seeding.")
-                return
-        except Exception:
-            pass
-
-        # 3. Load active HOME pose
-        home_path = self._get_active_home_pose_path()
-        hx, hy, hyaw_deg = 1.193853, -0.045221, -5.047
-        qz, qw = -0.044029, 0.999030
-        if os.path.exists(home_path):
-            try:
-                with open(home_path, 'r') as f:
-                    hj = json.load(f)
-                pos = hj.get('pose', {}).get('position', {})
-                ori = hj.get('pose', {}).get('orientation', {})
-                hx = float(pos.get('x', hx))
-                hy = float(pos.get('y', hy))
-                hyaw_deg = float(hj.get('pose', {}).get('yaw_deg', hyaw_deg))
-                qz = float(ori.get('z', qz))
-                qw = float(ori.get('w', qw))
-            except Exception as e:
-                self.get_logger().warn(f"Failed parsing home file {home_path}: {e}")
-
-        # 4. Call /set_initial_pose
-        try:
-            req = SetInitialPose.Request()
-            req.pose.header.frame_id = 'map'
-            req.pose.header.stamp = self.get_clock().now().to_msg()
-            req.pose.pose.pose.position.x = hx
-            req.pose.pose.pose.position.y = hy
-            req.pose.pose.pose.position.z = 0.0
-            req.pose.pose.pose.orientation.z = qz
-            req.pose.pose.pose.orientation.w = qw
-            req.pose.pose.covariance = [0.0] * 36
-            req.pose.pose.covariance[0] = 0.01
-            req.pose.pose.covariance[7] = 0.01
-            req.pose.pose.covariance[35] = 0.003
-            fut = set_pose_cli.call_async(req)
-            t0 = time.time()
-            while not fut.done() and (time.time() - t0) < 3.0:
-                time.sleep(0.05)
-            self.get_logger().info(f"Cold-start auto-init: /set_initial_pose handshake sent for HOME ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg)")
-        except Exception as e:
-            self.get_logger().error(f"Cold-start auto-init failed setting initial pose: {e}")
-
-        time.sleep(1.0)
-
-        # 5. Send 5 stationary no-motion updates to converge particles
-        for i in range(5):
-            self.request_nomotion_update()
-            time.sleep(0.25)
-
-        # 6. Ensure lifecycle_manager_navigation is active
-        mgr_cli = self.create_client(ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
-        if mgr_cli.wait_for_service(timeout_sec=2.0):
-            req_mgr = ManageLifecycleNodes.Request()
-            req_mgr.command = 0  # STARTUP
-            mgr_cli.call_async(req_mgr)
-
-        # 7. Clear costmaps
-        for cm_srv in ['/global_costmap/clear_entirely_global_costmap', '/local_costmap/clear_entirely_local_costmap']:
-            cm_cli = self.create_client(ClearEntireCostmap, cm_srv)
-            if cm_cli.wait_for_service(timeout_sec=1.5):
-                cm_cli.call_async(ClearEntireCostmap.Request())
-
-        self.get_logger().info("Cold-start auto-initializer: Nav2 activation and HOME convergence complete.")
