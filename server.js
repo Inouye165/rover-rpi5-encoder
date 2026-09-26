@@ -4748,6 +4748,30 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   };
 }
 
+app.post('/api/navigation/init_home', async (req, res) => {
+  try {
+    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/init_home', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {})
+    });
+    const data = await bridgeResp.json();
+    return res.status(bridgeResp.ok ? 200 : 400).json(data);
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: `Failed to contact nav bridge: ${err.message}` });
+  }
+});
+
+app.get('/api/navigation/validate_home', async (req, res) => {
+  try {
+    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/validate_home');
+    const data = await bridgeResp.json();
+    return res.status(bridgeResp.ok ? 200 : 400).json(data);
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: `Failed to contact nav bridge: ${err.message}` });
+  }
+});
+
 app.post('/api/navigation/refresh_localization', async (req, res) => {
   const refreshResult = await refreshLocalizationBeforeDispatch(1500);
   res.status(refreshResult.ok ? 200 : 409).json(refreshResult);

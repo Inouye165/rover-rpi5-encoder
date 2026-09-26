@@ -22,6 +22,7 @@ import requests
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+from rover_bringup.scan_validator import validate_laserscan_msg
 from rclpy.action import ActionClient
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
@@ -29,6 +30,8 @@ from nav2_msgs.srv import ManageLifecycleNodes, ClearEntireCostmap, SetInitialPo
 from lifecycle_msgs.srv import GetState
 from std_srvs.srv import Empty
 from nav_msgs.msg import Path
+from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 
 DEFAULT_PORT = 3005
 ODOM_API_URL = "http://127.0.0.1:3003/api/odom"
@@ -52,6 +55,11 @@ class RoverNavBridge(Node):
         self.sub_plan = self.create_subscription(Path, '/plan', self._plan_cb, 10)
         self.sub_local_plan = self.create_subscription(Path, '/local_plan', self._local_plan_cb, 10)
 
+        # Laser scan subscription for cold-start verification
+        self.latest_scan = None
+        self.latest_scan_time = 0.0
+        self.sub_scan = self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
+
         # Pre-load and cache map
         self.map_cache = self._load_map()
 
@@ -67,6 +75,10 @@ class RoverNavBridge(Node):
 
         self.get_logger().info("RoverNavBridge initialized. Subscribed to /plan, /local_plan.")
 
+    def _scan_cb(self, msg: LaserScan):
+        self.latest_scan = msg
+        self.latest_scan_time = time.time()
+
     def _warm_up_clients(self):
         try:
             self.compute_path_client.wait_for_server(timeout_sec=2.0)
@@ -74,16 +86,7 @@ class RoverNavBridge(Node):
         except Exception:
             pass
 
-    def _auto_init_worker(self):
-        """Automated cold-start boot initializer: waits for AMCL, applies verified HOME, converges particles, and ensures Nav2 is active."""
-        self.get_logger().info("Cold-start auto-initializer starting background monitor...")
-        time.sleep(3.0)
-
-        # Wait for AMCL or /set_initial_pose
-        set_pose_cli = self.create_client(SetInitialPose, '/set_initial_pose')
-        service_ready = set_pose_cli.wait_for_service(timeout_sec=15.0)
-
-        # Load active HOME pose
+    def _get_home_dict(self):
         home_path = self._get_active_home_pose_path()
         hx, hy, hyaw_deg = 1.193853, -0.045221, -5.047
         qz, qw = -0.044029, 0.999030
@@ -92,16 +95,62 @@ class RoverNavBridge(Node):
                 with open(home_path, 'r') as f:
                     hj = json.load(f)
                 pos = hj.get('pose', {}).get('position', {})
-                ori = hj.get('pose', {}).get('orientation', {})
+                ori = hj.get('pose', {})
                 hx = float(pos.get('x', hx))
                 hy = float(pos.get('y', hy))
-                hyaw_deg = float(hj.get('pose', {}).get('yaw_deg', hyaw_deg))
-                qz = float(ori.get('z', qz))
-                qw = float(ori.get('w', qw))
+                hyaw_deg = float(ori.get('yaw_deg', hyaw_deg))
+                q_obj = hj.get('pose', {}).get('orientation', {})
+                qz = float(q_obj.get('z', qz))
+                qw = float(q_obj.get('w', qw))
             except Exception as e:
                 self.get_logger().warn(f"Failed parsing home file {home_path}: {e}")
+        return {
+            "x": hx,
+            "y": hy,
+            "yaw_deg": hyaw_deg,
+            "yaw_rad": math.radians(hyaw_deg),
+            "qz": qz,
+            "qw": qw
+        }
 
-        # Construct PoseWithCovarianceStamped msg
+    def validate_scan_against_home(self, timeout_sec=5.0, min_overlap=0.75, max_age_sec=0.75):
+        """Compares live LiDAR scan against map assuming rover is at saved HOME pose."""
+        t0 = time.time()
+        while self.latest_scan is None and (time.time() - t0) < timeout_sec:
+            time.sleep(0.1)
+
+        if self.latest_scan is None:
+            return {
+                "ok": False,
+                "overlap": 0.0,
+                "hits": 0,
+                "total_valid": 0,
+                "reason": "MISSING_SCAN",
+                "details": f"No scan received on /scan topic within {timeout_sec}s"
+            }
+
+        map_dict = self._load_map()
+        home_dict = self._get_home_dict()
+        now_sec = time.time()
+
+        return validate_laserscan_msg(
+            scan_msg=self.latest_scan,
+            map_dict=map_dict,
+            home_dict=home_dict,
+            now_sec=now_sec,
+            max_age_sec=max_age_sec,
+            min_overlap=min_overlap
+        )
+
+    def initialize_home_pose(self, source="manual"):
+        """Explicitly applies the saved HOME pose to AMCL, converges particles, and clears costmaps."""
+        home = self._get_home_dict()
+        hx = home["x"]
+        hy = home["y"]
+        hyaw_deg = home["yaw_deg"]
+        qz = home["qz"]
+        qw = home["qw"]
+
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -115,52 +164,57 @@ class RoverNavBridge(Node):
         msg.pose.covariance[7] = 0.01
         msg.pose.covariance[35] = 0.003
 
-        # Publish on /initialpose topic repeatedly
+        # Repeatedly publish to latch initial pose in AMCL
         for _ in range(5):
             msg.header.stamp = self.get_clock().now().to_msg()
             self.pub_initialpose.publish(msg)
             time.sleep(0.1)
 
-        if service_ready:
+        set_pose_cli = self.create_client(SetInitialPose, '/set_initial_pose')
+        if set_pose_cli.wait_for_service(timeout_sec=2.0):
             req = SetInitialPose.Request()
             req.pose = msg
-            fut = set_pose_cli.call_async(req)
-            t0 = time.time()
-            while not fut.done() and (time.time() - t0) < 3.0:
-                time.sleep(0.05)
-            self.get_logger().info(f"Cold-start auto-init: /set_initial_pose handshake sent for HOME ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg)")
-        else:
-            self.get_logger().info(f"Cold-start auto-init: published /initialpose for HOME ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg)")
+            set_pose_cli.call_async(req)
 
-        # Wait 2 seconds for AMCL to publish map->odom and for planner_server to activate
-        time.sleep(2.0)
+        # Give AMCL 1.5s to broadcast map->odom
+        time.sleep(1.5)
 
-        # Send 5 stationary no-motion updates to converge particles
-        for i in range(5):
+        # Send 5 stationary no-motion updates
+        for _ in range(5):
             self.request_nomotion_update()
             time.sleep(0.25)
-
-        # Ensure lifecycle_manager_navigation is active
-        try:
-            mgr_cli = self.create_client(ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
-            if mgr_cli.wait_for_service(timeout_sec=2.0):
-                req_mgr = ManageLifecycleNodes.Request()
-                req_mgr.command = 0  # STARTUP
-                mgr_cli.call_async(req_mgr)
-        except Exception:
-            pass
 
         # Clear costmaps
         for cm_srv in ['/global_costmap/clear_entirely_global_costmap', '/local_costmap/clear_entirely_local_costmap']:
             try:
                 cm_cli = self.create_client(ClearEntireCostmap, cm_srv)
-                if cm_cli.wait_for_service(timeout_sec=2.0):
+                if cm_cli.wait_for_service(timeout_sec=1.5):
                     cm_cli.call_async(ClearEntireCostmap.Request())
             except Exception:
                 pass
 
-        self.get_logger().info("Cold-start auto-initializer: Nav2 activation and HOME convergence complete.")
+        self.get_logger().info(f"HOME pose initialized successfully (source: {source}, pose: ({hx:.3f}, {hy:.3f}, {hyaw_deg:.1f}deg))")
+        return {"ok": True, "message": "Initialized at HOME", "source": source, "home": home}
 
+    def _auto_init_worker(self):
+        """Automated cold-start boot initializer with guarded scan-to-map validation."""
+        self.get_logger().info("Cold-start boot monitor started: awaiting sensors and validating scan before localization...")
+        time.sleep(3.0)
+
+        val = self.validate_scan_against_home(timeout_sec=8.0, min_overlap=0.75, max_age_sec=0.75)
+        if not val.get("ok"):
+            self.get_logger().warn(
+                f"Cold-start HOME validation REJECTED: {val.get('reason')} ({val.get('details', '')}). "
+                f"Rover will NOT be automatically initialized at HOME. Drivetrain remains disarmed, "
+                f"and rover remains NOT_LOCALIZED until operator action via Cockpit 'Initialize at HOME' or Foxglove."
+            )
+            return
+
+        self.get_logger().info(
+            f"Cold-start HOME validation PASSED: {val.get('reason')} (overlap = {val.get('overlap', 0)*100:.1f}%, hits = {val.get('hits', 0)}/{val.get('total_valid', 0)}). "
+            f"Strong confirmation rover is physically at HOME. Proceeding with initialization..."
+        )
+        self.initialize_home_pose(source="auto_boot_validated")
 
     def _plan_cb(self, msg: Path):
         self.latest_global_plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses]
@@ -476,6 +530,10 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                     return
             self._send_json(404, {"ok": False, "error": "Home pose file not found"})
 
+        elif self.path == '/api/nav/validate_home':
+            val_res = bridge_node.validate_scan_against_home()
+            self._send_json(200, val_res)
+
         elif self.path == '/api/nav/status':
             # Query odometry node for current AMCL pose to compute distance remaining
             cur_x, cur_y = 0.0, 0.0
@@ -548,6 +606,10 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/nav/cancel':
             cancel_res = bridge_node.cancel_goal()
             self._send_json(200, cancel_res)
+
+        elif self.path == '/api/nav/init_home':
+            init_res = bridge_node.initialize_home_pose(source="cockpit_operator")
+            self._send_json(200 if init_res.get('ok') else 400, init_res)
 
         elif self.path in ['/api/nav/nomotion_update', '/api/nav/refresh_localization']:
             nomotion_res = bridge_node.request_nomotion_update()
