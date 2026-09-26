@@ -382,14 +382,19 @@ class TestReviewRequirements:
                 if "/api/drive/status" in url:
                     resp.json.return_value = {
                         "ok": True,
-                        "status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1, "seq": status_calls, "cmdSource": "ANY"}
+                        "status": {
+                            "armed": False, "mode": 0, "cmdSource": "NONE",
+                            "reqLinear": 0.0, "reqAngular": 0.0,
+                            "limLinear": 0.0, "limAngular": 0.0,
+                            "bootCount": 1, "seq": status_calls
+                        }
                     }
                 elif "/api/navigation/status" in url:
                     nav_calls += 1
                     # Transition: EXECUTING -> SUCCEEDED
                     st = "EXECUTING" if nav_calls < 3 else "SUCCEEDED"
                     resp.json.return_value = {
-                        "status": st, "distance_remaining_m": 0.01
+                        "status": st, "goal_id": "test_goal", "distance_remaining_m": 0.01
                     }
                 elif "/api/localization/status" in url:
                     resp.json.return_value = {"localized": True, "state": "LOCALIZED"}
@@ -595,9 +600,16 @@ class TestDefectCorrectionsAndIntegration:
             if "/api/navigation/status" in url:
                 st = status_sequence[min(call_idx, len(status_sequence) - 1)]
                 call_idx += 1
-                resp.json.return_value = {"status": st, "distance_remaining_m": 0.01}
+                resp.json.return_value = {"status": st, "goal_id": "goal_123", "distance_remaining_m": 0.01}
             elif "/api/drive/status" in url:
-                resp.json.return_value = {"status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1, "seq": call_idx}}
+                resp.json.return_value = {
+                    "status": {
+                        "armed": False, "mode": 0, "cmdSource": "NONE",
+                        "reqLinear": 0.0, "reqAngular": 0.0,
+                        "limLinear": 0.0, "limAngular": 0.0,
+                        "bootCount": 1, "seq": call_idx
+                    }
+                }
             elif "/api/localization/status" in url:
                 resp.json.return_value = {"localized": True, "state": "LOCALIZED"}
             elif "/api/imu" in url:
@@ -1006,26 +1018,39 @@ class TestContractSchemasAndEdgeCases:
     def test_nav2_completion_requires_matching_goal_id(self):
         """Contract: Nav2 completion rejects mismatched or stale prior goal IDs."""
         mission = GoldStandardMission(dry_run=False)
-        poll_count = 0
+        nav_poll_count = 0
+        status_seq = 0
 
         def mock_status_get(url, **kwargs):
-            nonlocal poll_count
+            nonlocal nav_poll_count, status_seq
+            status_seq += 1
             resp = MagicMock()
             resp.status_code = 200
             if "/api/navigation/status" in url:
-                poll_count += 1
-                if poll_count == 1:
+                nav_poll_count += 1
+                if nav_poll_count == 1:
                     resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "goal_id": "prior_stale_goal"}
-                elif poll_count == 2:
+                elif nav_poll_count == 2:
                     resp.json.return_value = {"ok": True, "status": "EXECUTING", "goal_id": "target_goal_99"}
                 else:
                     resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "goal_id": "target_goal_99"}
             elif "/api/localization/status" in url:
                 resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "ageMs": 10}
             elif "/api/imu" in url:
-                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": poll_count, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": status_seq, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
             elif "/api/drive/status" in url:
-                resp.json.return_value = {"ok": True, "status": {"armed": True, "mode": 3, "bootCount": 1, "reqLinear": 0, "reqAngular": 0, "limLinear": 0, "limAngular": 0, "cmdSource": "ROS_AUTONOMY", "seq": poll_count}}
+                # Disarms on SUCCEEDED (nav_poll_count >= 3)
+                is_armed = (nav_poll_count < 3)
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": is_armed, "mode": 3 if is_armed else 0,
+                        "bootCount": 1, "reqLinear": 0.1 if is_armed else 0.0, "reqAngular": 0,
+                        "limLinear": 0.1 if is_armed else 0.0, "limAngular": 0,
+                        "cmdSource": "ROS_AUTONOMY" if is_armed else "NONE",
+                        "seq": status_seq
+                    }
+                }
             elif "/api/clearance" in url:
                 resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
             else:
@@ -1036,7 +1061,7 @@ class TestContractSchemasAndEdgeCases:
              patch("time.sleep", return_value=None):
             res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_STAGE", goal_id="target_goal_99")
             assert res is True
-            assert poll_count >= 3
+            assert nav_poll_count >= 3
 
     def test_leg4_settle_requires_both_yaw_and_wz_within_tolerance(self):
         """Contract: Final HOME settling requires yaw error <= 3° and |wz| <= 0.02 rad/s for 1.5s."""
@@ -1105,3 +1130,97 @@ class TestContractSchemasAndEdgeCases:
             mission.execute_leg4_settle(target_home_yaw_rad=0.0)
             assert poll_step > 6
             assert disarmed is True
+
+    def test_nav2_active_to_succeeded_disarms_to_mode_0(self):
+        """Contract: ACTIVE -> SUCCEEDED transition verifies matching goal_id, zero velocities, and Mode 0 disarm."""
+        mission = GoldStandardMission(dry_run=False)
+        target_goal_id = "dispatch_unique_999"
+        nav_poll_count = 0
+        status_seq = 0
+
+        def mock_get(url, **kwargs):
+            nonlocal nav_poll_count, status_seq
+            status_seq += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/navigation/status" in url:
+                nav_poll_count += 1
+                if nav_poll_count <= 2:
+                    # ACTIVE / EXECUTING on matching goal
+                    resp.json.return_value = {
+                        "ok": True, "status": "ACTIVE", "goal_id": target_goal_id, "distance_remaining_m": 0.30
+                    }
+                else:
+                    # SUCCEEDED on matching goal
+                    resp.json.return_value = {
+                        "ok": True, "status": "SUCCEEDED", "goal_id": target_goal_id, "distance_remaining_m": 0.0
+                    }
+            elif "/api/drive/status" in url:
+                # During ACTIVE (nav_poll <= 2), armed Mode 3; on SUCCEEDED (nav_poll > 2), Cockpit disarms to Mode 0 NONE
+                is_armed = (nav_poll_count <= 2)
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": is_armed,
+                        "mode": 3 if is_armed else 0,
+                        "bootCount": 1,
+                        "reqLinear": 0.20 if is_armed else 0.0,
+                        "reqAngular": 0.0,
+                        "limLinear": 0.20 if is_armed else 0.0,
+                        "limAngular": 0.0,
+                        "cmdSource": "ROS_AUTONOMY" if is_armed else "NONE",
+                        "seq": status_seq
+                    }
+                }
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "ageMs": 10}
+            elif "/api/imu" in url:
+                resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": status_seq, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+            elif "/api/odom" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0}
+            elif "/api/encoders" in url:
+                resp.json.return_value = {"ok": True, "sequence": status_seq, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get), \
+             patch("time.sleep", return_value=None):
+            res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_LEG", goal_id=target_goal_id)
+            assert res is True
+            assert mission.active_nav2_goal is False
+            assert mission.current_cmd_source == "NONE"
+
+    def test_missing_or_empty_goal_id_strictly_rejected(self):
+        """Contract: Exact nonempty goal_id is required; missing or empty IDs fail closed immediately."""
+        mission = GoldStandardMission(dry_run=False)
+        with pytest.raises(MissionAbortException) as exc1:
+            mission.wait_for_nav2_completion_and_zero(timeout_s=1.0, stage_name="TEST_LEG", goal_id="")
+        assert "empty or missing" in str(exc1.value)
+
+        with pytest.raises(MissionAbortException) as exc2:
+            mission.wait_for_nav2_completion_and_zero(timeout_s=1.0, stage_name="TEST_LEG", goal_id="   ")
+        assert "empty or missing" in str(exc2.value)
+
+    def test_telemetry_records_real_limited_output_for_angular(self):
+        """Contract: Real limited output is used whenever either limLinear OR limAngular is nonzero."""
+        mission = GoldStandardMission(dry_run=True)
+        mission.latest_exact_cmd = {"vx": 0.0, "wz": 0.40}
+        # In-place turn: limLinear is 0.0, limAngular is 0.35
+        mission.latest_telemetry["drive"] = {
+            "reqLinear": 0.0, "reqAngular": 0.40,
+            "limLinear": 0.0, "limAngular": 0.35,
+            "armed": True, "mode": 3
+        }
+
+        mission.active_nav2_goal = False
+        mission.record_tick("LEG2_ROTATION")
+        last_frame = mission.recorder.frames[-1]
+        assert last_frame["cmd_source"] == "CALIBRATION_TEST"
+        assert last_frame["raw_cmd"]["vx"] == 0.0
+        assert last_frame["raw_cmd"]["wz"] == 0.40
+        assert last_frame["smoothed_cmd"] is None
+        assert last_frame["final_cmd"]["vx"] == 0.0
+        assert last_frame["final_cmd"]["wz"] == 0.35  # Must capture real limited angular velocity!

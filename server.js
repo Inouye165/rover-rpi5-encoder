@@ -5029,18 +5029,45 @@ app.get('/api/navigation/status', (req, res) => {
           parsed.last_dispatch = lastDispatchedNav;
           parsed.goal_id = parsed.goal_id || lastDispatchedNav.goal_id;
         }
-        if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
-          if (autonomyState && autonomyState.state === 'READY_ARMED') {
+        const isTerminal = parsed && (
+          parsed.status === 'SUCCEEDED' ||
+          parsed.status === 'CANCELLED' ||
+          parsed.status === 'ABORTED' ||
+          parsed.status === 'FAILED' ||
+          (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED'))
+        );
+        if (isTerminal) {
+          if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
             triggerNav2Cancel();
             autonomyState.enabled = false;
+            autonomyState.active = false;
             autonomyState.state = 'READY_DISARMED';
             cmdSource = 'NONE';
             targetLinear = 0.0;
             targetAngular = 0.0;
+            limitedLinear = 0.0;
+            limitedAngular = 0.0;
+            sendMotorSpeeds(0, 0, 0, 0);
             if (serialPort && serialPort.isOpen) {
+              const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+              serialPort.write(motionPkt);
               const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
               serialPort.write(disarmPkt);
             }
+            if (latestNormalDriveStatus) {
+              latestNormalDriveStatus = {
+                ...latestNormalDriveStatus,
+                armed: false,
+                mode: 0,
+                reqLinear: 0.0,
+                reqAngular: 0.0,
+                limLinear: 0.0,
+                limAngular: 0.0,
+                cmdSource: 'NONE'
+              };
+            }
+            broadcast({ type: 'normal_drive_status', armed: false, reqLinear: 0, reqAngular: 0, limLinear: 0, limAngular: 0, mode: 0, cmdSource: 'NONE' });
+            broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
           }
         }
         res.status(bridgeRes.statusCode).json(parsed);

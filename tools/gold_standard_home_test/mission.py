@@ -633,7 +633,9 @@ class GoldStandardMission:
             cmd_source = "CALIBRATION_TEST"
             cmd_raw = dict(self.latest_exact_cmd)
             cmd_smooth = None  # Direct test commands do not undergo intermediate velocity smoothing
-            if drive and "limLinear" in drive and abs(drive.get("limLinear", 0.0)) > 1e-4:
+            # Use real limited output whenever either limLinear or limAngular is nonzero
+            lim_active = drive and (abs(drive.get("limLinear", 0.0)) > 1e-4 or abs(drive.get("limAngular", 0.0)) > 1e-4)
+            if lim_active:
                 cmd_final = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
             else:
                 cmd_final = dict(self.latest_exact_cmd)
@@ -758,11 +760,17 @@ class GoldStandardMission:
     def wait_for_nav2_completion_and_zero(self, timeout_s: float, stage_name: str, goal_id: str, target_dist_thresh_m: float = 0.04) -> bool:
         """
         Goal-specific Nav2 completion:
-        1. Observes goal become accepted/active.
-        2. Requires that same goal to report SUCCEEDED.
-        3. Never accepts initial IDLE, distance alone, or stale status.
-        4. Nav2 success triggers hardware disarm in Cockpit; updates active_nav2_goal = False.
+        1. Requires exact nonempty goal_id; missing IDs are strictly rejected.
+        2. Observes goal become accepted/active (EXECUTING or ACTIVE).
+        3. Requires that same goal_id to report SUCCEEDED.
+        4. Verifies post-goal disarm: matching goal_id, zero requested/limited velocities,
+           armed=false, mode=0, and cmdSource=NONE before starting the next leg.
         """
+        if not goal_id or not str(goal_id).strip():
+            self.disarm_and_stop()
+            raise MissionAbortException(f"{stage_name} aborted: goal_id is empty or missing!")
+
+        target_goal_id = str(goal_id).strip()
         t_start = time.monotonic()
         goal_observed_active = False
 
@@ -773,6 +781,7 @@ class GoldStandardMission:
 
             if self.dry_run:
                 self.active_nav2_goal = False
+                self.current_cmd_source = "NONE"
                 return True
 
             try:
@@ -780,12 +789,11 @@ class GoldStandardMission:
                 if r.status_code == 200:
                     nav_stat = r.json()
                     status_str = nav_stat.get("status", "")
+                    reported_goal_id = str(nav_stat.get("goal_id") or nav_stat.get("last_dispatch", {}).get("goal_id") or "").strip()
                     
-                    reported_goal_id = str(nav_stat.get("goal_id") or nav_stat.get("last_dispatch", {}).get("goal_id") or "")
-                    
-                    # Verify reporting matches this specific dispatched goal
-                    if reported_goal_id and reported_goal_id != goal_id:
-                        # Stale status from earlier goal; ignore
+                    # Require exact nonempty goal_id match; missing IDs must not be accepted
+                    if not reported_goal_id or reported_goal_id != target_goal_id:
+                        # Stale status from earlier goal or missing ID; do not accept
                         pass
                     else:
                         # Phase 1: Verify goal becomes active
@@ -799,12 +807,41 @@ class GoldStandardMission:
                         # Phase 2: Once active, require SUCCEEDED
                         if goal_observed_active:
                             if status_str == "SUCCEEDED":
-                                # Goal succeeded. Cockpit automatically initiates disarm on SUCCEEDED.
+                                # Post-goal zero and disarm verification:
+                                # Must verify matching goal_id, zero requested/limited velocities,
+                                # armed=false, mode=0, and cmdSource=NONE before starting next leg.
+                                t_verify_start = time.monotonic()
+                                verified_post_state = False
+                                while time.monotonic() - t_verify_start < 3.0:
+                                    self.poll_all_telemetry()
+                                    drive = self.latest_telemetry.get("drive") or {}
+                                    
+                                    req_l = abs(drive.get("reqLinear", 99.0))
+                                    req_a = abs(drive.get("reqAngular", 99.0))
+                                    lim_l = abs(drive.get("limLinear", 99.0))
+                                    lim_a = abs(drive.get("limAngular", 99.0))
+                                    is_armed = drive.get("armed", True)
+                                    mode = drive.get("mode", -1)
+                                    cmd_src = drive.get("cmdSource", "")
+                                    
+                                    if (req_l < 1e-4 and req_a < 1e-4 and
+                                        lim_l < 1e-4 and lim_a < 1e-4 and
+                                        is_armed is False and mode == 0 and
+                                        cmd_src == "NONE"):
+                                        verified_post_state = True
+                                        break
+                                    time.sleep(0.04)
+
+                                if not verified_post_state:
+                                    self.disarm_and_stop()
+                                    raise MissionAbortException(
+                                        f"{stage_name} post-goal check failed: rover did not confirm armed=false, mode=0, cmdSource=NONE, and zero velocity! (drive={drive})"
+                                    )
+
                                 self.active_nav2_goal = False
-                                time.sleep(0.1)
-                                self.poll_all_telemetry()
+                                self.current_cmd_source = "NONE"
                                 return True
-                            elif status_str in ("ABORTED", "FAILED"):
+                            elif status_str in ("ABORTED", "FAILED", "CANCELLED"):
                                 self.disarm_and_stop()
                                 raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
             except Exception as e:
