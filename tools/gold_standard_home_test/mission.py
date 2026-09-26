@@ -135,7 +135,7 @@ class GoldStandardMission:
         # Leg 2: Explicit 180.0° CLOCKWISE in-place rotation
         yaw2 = wrap_angle_rad(yaw1 - math.radians(ROTATION_TARGET_DEG))
 
-        # Leg 3: Return to authoritative saved HOME coordinates while retaining return-facing heading!
+        # Leg 3: Return to authoritative saved HOME coordinates retaining return-facing heading!
         # Target heading is return-facing (yaw2) so rover drives forward directly to HOME.
         x3 = h["x"]
         y3 = h["y"]
@@ -254,25 +254,66 @@ class GoldStandardMission:
         return True, "Pre-arm gate passed", pos_err_m, yaw_err_deg
 
     def arm(self) -> bool:
-        """Arms the drivetrain immediately before mission execution."""
+        """Arms the drivetrain explicitly. Fails closed on any rejection."""
         if self.dry_run:
             print("[DRY-RUN] Drivetrain arming simulated (Hardware remained disarmed).")
             return True
 
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
-        r = requests.post(f"{self.cockpit_url}/api/drive/arm", headers=headers, timeout=2.0)
-        if r.status_code != 200:
-            return False
+        try:
+            r = requests.post(f"{self.cockpit_url}/api/drive/arm", headers=headers, timeout=2.0)
+            if r.status_code != 200:
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Arming request rejected with HTTP {r.status_code}: {r.text}")
+            res = r.json()
+            if not res.get("ok", False):
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Arming request returned ok=false: {res}")
+        except Exception as e:
+            self.disarm_and_stop()
+            raise MissionAbortException(f"Exception during arming request: {e}")
         
         status = self.update_drive_status()
-        self.initial_boot_count = status.get("bootCount")
-        return status.get("armed", False) and status.get("mode") == 3
+        if not status.get("armed", False) or status.get("mode") != 3:
+            self.disarm_and_stop()
+            raise MissionAbortException(f"Drive status did not confirm armed Mode 3: armed={status.get('armed')}, mode={status.get('mode')}")
+
+        if self.initial_boot_count is None:
+            self.initial_boot_count = status.get("bootCount")
+        return True
+
+    def disarm(self) -> bool:
+        """Disarms the drivetrain explicitly to Mode 0. Checks HTTP status and response."""
+        if self.dry_run:
+            return True
+
+        try:
+            r = requests.post(f"{self.cockpit_url}/api/drive/disarm", timeout=1.0)
+            if r.status_code != 200:
+                raise MissionAbortException(f"Disarm request rejected with HTTP {r.status_code}: {r.text}")
+            res = r.json()
+            if not res.get("ok", False):
+                raise MissionAbortException(f"Disarm request returned ok=false: {res}")
+        except Exception as e:
+            raise MissionAbortException(f"Exception during disarm request: {e}")
+
+        status = self.update_drive_status()
+        if status.get("armed", False) or status.get("mode") != 0:
+            raise MissionAbortException(f"Drive status did not confirm disarmed Mode 0: armed={status.get('armed')}, mode={status.get('mode')}")
+        return True
 
     def disarm_and_stop(self):
         """Immediately halts all physical motion, zeroes commands, and disarms to Mode 0."""
         print("[SAFETY] Disarming drivetrain, zeroing commands, and locking Mode 0...")
-        self.send_velocity(0.0, 0.0, force_zero=True)
-        self.set_command_source("NONE")
+        try:
+            self.send_velocity(0.0, 0.0, force_zero=True)
+        except Exception:
+            pass
+
+        try:
+            self.set_command_source("NONE", check_errors=False)
+        except Exception:
+            pass
         
         if not self.dry_run:
             try:
@@ -295,9 +336,12 @@ class GoldStandardMission:
                 "reqLinear": 0.0,
                 "reqAngular": 0.0,
                 "limLinear": 0.0,
-                "limAngular": 0.0
+                "limAngular": 0.0,
+                "cmdSource": self.current_cmd_source
             }
         r = requests.get(f"{self.cockpit_url}/api/drive/status", timeout=0.5)
+        if r.status_code != 200:
+            raise MissionAbortException(f"Drive status request failed with HTTP {r.status_code}")
         res = r.json()
         status = res.get("status", {})
         self.latest_telemetry["drive"] = status
@@ -338,8 +382,8 @@ class GoldStandardMission:
             r_imu = requests.get(f"{self.cockpit_url}/api/imu", timeout=0.2)
             if r_imu.status_code == 200:
                 imu = r_imu.json()
-                raw_yaw = 0.0
-                if "orientation" in imu:
+                raw_yaw = float(imu.get("raw_yaw_deg", 0.0))
+                if "orientation" in imu and imu["orientation"] and "w" in imu["orientation"]:
                     o = imu["orientation"]
                     raw_yaw = math.atan2(2.0 * (o["w"] * o["z"] + o["x"] * o["y"]), 1.0 - 2.0 * (o["y"]**2 + o["z"]**2))
                     raw_yaw = math.degrees(raw_yaw)
@@ -397,7 +441,7 @@ class GoldStandardMission:
         except Exception:
             pass
 
-    def set_command_source(self, source: str) -> bool:
+    def set_command_source(self, source: str, check_errors: bool = True) -> bool:
         """Sets Cockpit command source ownership (NONE, CALIBRATION_TEST, ROS_AUTONOMY)."""
         self.current_cmd_source = source
         if self.dry_run:
@@ -405,19 +449,32 @@ class GoldStandardMission:
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
         try:
             r = requests.post(f"{self.cockpit_url}/api/command-source", json={"source": source}, headers=headers, timeout=1.0)
+            if check_errors:
+                if r.status_code != 200:
+                    self.disarm_and_stop()
+                    raise MissionAbortException(f"Command source transition to {source} rejected with HTTP {r.status_code}: {r.text}")
+                res = r.json()
+                if not res.get("ok", False) or res.get("cmdSource") != source:
+                    self.disarm_and_stop()
+                    raise MissionAbortException(f"Command source transition returned unexpected payload: {res}")
             return r.status_code == 200
-        except Exception:
+        except Exception as e:
+            if check_errors:
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Exception during command source transition to {source}: {e}")
             return False
 
-    def send_velocity(self, vx: float, wz: float, source: str = "EXACT_MOTION", force_zero: bool = False):
+    def send_velocity(self, vx: float, wz: float, source: str = "CALIBRATION_TEST", force_zero: bool = False):
         """
         Dispatches velocity command to the velocity bridge (/api/cmd_vel).
         Safety invariant: CANNOT send direct velocity commands while a Nav2 goal is active!
+        Direct test commands must use CALIBRATION_TEST consistently.
         """
         is_zero = abs(vx) <= 1e-4 and abs(wz) <= 1e-4
         if not force_zero and not is_zero and self.active_nav2_goal:
+            self.disarm_and_stop()
             raise MissionAbortException(
-                "Safety invariant violated: Attempted to send direct EXACT_MOTION velocity command while Nav2 goal is active!"
+                "Safety invariant violated: Attempted to send direct CALIBRATION_TEST velocity command while Nav2 goal is active!"
             )
 
         vx_clamped = max(-NORMAL_LINEAR_SPEED, min(NORMAL_LINEAR_SPEED, vx))
@@ -434,9 +491,19 @@ class GoldStandardMission:
         }
         headers = {"X-Rover-Bridge-Token": self.cmd_token} if self.cmd_token else {}
         try:
-            requests.post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=0.1)
-        except Exception:
-            pass
+            r = requests.post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=0.2)
+            if r.status_code != 200:
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Velocity command rejected by bridge (HTTP {r.status_code}): {r.text}")
+            res = r.json()
+            if not res.get("ok", False):
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Velocity command returned ok=false: {res}")
+        except Exception as e:
+            if not isinstance(e, MissionAbortException):
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Exception sending velocity command: {e}")
+            raise
 
     def verify_safety_invariants(self, current_stage: str):
         """
@@ -448,25 +515,29 @@ class GoldStandardMission:
         - Localization loss (localized=False or state != LOCALIZED)
         """
         now = time.monotonic()
-        # 1. Telemetry staleness
         imu_stat = self.latest_telemetry.get("imu") or {}
         if not self.dry_run:
             data_age_ms = imu_stat.get("dataAgeMs")
             if data_age_ms is not None and data_age_ms > 500:
+                self.disarm_and_stop()
                 raise MissionAbortException(f"Stale telemetry: ESP32 IMU dataAgeMs={data_age_ms}ms exceeds 500ms limit")
             if imu_stat.get("stale") is True:
+                self.disarm_and_stop()
                 raise MissionAbortException("Stale telemetry: Cockpit serial packet marked stale")
             if now - self.last_imu_seq_adv_time > TELEMETRY_STALE_TIMEOUT_S:
+                self.disarm_and_stop()
                 raise MissionAbortException(f"Stale telemetry: ESP32 packet sequence did not advance for > {TELEMETRY_STALE_TIMEOUT_S}s")
 
         drive_stat = self.latest_telemetry.get("drive") or {}
         if not self.dry_run and self.initial_boot_count is not None:
             curr_bc = drive_stat.get("bootCount")
             if curr_bc is not None and curr_bc != self.initial_boot_count:
+                self.disarm_and_stop()
                 raise MissionAbortException(f"ESP32 hardware reboot detected! (BootCount: {self.initial_boot_count} -> {curr_bc})")
 
         if not self.dry_run:
             if imu_stat.get("serialConnected") is False:
+                self.disarm_and_stop()
                 raise MissionAbortException("Serial communication to ESP32 disconnected!")
 
         raw_yaw = imu_stat.get("raw_yaw_deg")
@@ -474,11 +545,13 @@ class GoldStandardMission:
             if self.last_imu_yaw is not None:
                 step_delta = abs(wrap_angle_deg(raw_yaw - self.last_imu_yaw))
                 if step_delta > 45.0 and abs(imu_stat.get("gyro_z", 0.0)) < 1.0:
+                    self.disarm_and_stop()
                     raise MissionAbortException(f"IMU frame discontinuity detected ({step_delta:.1f}° jump at low gyro)")
             self.last_imu_yaw = raw_yaw
 
         amcl_stat = self.latest_telemetry.get("amcl") or {}
         if amcl_stat.get("localized") is False or amcl_stat.get("state") not in ("LOCALIZED", "UNKNOWN"):
+            self.disarm_and_stop()
             raise MissionAbortException(f"Localization lost during {current_stage} (state={amcl_stat.get('state')})")
 
     def record_tick(self, stage: str):
@@ -497,14 +570,12 @@ class GoldStandardMission:
 
         # Determine command stream attribution
         if self.active_nav2_goal:
-            # During Nav2 legs, record actual Nav2 raw & smoothed outputs
             cmd_source = "ROS_AUTONOMY"
             cmd_raw = {"vx": drive.get("reqLinear", 0.0), "wz": drive.get("reqAngular", 0.0)}
             cmd_smooth = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
             cmd_final = {"vx": drive.get("limLinear", 0.0), "wz": drive.get("limAngular", 0.0)}
         else:
-            # During exact-motion legs, record runner commands
-            cmd_source = "EXACT_MOTION"
+            cmd_source = "CALIBRATION_TEST"
             cmd_raw = dict(self.latest_exact_cmd)
             cmd_smooth = dict(self.latest_exact_cmd)
             cmd_final = dict(self.latest_exact_cmd)
@@ -530,88 +601,176 @@ class GoldStandardMission:
         )
         self.recorder.record_frame(frame)
 
-    def dispatch_nav2_goal(self, target_x: float, target_y: float, target_yaw: float) -> bool:
-        """Dispatches goal to production Nav2 via Cockpit /api/navigation/dispatch."""
+    def dispatch_nav2_goal(self, target_x: float, target_y: float, target_yaw: float) -> str:
+        """
+        Dispatches goal to production Nav2 via Cockpit /api/navigation/dispatch.
+        Returns unique goal identifier (timestamp).
+        """
         if self.dry_run:
             self.active_nav2_goal = True
-            return True
+            return str(time.time())
+
         payload = {
             "target_x": target_x,
             "target_y": target_y,
             "target_yaw": target_yaw
         }
         headers = {"X-Rover-Operator-Token": self.op_token} if self.op_token else {}
-        r = requests.post(f"{self.cockpit_url}/api/navigation/dispatch", json=payload, headers=headers, timeout=5.0)
-        if r.status_code == 200:
+        try:
+            r = requests.post(f"{self.cockpit_url}/api/navigation/dispatch", json=payload, headers=headers, timeout=5.0)
+            if r.status_code != 200:
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Nav2 dispatch rejected with HTTP {r.status_code}: {r.text}")
+            res = r.json()
+            if not res.get("ok", False):
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Nav2 dispatch returned ok=false: {res}")
+            
             self.active_nav2_goal = True
-            return True
-        return False
+            goal_id = str(res.get("dispatch_meta", {}).get("dispatched_at") or res.get("dispatched_at") or time.time())
+            return goal_id
+        except Exception as e:
+            if not isinstance(e, MissionAbortException):
+                self.disarm_and_stop()
+                raise MissionAbortException(f"Exception dispatching Nav2 goal: {e}")
+            raise
 
-    def wait_for_nav2_completion_and_zero(self, timeout_s: float, stage_name: str, target_dist_thresh_m: float = 0.04) -> bool:
-        """Waits for Nav2 goal to reach target and settle, then closes action and confirms zero output."""
+    def verify_zero_handshake(self, expected_cmd_source: str, timeout_s: float = 3.0) -> bool:
+        """
+        Requires advancing telemetry and at least 3 consecutive samples showing zero requested/limited velocity,
+        no active Nav2 goal, and the expected command source.
+        """
         t_start = time.monotonic()
+        consecutive_zeros = 0
+        last_seen_seq = None
+
+        while time.monotonic() - t_start < timeout_s:
+            self.poll_all_telemetry()
+            drive = self.latest_telemetry.get("drive") or {}
+            imu = self.latest_telemetry.get("imu") or {}
+            
+            curr_seq = imu.get("sequence") or drive.get("seq")
+            advancing = (last_seen_seq is None) or (curr_seq != last_seen_seq) or self.dry_run
+            last_seen_seq = curr_seq
+
+            req_l = abs(drive.get("reqLinear", 0.0))
+            req_a = abs(drive.get("reqAngular", 0.0))
+            lim_l = abs(drive.get("limLinear", 0.0))
+            lim_a = abs(drive.get("limAngular", 0.0))
+            current_src = drive.get("cmdSource", self.current_cmd_source)
+
+            src_matches = (expected_cmd_source in (current_src, "ANY")) or self.dry_run
+
+            if (advancing and
+                req_l < 1e-4 and req_a < 1e-4 and
+                lim_l < 1e-4 and lim_a < 1e-4 and
+                not self.active_nav2_goal and
+                src_matches):
+                consecutive_zeros += 1
+                if consecutive_zeros >= 3:
+                    return True
+            else:
+                consecutive_zeros = 0
+
+            time.sleep(0.04)
+
+        self.disarm_and_stop()
+        raise MissionAbortException(f"Zero-output handshake failed: could not confirm 3 consecutive zero samples for source {expected_cmd_source}")
+
+    def wait_for_nav2_completion_and_zero(self, timeout_s: float, stage_name: str, goal_id: str, target_dist_thresh_m: float = 0.04) -> bool:
+        """
+        Goal-specific Nav2 completion:
+        1. Observes goal become accepted/active.
+        2. Requires that same goal to report SUCCEEDED.
+        3. Never accepts initial IDLE, distance alone, or stale status.
+        4. Nav2 success triggers hardware disarm in Cockpit; updates active_nav2_goal = False.
+        """
+        t_start = time.monotonic()
+        goal_observed_active = False
+
         while time.monotonic() - t_start < timeout_s:
             self.poll_all_telemetry()
             self.verify_safety_invariants(stage_name)
             self.record_tick(stage_name)
 
-            drive = self.latest_telemetry.get("drive") or {}
-            vx = abs(drive.get("limLinear", 0.0))
-            wz = abs(drive.get("limAngular", 0.0))
+            if self.dry_run:
+                self.active_nav2_goal = False
+                return True
 
-            # Query Nav2 status
             try:
-                r = requests.get(f"{self.cockpit_url}/api/navigation/status", timeout=0.2)
+                r = requests.get(f"{self.cockpit_url}/api/navigation/status", timeout=0.5)
                 if r.status_code == 200:
                     nav_stat = r.json()
                     status_str = nav_stat.get("status", "")
-                    rem_dist = nav_stat.get("distance_remaining_m", 999.0)
                     
-                    if (status_str in ("SUCCEEDED", "IDLE") or rem_dist <= target_dist_thresh_m) and vx < 0.02 and wz < 0.03:
-                        # Goal reached! Close/cancel action
-                        requests.post(f"{self.cockpit_url}/api/navigation/cancel", timeout=1.0)
-                        self.active_nav2_goal = False
-                        time.sleep(0.1)
-                        # Handshake: confirm zero output
-                        self.poll_all_telemetry()
-                        return True
-            except Exception:
+                    # Phase 1: Verify goal becomes active
+                    if not goal_observed_active:
+                        if status_str in ("EXECUTING", "ACTIVE"):
+                            goal_observed_active = True
+                        elif status_str in ("IDLE", "CANCELLED", "STOPPED"):
+                            # Still in initial / stale pre-start state: DO NOT accept as complete
+                            pass
+                    
+                    # Phase 2: Once active, require SUCCEEDED
+                    if goal_observed_active:
+                        if status_str == "SUCCEEDED":
+                            # Goal succeeded. Cockpit automatically initiates disarm on SUCCEEDED.
+                            self.active_nav2_goal = False
+                            time.sleep(0.1)
+                            self.poll_all_telemetry()
+                            return True
+                        elif status_str in ("ABORTED", "FAILED"):
+                            self.disarm_and_stop()
+                            raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
+            except Exception as e:
+                if isinstance(e, MissionAbortException):
+                    raise
                 pass
+
             time.sleep(0.04)
 
-        self.active_nav2_goal = False
-        raise MissionAbortException(f"{stage_name} exceeded timeout ({timeout_s}s) waiting for Nav2 completion!")
+        self.disarm_and_stop()
+        raise MissionAbortException(f"{stage_name} exceeded timeout ({timeout_s}s) waiting for goal {goal_id} to succeed!")
 
     def execute_leg1_forward(self, target_x: float, target_y: float, target_yaw: float):
-        """Leg 1: Nav2 drives 2.000 ft (0.6096 m) outward along saved HOME heading."""
+        """
+        Leg 1: Nav2 drives 2.000 ft (0.6096 m) outward along saved HOME heading.
+        Rover starts disarmed. Dispatching Nav2 refreshes localization and arms to Mode 3.
+        On success, Nav2 completes and Cockpit disarms hardware.
+        """
         print(f"\n[LEG 1] Dispatching forward 2.000 ft ({FORWARD_DISTANCE_M:.4f} m) -> ({target_x:.4f}, {target_y:.4f})...")
         self.recorder.record_transition("LEG1_FORWARD_START", {"target": (target_x, target_y, target_yaw)})
         
-        # Ensure Nav2 autonomy ownership
-        self.set_command_source("ROS_AUTONOMY")
-
-        if not self.dispatch_nav2_goal(target_x, target_y, target_yaw):
-            raise MissionAbortException("Leg 1 dispatch rejected by Nav2!")
-
-        # Wait for Nav2 completion and zero-output handshake
-        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG1_FORWARD_S, "LEG1_FORWARD", 0.04)
-        print("[LEG 1 COMPLETE] Reached turnaround point, closed Nav2 goal, and verified zero output.")
+        goal_id = self.dispatch_nav2_goal(target_x, target_y, target_yaw)
+        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG1_FORWARD_S, "LEG1_FORWARD", goal_id, 0.04)
+        print("[LEG 1 COMPLETE] Reached turnaround point, Nav2 reported SUCCEEDED, rover finished disarmed.")
         self.recorder.record_transition("LEG1_FORWARD_END")
 
     def execute_leg2_rotation(self, target_cw_deg: float = 180.0):
-        """Leg 2: Perform an explicit 180° CLOCKWISE in-place rotation using exact-motion controller."""
-        print(f"\n[LEG 2] Handshaking ownership and executing explicit 180.0° CLOCKWISE in-place rotation...")
+        """
+        Leg 2: Perform an explicit 180° CLOCKWISE in-place rotation using exact-motion controller.
+        State transition: Rover is disarmed after Leg 1.
+        1. Zero handshake.
+        2. Arm explicitly to Mode 3.
+        3. Acquire CALIBRATION_TEST ownership.
+        4. Execute rotation using CALIBRATION_TEST commands.
+        5. Stop, disarm to Mode 0, release ownership.
+        """
+        print(f"\n[LEG 2] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership...")
         self.recorder.record_transition("LEG2_ROTATION_START", {"target_deg": -target_cw_deg})
 
-        # Pre-condition: Nav2 goal MUST NOT be active
-        if self.active_nav2_goal:
-            raise MissionAbortException("Leg 2 cannot start: Nav2 goal is still active!")
+        # 1. Zero handshake while disarmed
+        self.verify_zero_handshake(expected_cmd_source="ANY")
 
-        # Acquire exact-motion command ownership
+        # 2. Arm explicitly to Mode 3
+        self.arm()
+
+        # 3. Acquire CALIBRATION_TEST command ownership
         self.set_command_source("CALIBRATION_TEST")
-        self.yaw_tracker.reset()
 
+        self.yaw_tracker.reset()
         t_start = time.monotonic()
+
         while time.monotonic() - t_start < TIMEOUT_LEG2_ROTATION_S:
             self.poll_all_telemetry()
             self.verify_safety_invariants("LEG2_ROTATION")
@@ -620,13 +779,13 @@ class GoldStandardMission:
             remaining_deg = target_cw_deg - turned_cw
 
             if remaining_deg <= 1.0: # Turn complete
-                self.send_velocity(0.0, 0.0, source="EXACT_MOTION")
+                self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
                 print(f"[LEG 2 COMPLETE] 180° CW rotation completed in {time.monotonic() - t_start:.2f}s (Traveled: {turned_cw:.1f}°).")
                 self.recorder.record_transition("LEG2_ROTATION_END")
                 time.sleep(0.5)
-                # Release exact-motion ownership cleanly
-                self.send_velocity(0.0, 0.0, source="EXACT_MOTION", force_zero=True)
-                self.set_command_source("ROS_AUTONOMY")
+                # Disarm explicitly and release ownership
+                self.disarm()
+                self.set_command_source("NONE")
                 return
 
             # Angular approach controller (Cruise 0.40 rad/s -> Creep ceiling 0.18 rad/s)
@@ -636,44 +795,57 @@ class GoldStandardMission:
                 alpha = max(0.0, min(1.0, remaining_deg / 30.0))
                 wz_cmd = -(FINAL_YAW_ALIGNMENT_MAX_SPEED + alpha * (ROTATION_180_MAX_SPEED - FINAL_YAW_ALIGNMENT_MAX_SPEED))
 
-            self.send_velocity(0.0, wz_cmd, source="EXACT_MOTION")
+            self.send_velocity(0.0, wz_cmd, source="CALIBRATION_TEST")
             self.record_tick("LEG2_ROTATION")
             time.sleep(0.04)
 
+        self.disarm_and_stop()
         raise MissionAbortException(f"Leg 2 exceeded {TIMEOUT_LEG2_ROTATION_S}s timeout!")
 
     def execute_leg3_return(self, home_x: float, home_y: float, return_yaw: float):
         """
         Leg 3: Return to authoritative saved HOME coordinates while retaining return-facing heading.
-        No direct velocity override competing with Nav2.
+        Rover is disarmed after Leg 2.
+        1. Zero handshake while disarmed.
+        2. Dispatch Nav2 goal (pre-dispatch refresh while disarmed, then Nav2 arms to Mode 3).
+        3. Nav2 drives to HOME coordinates retaining return heading.
+        4. Nav2 reports SUCCEEDED and Cockpit disarms hardware.
         """
-        print(f"\n[LEG 3] Dispatching return to HOME coordinates retaining return-facing heading -> ({home_x:.4f}, {home_y:.4f}, {math.degrees(return_yaw):+.2f}°)...")
+        print(f"\n[LEG 3] Verifying zero handshake and dispatching Nav2 return to HOME (retaining return heading: {math.degrees(return_yaw):+.2f}°)...")
         self.recorder.record_transition("LEG3_RETURN_START", {"home": (home_x, home_y, return_yaw)})
 
-        # Ensure exact-motion is released and Nav2 ownership established
-        self.set_command_source("ROS_AUTONOMY")
+        # 1. Zero handshake while disarmed
+        self.verify_zero_handshake(expected_cmd_source="ANY")
 
-        if not self.dispatch_nav2_goal(home_x, home_y, return_yaw):
-            raise MissionAbortException("Leg 3 return dispatch rejected by Nav2!")
+        # 2. Dispatch Nav2 goal
+        goal_id = self.dispatch_nav2_goal(home_x, home_y, return_yaw)
 
-        # Wait for Nav2 completion and zero-output handshake
-        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG3_RETURN_S, "LEG3_RETURN", PASS_FINAL_POS_ERR_M)
-        print("[LEG 3 COMPLETE] Returned to HOME position, closed Nav2 goal, and verified zero output.")
+        # 3. Wait for Nav2 completion
+        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG3_RETURN_S, "LEG3_RETURN", goal_id, PASS_FINAL_POS_ERR_M)
+        print("[LEG 3 COMPLETE] Returned to HOME position, Nav2 reported SUCCEEDED, rover finished disarmed.")
         self.recorder.record_transition("LEG3_RETURN_END")
 
     def execute_leg4_settle(self, target_home_yaw_rad: float):
         """
-        Leg 4: Rotate in place to saved HOME yaw using signed shortest-angle error (<= 0.18 rad/s),
-        stop within 3°, and settle for 1.5s. Timeout must fail the mission.
+        Leg 4: Final in-place alignment to saved HOME yaw.
+        Rover is disarmed after Leg 3.
+        1. Zero handshake.
+        2. Arm explicitly to Mode 3.
+        3. Acquire CALIBRATION_TEST ownership.
+        4. Rotate in place using signed shortest-angle error (<= 0.18 rad/s).
+        5. Stop within 3.0° and settle for 1.5s. Timeout fails the test.
+        6. Disarm to Mode 0, release ownership.
         """
-        print(f"\n[LEG 4] Final in-place alignment to saved HOME yaw ({math.degrees(target_home_yaw_rad):+.2f}°)...")
+        print(f"\n[LEG 4] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership for final HOME yaw alignment...")
         self.recorder.record_transition("LEG4_SETTLE_START")
 
-        # Pre-condition: Nav2 goal MUST NOT be active
-        if self.active_nav2_goal:
-            raise MissionAbortException("Leg 4 cannot start: Nav2 goal is still active!")
+        # 1. Zero handshake while disarmed
+        self.verify_zero_handshake(expected_cmd_source="ANY")
 
-        # Acquire exact-motion command ownership
+        # 2. Arm explicitly to Mode 3
+        self.arm()
+
+        # 3. Acquire CALIBRATION_TEST ownership
         self.set_command_source("CALIBRATION_TEST")
 
         t_start = time.monotonic()
@@ -691,21 +863,18 @@ class GoldStandardMission:
             yaw_err_deg = abs(math.degrees(delta_yaw))
 
             if yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG:
-                # Within tolerance: command zero and verify stationary settle for 1.5s
-                self.send_velocity(0.0, 0.0, source="EXACT_MOTION")
+                self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
                 self.record_tick("LEG4_SETTLE")
                 if settle_start_time is None:
                     settle_start_time = time.monotonic()
                 elif time.monotonic() - settle_start_time >= 1.5:
                     print(f"[LEG 4 COMPLETE] Settled at HOME with yaw error {yaw_err_deg:.2f}° (Limit <= 3.0°).")
                     self.recorder.record_transition("LEG4_SETTLE_END")
-                    self.send_velocity(0.0, 0.0, source="EXACT_MOTION", force_zero=True)
+                    self.disarm()
                     self.set_command_source("NONE")
                     return
             else:
-                # Still aligning: reset settle timer
                 settle_start_time = None
-                # Signed velocity capped at FINAL_YAW_ALIGNMENT_MAX_SPEED (0.18 rad/s)
                 abs_err = abs(delta_yaw)
                 if abs_err > math.radians(30.0):
                     wz_mag = FINAL_YAW_ALIGNMENT_MAX_SPEED
@@ -714,12 +883,13 @@ class GoldStandardMission:
                     wz_mag = 0.08 + alpha * (FINAL_YAW_ALIGNMENT_MAX_SPEED - 0.08)
                 
                 wz_cmd = math.copysign(wz_mag, delta_yaw)
-                self.send_velocity(0.0, wz_cmd, source="EXACT_MOTION")
+                self.send_velocity(0.0, wz_cmd, source="CALIBRATION_TEST")
                 self.record_tick("LEG4_SETTLE")
 
             time.sleep(0.04)
 
-        # Timeout requirement: Must fail the test, not merely warn
+        # Timeout fails the mission
+        self.disarm_and_stop()
         raise MissionAbortException(
             f"Leg 4 final yaw alignment exceeded timeout ({TIMEOUT_LEG4_SETTLE_S}s) without reaching tolerance! (yaw error: {yaw_err_deg:.2f}° > 3.0°)"
         )

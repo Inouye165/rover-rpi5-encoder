@@ -1,11 +1,13 @@
 """
 test.test_gold_standard_home_test - Automated Unit & Safety Abort Tests
 Tests HOME loading, pre-arm gates, target geometry, grading criteria, all fail-safe abort conditions,
-clean command ownership handshakes, signed Leg 4 rotation, and active production velocity configs.
+clean command ownership handshakes, signed Leg 4 rotation, active production velocity configs,
+and comprehensive mocked integration tests for defect corrections.
 """
 
 import os
 import math
+import time
 import json
 import yaml
 import pytest
@@ -34,6 +36,53 @@ from tools.gold_standard_home_test.home_loader import (
 )
 from tools.gold_standard_home_test.grader import MissionGrader
 from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+
+
+@pytest.fixture(autouse=True)
+def prevent_unmocked_network(monkeypatch):
+    """Hermetic fixture ensuring unit tests never make unmocked HTTP calls to external hardware."""
+    def dummy_post(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        source = kwargs.get("json", {}).get("source", "NONE") if isinstance(kwargs.get("json"), dict) else "NONE"
+        resp.json.return_value = {"ok": True, "status": "ok", "cmdSource": source}
+        return resp
+
+    def dummy_get(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": True, "mode": 3, "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": 0.0,
+                    "limLinear": 0.0, "limAngular": 0.0,
+                    "cmdSource": "CALIBRATION_TEST", "seq": 1
+                }
+            }
+        elif "/api/navigation/status" in url:
+            resp.json.return_value = {"ok": True, "status": "SUCCEEDED", "distance_remaining_m": 0.0}
+        elif "/api/localization/status" in url:
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.0, "y": 2.0, "yawDeg": 0.0, "yaw": 0.0, "ageMs": 50
+            }
+        elif "/api/imu" in url:
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 20,
+                "stale": False, "sequence": 1, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}
+            }
+        elif "/api/encoders" in url:
+            resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+        elif "/api/clearance" in url:
+            resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    monkeypatch.setattr(requests, "post", dummy_post)
+    monkeypatch.setattr(requests, "get", dummy_get)
 
 
 class TestHomeLoader:
@@ -140,7 +189,6 @@ class TestPreArmGate:
 class TestSafetyAborts:
     def test_stale_telemetry_abort(self):
         mission = GoldStandardMission(dry_run=True)
-        import time
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.last_imu_seq_adv_time = time.monotonic() - 10.0
         mission.dry_run = False
@@ -151,7 +199,6 @@ class TestSafetyAborts:
     def test_boot_count_change_abort(self):
         mission = GoldStandardMission(dry_run=False)
         mission.initial_boot_count = 1
-        import time
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.latest_telemetry["drive"] = {"bootCount": 2}
         with pytest.raises(MissionAbortException) as excinfo:
@@ -160,7 +207,6 @@ class TestSafetyAborts:
 
     def test_imu_discontinuity_abort(self):
         mission = GoldStandardMission(dry_run=True)
-        import time
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.last_imu_yaw = 10.0
         mission.latest_telemetry["imu"] = {"raw_yaw_deg": 65.0, "gyro_z": 0.05}
@@ -170,7 +216,6 @@ class TestSafetyAborts:
 
     def test_serial_disconnect_abort(self):
         mission = GoldStandardMission(dry_run=False)
-        import time
         mission.initial_boot_count = 1
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.latest_telemetry["drive"] = {"bootCount": 1}
@@ -181,7 +226,6 @@ class TestSafetyAborts:
 
     def test_localization_loss_abort(self):
         mission = GoldStandardMission(dry_run=True)
-        import time
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.latest_telemetry["amcl"] = {"localized": False, "state": "LOST"}
         with pytest.raises(MissionAbortException) as excinfo:
@@ -219,7 +263,6 @@ class TestFourLegStateTransitions:
 
 class TestGrader:
     def test_grade_perfect_run(self):
-        # 60 samples spanning 2.0s -> achieved rate 29.5 Hz (>= 20 Hz)
         samples = []
         for i in range(60):
             t = round(float(i) * 0.035, 4)
@@ -271,7 +314,7 @@ class TestGrader:
                 "to_home": {"pos_err_m": 0.02, "yaw_err_deg": 1.0},
                 "drive": {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0}
             }
-            for i in range(80) # 3.2 seconds continuous crawl > 2.0s
+            for i in range(80)
         ]
         run_data = {
             "metadata": {"duration_s": samples[-1]["t_rel_s"], "watchdog_trips": 0, "rejections": 0},
@@ -286,7 +329,7 @@ class TestReviewRequirements:
     """Explicit regression tests covering items 1-6 of the code review."""
 
     def test_no_simultaneous_nav2_and_exact_motion_ownership(self):
-        """Proof: Cannot send EXACT_MOTION velocity commands while Nav2 goal is active."""
+        """Proof: Cannot send direct velocity commands while Nav2 goal is active."""
         mission = GoldStandardMission(dry_run=True)
         mission.active_nav2_goal = True
         
@@ -295,31 +338,38 @@ class TestReviewRequirements:
 
         # Nonzero velocity command while Nav2 goal is active MUST raise MissionAbortException
         with pytest.raises(MissionAbortException) as exc:
-            mission.send_velocity(0.10, 0.0, source="EXACT_MOTION")
+            mission.send_velocity(0.10, 0.0, source="CALIBRATION_TEST")
         assert "while Nav2 goal is active" in str(exc.value)
 
     def test_nav2_success_and_zero_output_handshake(self):
-        """Proof: Nav2 must report success/target reached and zero output before closing and advancing."""
+        """Proof: Nav2 must report success/target reached and zero output before advancing."""
         mission = GoldStandardMission(dry_run=False)
         mission.active_nav2_goal = True
 
-        # Mock Cockpit responses: drive status settled at standstill, Nav2 status SUCCEEDED
+        status_calls = 0
+        nav_calls = 0
         with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
             def mock_get_router(url, **kwargs):
+                nonlocal status_calls, nav_calls
+                status_calls += 1
                 resp = MagicMock()
                 resp.status_code = 200
                 if "/api/drive/status" in url:
                     resp.json.return_value = {
-                        "status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1}
+                        "ok": True,
+                        "status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1, "seq": status_calls, "cmdSource": "ANY"}
                     }
                 elif "/api/navigation/status" in url:
+                    nav_calls += 1
+                    # Transition: EXECUTING -> SUCCEEDED
+                    st = "EXECUTING" if nav_calls < 3 else "SUCCEEDED"
                     resp.json.return_value = {
-                        "status": "SUCCEEDED", "distance_remaining_m": 0.01
+                        "status": st, "distance_remaining_m": 0.01
                     }
                 elif "/api/localization/status" in url:
                     resp.json.return_value = {"localized": True, "state": "LOCALIZED"}
                 elif "/api/imu" in url:
-                    resp.json.return_value = {"dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": 100}
+                    resp.json.return_value = {"dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": status_calls}
                 else:
                     resp.json.return_value = {}
                 return resp
@@ -327,13 +377,9 @@ class TestReviewRequirements:
             mock_get.side_effect = mock_get_router
             mock_post.return_value.status_code = 200
 
-            res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_LEG")
+            res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_LEG", goal_id="test_goal")
             assert res is True
             assert mission.active_nav2_goal is False
-            
-            # Verify cancel/close was called to release Nav2
-            cancel_called = any("/api/navigation/cancel" in call.args[0] for call in mock_post.call_args_list)
-            assert cancel_called is True
 
     def test_leg3_retains_return_facing_yaw(self):
         """Proof: Leg 3 target yaw retains return-facing yaw, not final HOME yaw."""
@@ -346,12 +392,11 @@ class TestReviewRequirements:
         home_yaw = targets["home"]["yaw_deg"]
 
         assert leg3_yaw == leg2_yaw
-        assert abs(leg3_yaw - home_yaw) > 170.0 # Return heading is ~180° away from HOME heading
+        assert abs(leg3_yaw - home_yaw) > 170.0
 
     def test_leg4_signed_rotation_and_timeout(self):
         """Proof: Leg 4 produces signed shortest-angle commands capped at 0.18 rad/s and fails on timeout."""
         mission = GoldStandardMission(dry_run=True)
-        # HOME yaw is 0.0
         target_yaw_rad = 0.0
 
         # Case 1: Current heading is -30 deg (-0.52 rad) -> Shortest turn is CCW (+wz)
@@ -373,17 +418,41 @@ class TestReviewRequirements:
 
         # Case 3: Timeout must fail the mission
         mission.dry_run = False
-        with patch("requests.get") as mock_get:
-            resp = MagicMock()
-            resp.status_code = 200
-            # Heading remains at 45° error (> 3.0° tolerance)
-            resp.json.return_value = {
-                "x": 1.0, "y": 2.0, "yawDeg": 45.0, "yaw": math.radians(45.0),
-                "localized": True, "state": "LOCALIZED", "dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": 1
-            }
-            mock_get.return_value = resp
+        seq_c = 0
+        with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
+            def mock_get_router(url, **kwargs):
+                nonlocal seq_c
+                seq_c += 1
+                resp = MagicMock()
+                resp.status_code = 200
+                if "/api/drive/status" in url:
+                    resp.json.return_value = {
+                        "ok": True,
+                        "status": {"armed": True, "mode": 3, "bootCount": 1, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "CALIBRATION_TEST", "seq": seq_c}
+                    }
+                elif "/api/localization/status" in url:
+                    resp.json.return_value = {
+                        "ok": True, "x": 1.0, "y": 2.0, "yawDeg": 45.0, "yaw": math.radians(45.0),
+                        "localized": True, "state": "LOCALIZED", "ageMs": 10
+                    }
+                elif "/api/imu" in url:
+                    resp.json.return_value = {
+                        "ok": True, "dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": seq_c, "raw_yaw_deg": 45.0, "gyro": {"z": 0.0}
+                    }
+                else:
+                    resp.json.return_value = {"ok": True}
+                return resp
 
-            # Set a very short timeout
+            def mock_post_router(url, **kwargs):
+                resp = MagicMock()
+                resp.status_code = 200
+                src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST") if isinstance(kwargs.get("json"), dict) else "CALIBRATION_TEST"
+                resp.json.return_value = {"ok": True, "cmdSource": src}
+                return resp
+
+            mock_get.side_effect = mock_get_router
+            mock_post.side_effect = mock_post_router
+
             with patch("tools.gold_standard_home_test.mission.TIMEOUT_LEG4_SETTLE_S", 0.1):
                 with pytest.raises(MissionAbortException) as exc:
                     mission.execute_leg4_settle(target_yaw_rad)
@@ -439,13 +508,12 @@ class TestReviewRequirements:
     def test_stale_cached_telemetry_abort(self):
         """Proof: Stale underlying telemetry (dataAgeMs > 500 or sequence freeze) triggers abort."""
         mission = GoldStandardMission(dry_run=False)
-        import time
         mission.latest_telemetry["last_packet_monotonic"] = time.monotonic()
         mission.last_imu_seq_adv_time = time.monotonic()
         
         # Test dataAgeMs > 500
         mission.latest_telemetry["imu"] = {
-            "dataAgeMs": 650, # Stale underlying packet
+            "dataAgeMs": 650,
             "stale": False,
             "serialConnected": True
         }
@@ -462,3 +530,312 @@ class TestReviewRequirements:
         with pytest.raises(MissionAbortException) as exc2:
             mission.verify_safety_invariants("TEST")
         assert "packet marked stale" in str(exc2.value)
+
+
+class TestDefectCorrectionsAndIntegration:
+    """Mocked integration tests reproducing defect corrections and verified transitions."""
+
+    def test_nav_cancel_causes_disarm(self):
+        """1. /api/navigation/cancel disarms the rover. Runner handles disarm properly."""
+        mission = GoldStandardMission(dry_run=False)
+        posted_urls = []
+
+        def tracking_post(url, *args, **kwargs):
+            posted_urls.append(url)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"ok": True, "status": "ok"}
+            return resp
+
+        with patch("requests.post", side_effect=tracking_post):
+            mission.disarm_and_stop()
+
+        # Confirm cancel and disarm endpoints were called
+        assert any("/api/navigation/cancel" in u for u in posted_urls)
+        assert any("/api/drive/disarm" in u for u in posted_urls)
+        assert mission.active_nav2_goal is False
+
+    def test_initial_idle_status_rejected_before_goal_starts(self):
+        """2. Initial IDLE status is rejected before goal becomes ACTIVE; only then can SUCCEEDED complete."""
+        mission = GoldStandardMission(dry_run=False)
+        mission.active_nav2_goal = True
+
+        status_sequence = ["IDLE", "IDLE", "EXECUTING", "SUCCEEDED"]
+        call_idx = 0
+
+        def mock_get(url, **kwargs):
+            nonlocal call_idx
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/navigation/status" in url:
+                st = status_sequence[min(call_idx, len(status_sequence) - 1)]
+                call_idx += 1
+                resp.json.return_value = {"status": st, "distance_remaining_m": 0.01}
+            elif "/api/drive/status" in url:
+                resp.json.return_value = {"status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1, "seq": call_idx}}
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"localized": True, "state": "LOCALIZED"}
+            elif "/api/imu" in url:
+                resp.json.return_value = {"dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": call_idx}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get):
+            res = mission.wait_for_nav2_completion_and_zero(timeout_s=2.0, stage_name="TEST_LEG", goal_id="goal_123")
+            assert res is True
+            # Verified we polled past IDLE into EXECUTING before SUCCEEDED was accepted
+            assert call_idx >= 4
+
+    def test_nav2_stays_idle_times_out(self):
+        """Proof: If Nav2 stays IDLE and never becomes active, it must not complete and must abort on timeout."""
+        mission = GoldStandardMission(dry_run=False)
+        mission.active_nav2_goal = True
+
+        def mock_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/navigation/status" in url:
+                resp.json.return_value = {"status": "IDLE", "distance_remaining_m": 0.0}
+            elif "/api/drive/status" in url:
+                resp.json.return_value = {"status": {"limLinear": 0.0, "limAngular": 0.0, "bootCount": 1, "seq": 1}}
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"localized": True, "state": "LOCALIZED"}
+            elif "/api/imu" in url:
+                resp.json.return_value = {"dataAgeMs": 10, "stale": False, "serialConnected": True, "sequence": 1}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get):
+            with pytest.raises(MissionAbortException) as exc:
+                mission.wait_for_nav2_completion_and_zero(timeout_s=0.2, stage_name="TEST_LEG", goal_id="goal_123")
+            assert "exceeded timeout" in str(exc.value)
+
+    def test_rejected_direct_velocity_command(self):
+        """3. A rejected direct velocity command immediately commands zero, disarms, and raises MissionAbortException."""
+        mission = GoldStandardMission(dry_run=False)
+        disarm_called = False
+
+        def mock_post(url, *args, **kwargs):
+            nonlocal disarm_called
+            resp = MagicMock()
+            if "/api/cmd_vel" in url:
+                resp.status_code = 500
+                resp.text = "Internal Bridge Error"
+                resp.json.return_value = {"ok": False, "error": "Hardware fault"}
+            elif "/api/drive/disarm" in url:
+                disarm_called = True
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True}
+            else:
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.post", side_effect=mock_post):
+            with pytest.raises(MissionAbortException) as exc:
+                mission.send_velocity(0.10, 0.0, source="CALIBRATION_TEST")
+            assert "Velocity command rejected" in str(exc.value)
+            assert disarm_called is True
+
+    def test_failed_command_source_transition(self):
+        """4. A failed command source transition immediately commands zero, disarms, and raises MissionAbortException."""
+        mission = GoldStandardMission(dry_run=False)
+        disarm_called = False
+
+        def mock_post(url, *args, **kwargs):
+            nonlocal disarm_called
+            resp = MagicMock()
+            if "/api/command-source" in url:
+                resp.status_code = 403
+                resp.text = "Forbidden"
+                resp.json.return_value = {"ok": False, "error": "Source locked"}
+            elif "/api/drive/disarm" in url:
+                disarm_called = True
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True}
+            else:
+                resp.status_code = 200
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        with patch("requests.post", side_effect=mock_post):
+            with pytest.raises(MissionAbortException) as exc:
+                mission.set_command_source("CALIBRATION_TEST")
+            assert "Command source transition to CALIBRATION_TEST rejected" in str(exc.value)
+            assert disarm_called is True
+
+    def test_zero_output_handshake_verification(self):
+        """7. Verify real zero-output handshake: advancing telemetry, 3 consecutive zero samples, matching source."""
+        mission = GoldStandardMission(dry_run=False)
+        seq_counter = 0
+
+        def mock_get(url, **kwargs):
+            nonlocal seq_counter
+            seq_counter += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/api/drive/status" in url:
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": False, "mode": 0, "bootCount": 1,
+                        "reqLinear": 0.0, "reqAngular": 0.0,
+                        "limLinear": 0.0, "limAngular": 0.0,
+                        "cmdSource": "NONE", "seq": seq_counter
+                    }
+                }
+            elif "/api/imu" in url:
+                resp.json.return_value = {
+                    "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                    "stale": False, "sequence": seq_counter, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}
+                }
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {"ok": True, "localized": True, "state": "LOCALIZED", "x": 1.0, "y": 2.0, "yawDeg": 0.0, "yaw": 0.0, "ageMs": 10}
+            elif "/api/encoders" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            return resp
+
+        with patch("requests.get", side_effect=mock_get):
+            res = mission.verify_zero_handshake(expected_cmd_source="NONE", timeout_s=1.0)
+            assert res is True
+
+    def test_successful_rearming_and_ownership_transfer_all_four_legs(self):
+        """5. Successful rearming and ownership transfer between all four legs."""
+        mission = GoldStandardMission(dry_run=False)
+        mission.home_pose = {"x": 1.0, "y": 2.0, "yaw_deg": 0.0, "yaw_rad": 0.0}
+
+        actions_log = []
+        seq_num = 100
+        leg2_yaw = 0.0
+
+        def mock_post(url, *args, **kwargs):
+            nonlocal seq_num
+            seq_num += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            
+            if "/api/drive/arm" in url:
+                actions_log.append("ARM")
+                resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+            elif "/api/drive/disarm" in url:
+                actions_log.append("DISARM")
+                resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+            elif "/api/command-source" in url:
+                src = kwargs.get("json", {}).get("source", "UNKNOWN")
+                actions_log.append(f"SOURCE:{src}")
+                resp.json.return_value = {"ok": True, "cmdSource": src}
+            elif "/api/navigation/dispatch" in url:
+                actions_log.append("DISPATCH_NAV2")
+                resp.json.return_value = {"ok": True, "dispatched_at": time.time()}
+            elif "/api/cmd_vel" in url:
+                src = kwargs.get("json", {}).get("source", "UNKNOWN")
+                actions_log.append(f"CMD_VEL:{src}")
+                resp.json.return_value = {"ok": True}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        nav_call_count = 0
+
+        def mock_get(url, **kwargs):
+            nonlocal seq_num, nav_call_count, leg2_yaw
+            seq_num += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            
+            current_armed = ("ARM" in actions_log and (actions_log[-1] == "ARM" or "DISARM" not in actions_log[actions_log.index("ARM"):]))
+            mode = 3 if current_armed else 0
+
+            sources = [a.split(":")[1] for a in actions_log if a.startswith("SOURCE:")]
+            curr_src = sources[-1] if sources else "NONE"
+
+            if "/api/drive/status" in url:
+                resp.json.return_value = {
+                    "ok": True,
+                    "status": {
+                        "armed": current_armed, "mode": mode, "bootCount": 1,
+                        "reqLinear": 0.0, "reqAngular": 0.0,
+                        "limLinear": 0.0, "limAngular": 0.0,
+                        "cmdSource": curr_src, "seq": seq_num
+                    }
+                }
+            elif "/api/navigation/status" in url:
+                nav_call_count += 1
+                st = "EXECUTING" if nav_call_count % 3 != 0 else "SUCCEEDED"
+                resp.json.return_value = {"ok": True, "status": st, "distance_remaining_m": 0.01}
+            elif "/api/localization/status" in url:
+                resp.json.return_value = {
+                    "ok": True, "localized": True, "state": "LOCALIZED",
+                    "x": 1.0, "y": 2.0, "yawDeg": leg2_yaw, "yaw": math.radians(leg2_yaw), "ageMs": 10
+                }
+            elif "/api/imu" in url:
+                # During Leg 2, reach 180° in smooth 15° increments once turning starts
+                if "LEG2" in actions_log and mission.latest_exact_cmd.get("wz", 0.0) < -0.1:
+                    leg2_yaw = max(-180.0, leg2_yaw - 15.0)
+                elif "LEG4" in actions_log and abs(mission.latest_exact_cmd.get("wz", 0.0)) > 0.05:
+                    leg2_yaw = min(0.0, leg2_yaw + 15.0)
+                resp.json.return_value = {
+                    "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                    "stale": False, "sequence": seq_num, "raw_yaw_deg": leg2_yaw, "gyro": {"z": -0.4}
+                }
+            elif "/api/encoders" in url:
+                resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "vx": 0.0, "wz": 0.0}
+            elif "/api/clearance" in url:
+                resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+            else:
+                resp.json.return_value = {"ok": True}
+            return resp
+
+        # Smooth advancing monotonic clock
+        curr_m_time = 100.0
+        def advancing_monotonic():
+            nonlocal curr_m_time
+            curr_m_time += 0.02
+            return curr_m_time
+
+        with patch("requests.post", side_effect=mock_post), \
+             patch("requests.get", side_effect=mock_get), \
+             patch("time.monotonic", side_effect=advancing_monotonic), \
+             patch("time.sleep", return_value=None):
+            
+            # Leg 1: Starts disarmed, Nav2 dispatch -> SUCCEEDED (disarms in Cockpit)
+            mission.execute_leg1_forward(1.6096, 2.0, 0.0)
+            assert "DISPATCH_NAV2" in actions_log
+
+            # Leg 2: Zero handshake, Arm Mode 3, CALIBRATION_TEST, execute rotation, Disarm Mode 0, Source NONE
+            actions_log.append("LEG2")
+            mission.execute_leg2_rotation(180.0)
+            assert "ARM" in actions_log
+            assert "SOURCE:CALIBRATION_TEST" in actions_log
+            assert any(a == "CMD_VEL:CALIBRATION_TEST" for a in actions_log)
+            assert "DISARM" in actions_log
+            assert actions_log[-1] == "SOURCE:NONE"
+
+            # Leg 3: Zero handshake, Nav2 dispatch return -> SUCCEEDED (disarms in Cockpit)
+            mission.execute_leg3_return(1.0, 2.0, math.radians(-180.0))
+            assert actions_log.count("DISPATCH_NAV2") == 2
+
+            # Leg 4: Zero handshake, Arm Mode 3, CALIBRATION_TEST, align, settle, Disarm Mode 0, Source NONE
+            actions_log.append("LEG4")
+            # Advance monotonic time smoothly while settling
+            settle_samples = 0
+            def settle_advancing_monotonic():
+                nonlocal curr_m_time, settle_samples
+                if leg2_yaw >= -1.0: # In tolerance
+                    settle_samples += 1
+                    # After 5 ticks, advance monotonic by 0.2s each tick
+                    curr_m_time += 0.2
+                else:
+                    curr_m_time += 0.02
+                return curr_m_time
+
+            with patch("time.monotonic", side_effect=settle_advancing_monotonic):
+                mission.execute_leg4_settle(0.0)
+
+            assert actions_log.count("ARM") == 2
+            assert actions_log.count("DISARM") == 2
+            assert actions_log[-1] == "SOURCE:NONE"
