@@ -7489,6 +7489,23 @@ function updateLocalizationUI(loc) {
   });
 
   // Authoritative Saved HOME Pose
+    document.getElementById('btn-init-home')?.addEventListener('click', async () => {
+    if (!confirm("Confirm Initialize at HOME: Ensure rover is physically positioned on the HOME tape mark facing forward before proceeding.")) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/navigation/init_home', { method: 'POST' });
+      const data = await res.json();
+      if (data && data.ok) {
+        alert("Rover successfully initialized at HOME tape mark. Particles converged.");
+      } else {
+        alert("Initialize at HOME failed: " + (data ? (data.error || data.details || data.reason) : "Unknown error"));
+      }
+    } catch (err) {
+      alert("Initialize at HOME error: " + err.message);
+    }
+  });
+
   document.getElementById('btn-preset-home')?.addEventListener('click', () => {
     activeRelativePresetDistance = null;
     updatePresetModeDisplay();
