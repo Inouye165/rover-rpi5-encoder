@@ -5531,7 +5531,7 @@ app.get('/api/odom', async (req, res) => {
       res.status(503).json({ ok: false, error: 'Odometry unavailable or stale', odom });
     }
   } catch (err) {
-    res.status(502).json({ ok: false, error: Failed to fetch odometry:  });
+    res.status(502).json({ ok: false, error: "Failed to fetch odometry: " + (err ? err.message : "") });
   }
 });
 
