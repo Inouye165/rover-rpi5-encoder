@@ -3049,3 +3049,205 @@ def test_cli_refuses_to_arm_when_disarmed_plan_fails(monkeypatch):
     assert exc_info.value.code == 2, f"Expected sys.exit(2) on plan refusal, got {exc_info.value.code}"
     assert confirm_reached["reached"] is False, "Must not reach confirmation stage"
     assert arm_called["called"] is False, "Must not arm drivetrain"
+
+def test_leg4_continuous_imu_relative_tracking_prevents_amcl_quantization_hunting():
+    """
+    Regression Test:
+    Ensures Leg 4 uses ContinuousYawTracker with BNO085 relative yaw to prevent
+    the limit-cycle oscillation and reversals caused by AMCL's 11.5° (0.2 rad) deadband.
+    Even if AMCL remains frozen at its initial heading during the turn, the rover smoothly
+    tracks its orientation at 50 Hz, enters creep, and settles cleanly on the first pass.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    m_time = 100.0
+    poll_step = 0
+    disarmed = False
+    reversals = 0
+    last_sign = 0
+    sent_wz = 0.0
+
+    target_home_yaw_rad = math.radians(-5.047)
+    start_map_yaw = math.radians(-148.61)
+
+    # Robot orientation in world: starts at start_map_yaw and will rotate CCW towards target
+    current_physical_yaw = start_map_yaw
+    current_imu_yaw = 0.0
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed, sent_wz
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/api/drive/disarm" in url:
+            disarmed = True
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/cmd_vel" in url:
+            cmd = kwargs.get("json", {})
+            wz = cmd.get("angular", {}).get("z", 0.0)
+            sent_wz = wz
+            resp.json.return_value = {"ok": True}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST") if isinstance(kwargs.get("json"), dict) else "CALIBRATION_TEST"
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_step, disarmed, current_physical_yaw, current_imu_yaw, reversals, last_sign, sent_wz
+        poll_step += 1
+        resp = MagicMock()
+        resp.status_code = 200
+
+        # Simulate physics: rotate physical and IMU yaw based on commanded wz
+        dt = 0.05
+        if abs(sent_wz) > 0.001:
+            current_physical_yaw += sent_wz * dt
+            current_imu_yaw += sent_wz * dt
+            sign = 1 if sent_wz > 0.01 else -1
+            if last_sign != 0 and sign != last_sign:
+                reversals += 1
+            last_sign = sign
+
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed,
+                    "mode": 0 if disarmed else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0, "reqAngular": sent_wz,
+                    "limLinear": 0, "limAngular": sent_wz,
+                    "cmdSource": "NONE" if disarmed else "CALIBRATION_TEST",
+                    "seq": poll_step
+                }
+            }
+        elif "/api/localization/status" in url:
+            # AMCL topic intentionally holds FROZEN initial yaw (simulating AMCL 0.2 rad deadband lag)
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.1723, "y": -0.0173,
+                "yawDeg": math.degrees(start_map_yaw),
+                "yaw": start_map_yaw,
+                "ageMs": 50
+            }
+        elif "/api/imu" in url:
+            # IMU delivers fresh, continuous, low-latency yaw at 50 Hz
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False,
+                "sequence": poll_step,
+                "raw_yaw_deg": math.degrees(current_imu_yaw),
+                "gyro": {"z": sent_wz}
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": math.degrees(current_imu_yaw), "v_x": 0.0, "w_z": sent_wz}
+        elif "/api/encoders" in url:
+            resp.json.return_value = {"ok": True, "sequence": poll_step, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+        elif "/api/clearance" in url:
+            resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+        return resp
+
+    def mock_mono():
+        nonlocal m_time
+        m_time += 0.040
+        return m_time
+
+    def mock_sleep(s):
+        nonlocal m_time
+        m_time += s
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_mono), \
+         patch("time.sleep", side_effect=mock_sleep):
+        mission.execute_leg4_settle(target_home_yaw_rad=target_home_yaw_rad)
+
+    # Verification:
+    # 1. Zero corrective reversals occurred (clean single-pass approach)
+    assert reversals == 0, f"Expected 0 reversals with IMU tracking, got {reversals}"
+    # 2. Final settled physical yaw is within tolerance (<= 3.0°)
+    err_deg = abs(math.degrees(wrap_angle_rad(target_home_yaw_rad - current_physical_yaw)))
+    assert err_deg <= 3.0, f"Expected final yaw error <= 3.0°, got {err_deg:.2f}°"
+    # 3. Rover finished safely disarmed
+    assert disarmed is True, "Rover must finish disarmed"
+
+
+def test_leg3_settled_reconciliation_captures_at_rest_pose():
+    """
+    Regression Test:
+    Ensures wait_for_nav2_completion_and_zero captures the true settled pose at rest,
+    reconciling the discrepancy between pre-stop in-motion AMCL packets and the final
+    verified at-rest telemetry.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    mission.leg3_return_target_coords = (1.1939, -0.0452)
+    poll_step = 0
+    nav_status_calls = 0
+    disarmed = False
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/api/drive/disarm" in url:
+            disarmed = True
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_step, nav_status_calls, disarmed
+        poll_step += 1
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/api/navigation/status" in url:
+            nav_status_calls += 1
+            # Call 1: EXECUTING, Call 2+: SUCCEEDED
+            status_val = "EXECUTING" if nav_status_calls == 1 else "SUCCEEDED"
+            resp.json.return_value = {
+                "ok": True, "status": status_val, "goal_id": "test_goal_123",
+                "success_tf_pose": {"x": 1.1916, "y": -0.0059, "yaw_deg": -149.39}
+            }
+        elif "/api/drive/status" in url:
+            # Stopped after nav2 goal succeeds
+            is_stopped = nav_status_calls >= 2
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": False if is_stopped else True,
+                    "mode": 0 if is_stopped else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": 0.0,
+                    "limLinear": 0.0, "limAngular": 0.0,
+                    "cmdSource": "NONE" if is_stopped else "CALIBRATION_TEST",
+                    "seq": poll_step
+                }
+            }
+        elif "/api/localization/status" in url:
+            # During motion: pre-stop stale AMCL (4.3 cm error)
+            # Once stopped: settled at rest AMCL (3.52 cm error)
+            if nav_status_calls < 2:
+                resp.json.return_value = {
+                    "ok": True, "localized": True, "state": "LOCALIZED",
+                    "x": 1.2010, "y": -0.0028, "yawDeg": -163.0, "yaw": -2.84, "ageMs": 600
+                }
+            else:
+                resp.json.return_value = {
+                    "ok": True, "localized": True, "state": "LOCALIZED",
+                    "x": 1.1723, "y": -0.0173, "yawDeg": -148.6, "yaw": -2.59, "ageMs": 40
+                }
+        elif "/api/imu" in url:
+            resp.json.return_value = {"ok": True, "serialConnected": True, "dataAgeMs": 10, "stale": False, "sequence": poll_step, "raw_yaw_deg": 0.0, "gyro": {"z": 0.0}}
+        elif "/api/odom" in url:
+            resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0}
+        elif "/api/encoders" in url:
+            resp.json.return_value = {"ok": True, "sequence": poll_step, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+        elif "/api/clearance" in url:
+            resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+        return resp
+
+    with patch("requests.post", side_effect=mock_post), patch("requests.get", side_effect=mock_get):
+        success = mission.wait_for_nav2_completion_and_zero(timeout_s=5.0, stage_name="LEG3_RETURN", goal_id="test_goal_123", target_dist_thresh_m=0.04)
+
+    assert success is True
+    recon = mission.success_reconciliations.get("LEG3_RETURN", {})
+    # Settled error must be 3.52 cm (within 4 cm limit), not the stale 4.3 cm
+    assert recon.get("amcl_error_to_target_cm") == 3.53, f"Expected settled amcl_error 3.53 cm, got {recon.get('amcl_error_to_target_cm')}"
+    assert recon.get("settled_amcl_error_to_target_cm") == 3.53

@@ -1204,6 +1204,24 @@ class GoldStandardMission:
                                         f"{stage_name} post-goal check failed: rover did not confirm armed=false, mode=0, cmdSource=NONE, and zero velocity! (drive={drive})"
                                     )
 
+                                # Update reconciliation snapshot with verified settled rest pose
+                                amcl_pose_settled = self.latest_telemetry.get("amcl") or {}
+                                tf_pose_settled = nav_stat.get("success_tf_pose") or nav_stat.get("tf_pose") or {}
+                                amcl_err_settled_cm = None
+                                tf_err_settled_cm = None
+                                if target_coords and amcl_pose_settled.get("x") is not None:
+                                    amcl_err_settled_cm = round(math.hypot(amcl_pose_settled["x"] - target_coords[0], amcl_pose_settled["y"] - target_coords[1]) * 100.0, 2)
+                                if target_coords and tf_pose_settled.get("x") is not None:
+                                    tf_err_settled_cm = round(math.hypot(tf_pose_settled["x"] - target_coords[0], tf_pose_settled["y"] - target_coords[1]) * 100.0, 2)
+
+                                reconciliation["settled_amcl_pose"] = amcl_pose_settled
+                                reconciliation["settled_amcl_error_to_target_cm"] = amcl_err_settled_cm
+                                reconciliation["settled_tf_pose"] = tf_pose_settled
+                                reconciliation["settled_tf_error_to_target_cm"] = tf_err_settled_cm
+                                if amcl_err_settled_cm is not None:
+                                    reconciliation["amcl_pose"] = amcl_pose_settled
+                                    reconciliation["amcl_error_to_target_cm"] = amcl_err_settled_cm
+
                                 self.active_nav2_goal = False
                                 self.current_cmd_source = "NONE"
                                 return True
@@ -1412,6 +1430,12 @@ class GoldStandardMission:
         # 3. Acquire CALIBRATION_TEST ownership
         self.set_command_source("CALIBRATION_TEST")
 
+        # Capture settled baseline map orientation and initialize relative yaw tracking
+        self.poll_all_telemetry()
+        amcl = self.latest_telemetry.get("amcl") or {}
+        start_map_yaw = amcl.get("yaw_rad", math.radians(amcl.get("yaw_deg", 0.0)))
+        self.yaw_tracker.reset()
+
         t_start = time.monotonic()
         settle_start_time: Optional[float] = None
 
@@ -1420,8 +1444,8 @@ class GoldStandardMission:
             self.poll_all_telemetry()
             self.verify_safety_invariants("LEG4_SETTLE")
 
-            amcl = self.latest_telemetry.get("amcl") or {}
-            cur_th = amcl.get("yaw_rad", math.radians(amcl.get("yaw_deg", 0.0)))
+            # High-rate continuous map-frame yaw using BNO085 relative yaw tracking
+            cur_th = wrap_angle_rad(start_map_yaw + self.yaw_tracker.accumulated_yaw_rad)
             
             # Signed shortest-angle error
             delta_yaw = wrap_angle_rad(target_home_yaw_rad - cur_th)
@@ -1429,19 +1453,24 @@ class GoldStandardMission:
 
             # Measure physical angular rate from IMU gyro
             measured_wz = abs(self.latest_telemetry.get("imu", {}).get("gyro_z", 0.0))
-            is_settled_reading = (yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG) and (measured_wz <= 0.02)
 
-            if is_settled_reading:
+            if yaw_err_deg <= PASS_FINAL_YAW_ERR_DEG:
+                # Within tolerance: command zero to halt motion and allow settling
                 self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
                 self.record_tick("LEG4_SETTLE")
-                if settle_start_time is None:
-                    settle_start_time = time.monotonic()
-                elif time.monotonic() - settle_start_time >= 1.5:
-                    print(f"[LEG 4 COMPLETE] Settled at HOME with yaw error {yaw_err_deg:.2f}° and |wz| {measured_wz:.3f} rad/s (Limits <= 3.0°, <= 0.02 rad/s).")
-                    self.recorder.record_transition("LEG4_SETTLE_END")
-                    self.disarm()
-                    self.set_command_source("NONE")
-                    return
+
+                # Settle timer requires rover to be at rest (|wz| <= 0.02 rad/s) for 1.5s
+                if measured_wz <= 0.02:
+                    if settle_start_time is None:
+                        settle_start_time = time.monotonic()
+                    elif time.monotonic() - settle_start_time >= 1.5:
+                        print(f"[LEG 4 COMPLETE] Settled at HOME with yaw error {yaw_err_deg:.2f}° and |wz| {measured_wz:.3f} rad/s (Limits <= 3.0°, <= 0.02 rad/s).")
+                        self.recorder.record_transition("LEG4_SETTLE_END")
+                        self.disarm()
+                        self.set_command_source("NONE")
+                        return
+                else:
+                    settle_start_time = None
             else:
                 settle_start_time = None
                 abs_err = abs(delta_yaw)
