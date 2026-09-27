@@ -59,3 +59,7 @@ REQUIRED_NAV_LIFECYCLE_NODES = [
     'collision_monitor'
 ]
 NAV2_READINESS_TIMEOUT_S = 15.0
+
+# Corridor Clearance Gate
+NAV2_INFLATION_RADIUS_M = 0.30       # Configured global costmap inflation radius
+PRE_ARM_MIN_FORWARD_CLEARANCE_M = 1.0 # >= 1.0 m required forward clearance for Leg 1 (0.6096 m travel + 0.30 m inflation)

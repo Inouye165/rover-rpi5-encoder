@@ -39,7 +39,9 @@ from .constants import (
     COCKPIT_DEFAULT_URL,
     BRIDGE_DEFAULT_URL,
     REQUIRED_NAV_LIFECYCLE_NODES,
-    NAV2_READINESS_TIMEOUT_S
+    NAV2_READINESS_TIMEOUT_S,
+    NAV2_INFLATION_RADIUS_M,
+    PRE_ARM_MIN_FORWARD_CLEARANCE_M
 )
 from .home_loader import load_authoritative_home, wrap_angle_rad, wrap_angle_deg
 from .telemetry import TelemetryRecorder, TelemetryFrame
@@ -403,6 +405,100 @@ class GoldStandardMission:
             f"Exact node states: [{states_formatted}]. Detail: {last_msg}"
         )
         return False, fail_msg, last_states
+
+
+    def check_pre_arm_corridor_clearance(self) -> Tuple[bool, str, Optional[float]]:
+        """
+        Gold Standard pre-arm corridor-clearance gate for Leg 1:
+        The 2-foot (0.6096 m) target must not be evaluated using target distance alone.
+        Must account for the configured 0.30 m Nav2 inflation radius.
+        Requires at least 1.0 m (1000 mm) of valid forward clearance.
+        """
+        if self.dry_run:
+            return True, f"Forward corridor clearance verified (dry-run simulation: 1.20 m >= {PRE_ARM_MIN_FORWARD_CLEARANCE_M:.2f} m requirement)", 1.20
+
+        try:
+            r = self._http_get(f"{self.cockpit_url}/api/clearance", timeout=0.5)
+            if r.status_code != 200:
+                return False, f"Could not query /api/clearance from Cockpit (HTTP {r.status_code})", None
+            
+            data = r.json()
+            pi_cl = data.get("piComputed", {})
+            scan_age_ms = pi_cl.get("scanAgeMs", 9999)
+            if scan_age_ms > 1000:
+                return False, f"LiDAR clearance scan data is stale ({scan_age_ms} ms > 1000 ms)", None
+
+            min_fwd_mm = pi_cl.get("minFwdMm")
+            if min_fwd_mm is None:
+                return False, "LiDAR forward clearance measurement is unavailable", None
+
+            min_fwd_m = float(min_fwd_mm) / 1000.0
+            if min_fwd_m < PRE_ARM_MIN_FORWARD_CLEARANCE_M:
+                msg = (
+                    f"Measured forward clearance is {min_fwd_m:.2f} m ({min_fwd_mm} mm), which is less than "
+                    f"the required {PRE_ARM_MIN_FORWARD_CLEARANCE_M:.2f} m. Leg 1 requires at least 1.0 m to "
+                    f"safely accommodate {FORWARD_DISTANCE_M:.4f} m (2.0 ft) travel plus the configured "
+                    f"{NAV2_INFLATION_RADIUS_M:.2f} m Nav2 inflation radius without lethal-cost planning failure."
+                )
+                return False, msg, min_fwd_m
+
+            return True, f"Forward corridor clearance verified: {min_fwd_m:.2f} m ({min_fwd_mm} mm) >= {PRE_ARM_MIN_FORWARD_CLEARANCE_M:.2f} m requirement", min_fwd_m
+
+        except Exception as e:
+            return False, f"Failed to query corridor clearance: {e}", None
+
+    def check_disarmed_nav2_plan(self, start_pose: Dict[str, Any], target_pose: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """
+        Pre-arm Disarmed Nav2 Plan Gate:
+        Queries Cockpit's /api/navigation/plan (or bridge /api/nav/plan) disarmed
+        immediately before confirmation and arming to prove the global costmap can
+        produce a collision-free path for Leg 1.
+        """
+        if self.dry_run:
+            return True, "Disarmed Nav2 plan verified (dry-run simulation: 26 waypoints generated successfully)", {"count": 26, "ok": True}
+
+        try:
+            start_x = float(start_pose.get("x", 0.0))
+            start_y = float(start_pose.get("y", 0.0))
+            start_yaw = float(start_pose.get("yaw_rad", math.radians(start_pose.get("yaw_deg", 0.0))))
+
+            target_x = float(target_pose.get("x", 0.0))
+            target_y = float(target_pose.get("y", 0.0))
+            target_yaw = float(target_pose.get("yaw_rad", math.radians(target_pose.get("yaw_deg", 0.0))))
+
+            payload = {
+                "start_x": start_x,
+                "start_y": start_y,
+                "start_yaw": start_yaw,
+                "target_x": target_x,
+                "target_y": target_y,
+                "target_yaw": target_yaw
+            }
+
+            r = self._http_post(f"{self.cockpit_url}/api/navigation/plan", json=payload, timeout=2.0)
+            if r.status_code != 200:
+                err_text = r.text
+                try:
+                    err_json = r.json()
+                    err_text = err_json.get("error", err_text)
+                except Exception:
+                    pass
+                return False, f"Disarmed Nav2 plan query failed (HTTP {r.status_code}): {err_text}", None
+
+            plan_data = r.json()
+            if not plan_data.get("ok", False):
+                err_text = plan_data.get("error", "Planner returned ok=false")
+                return False, f"Disarmed Nav2 plan rejected by planner: {err_text}", plan_data
+
+            waypoints = plan_data.get("waypoints", [])
+            count = plan_data.get("count", len(waypoints))
+            if count <= 0:
+                return False, "Disarmed Nav2 plan returned zero waypoints", plan_data
+
+            return True, f"Disarmed Nav2 plan verified ({count} waypoints generated successfully)", plan_data
+
+        except Exception as e:
+            return False, f"Failed to query disarmed Nav2 plan: {e}", None
 
     def check_pre_arm_gate(self, amcl_pose: Dict[str, Any]) -> Tuple[bool, str, float, float]:
         """

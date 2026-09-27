@@ -2601,6 +2601,21 @@ def test_cli_execute_pre_arm_path_resolves_symbols_reaches_confirmation(monkeypa
                             }
                         }
                     }
+                elif "/api/clearance" in url:
+                    return {
+                        "ok": True,
+                        "piComputed": {
+                            "minFwdMm": 1200,
+                            "minRevMm": 800,
+                            "scanAgeMs": 50,
+                            "fwdOk": True,
+                            "revOk": True
+                        },
+                        "espConfirmed": {
+                            "clearanceMask": 3,
+                            "fwdOk": True
+                        }
+                    }
                 return {"ok": True}
         return MockResp()
 
@@ -2610,6 +2625,12 @@ def test_cli_execute_pre_arm_path_resolves_symbols_reaches_confirmation(monkeypa
         class MockResp:
             status_code = 200
             def json(self):
+                if "/api/navigation/plan" in url:
+                    return {
+                        "ok": True,
+                        "waypoints": [[1.2, 0.0], [1.8, -0.06]],
+                        "count": 2
+                    }
                 return {"ok": True}
         return MockResp()
 
@@ -2775,3 +2796,256 @@ def test_disarmed_leg1_exact_coordinates_plan_validity():
 
     assert start_mx == 108 and start_my == 102
     assert goal_mx == 120 and goal_my == 101
+
+
+def test_pre_arm_corridor_clearance_accepted():
+    """
+    Regression test: Verifies that pre-arm corridor clearance check passes
+    when measured forward clearance is >= 1.0 m (e.g. 1182 mm).
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import MagicMock
+
+    mission = GoldStandardMission(dry_run=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ok": True,
+        "piComputed": {
+            "minFwdMm": 1182,
+            "minRevMm": 900,
+            "scanAgeMs": 35,
+            "fwdOk": True
+        }
+    }
+    mission._http_get = MagicMock(return_value=mock_resp)
+
+    ok, msg, measured = mission.check_pre_arm_corridor_clearance()
+    assert ok is True
+    assert measured == 1.182
+    assert "verified" in msg.lower()
+    assert "1.18 m" in msg
+
+
+def test_pre_arm_corridor_clearance_rejected_obstacle_too_close():
+    """
+    Regression test: Verifies that pre-arm corridor clearance check fails
+    when forward clearance is < 1.0 m (e.g. 582 mm from run 083310).
+    Verifies that the refusal clearly accounts for 0.6096 m travel and 0.30 m Nav2 inflation radius.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import MagicMock
+
+    mission = GoldStandardMission(dry_run=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ok": True,
+        "piComputed": {
+            "minFwdMm": 582,
+            "minRevMm": 900,
+            "scanAgeMs": 40,
+            "fwdOk": False
+        }
+    }
+    mission._http_get = MagicMock(return_value=mock_resp)
+
+    ok, msg, measured = mission.check_pre_arm_corridor_clearance()
+    assert ok is False
+    assert measured == 0.582
+    assert "0.58 m" in msg
+    assert "582 mm" in msg
+    assert "1.0" in msg or "1.00 m" in msg
+    assert "0.30 m" in msg  # Mentions inflation radius
+    assert "0.6096 m" in msg  # Mentions Leg 1 distance
+
+
+def test_pre_arm_corridor_clearance_rejected_stale():
+    """
+    Regression test: Verifies that pre-arm corridor clearance check fails
+    when LiDAR scan data is stale (> 1000 ms).
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import MagicMock
+
+    mission = GoldStandardMission(dry_run=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ok": True,
+        "piComputed": {
+            "minFwdMm": 1500,
+            "scanAgeMs": 1500,  # Stale > 1000ms
+            "fwdOk": True
+        }
+    }
+    mission._http_get = MagicMock(return_value=mock_resp)
+
+    ok, msg, measured = mission.check_pre_arm_corridor_clearance()
+    assert ok is False
+    assert measured is None
+    assert "stale" in msg.lower()
+
+
+def test_pre_arm_disarmed_plan_accepted():
+    """
+    Regression test: Verifies that pre-arm disarmed Nav2 plan check passes
+    when Cockpit's /api/navigation/plan generates collision-free waypoints.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import MagicMock
+
+    mission = GoldStandardMission(dry_run=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ok": True,
+        "waypoints": [[1.2, 0.0], [1.3, -0.01], [1.81, -0.07]],
+        "count": 3
+    }
+    mission._http_post = MagicMock(return_value=mock_resp)
+
+    start = {"x": 1.2, "y": 0.0, "yaw_deg": -5.0}
+    target = {"x": 1.81, "y": -0.07, "yaw_deg": -5.0}
+    ok, msg, data = mission.check_disarmed_nav2_plan(start, target)
+    assert ok is True
+    assert "verified" in msg.lower()
+    assert data["count"] == 3
+
+
+def test_pre_arm_disarmed_plan_rejected_error():
+    """
+    Regression test: Verifies that pre-arm disarmed Nav2 plan check fails
+    when the planner reports lethal cost or error (e.g. Navfn error 206).
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import MagicMock
+
+    mission = GoldStandardMission(dry_run=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 400
+    mock_resp.json.return_value = {
+        "ok": False,
+        "error": "Goal Coordinates of(1.812900, -0.067900) was in lethal cost"
+    }
+    mission._http_post = MagicMock(return_value=mock_resp)
+
+    start = {"x": 1.2, "y": 0.0, "yaw_deg": -5.0}
+    target = {"x": 1.81, "y": -0.07, "yaw_deg": -5.0}
+    ok, msg, data = mission.check_disarmed_nav2_plan(start, target)
+    assert ok is False
+    assert "lethal cost" in msg
+
+
+def test_cli_refuses_to_arm_when_corridor_clearance_fails(monkeypatch):
+    """
+    Regression test: Executes real CLI entrypoint and verifies that when
+    measured forward clearance is insufficient (< 1.0 m), the CLI prints refusal,
+    exits with code 2, and refuses to prompt confirmation or arm drivetrain.
+    """
+    import sys
+    from tools.gold_standard_home_test.cli import run_cli
+    from tools.gold_standard_home_test.home_loader import load_authoritative_home
+
+    home = load_authoritative_home()
+    arm_called = {"called": False}
+    confirm_reached = {"reached": False}
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/drive/status" in url:
+                    return {"ok": True, "status": {"armed": False, "mode": 0, "bootCount": 1}}
+                elif "/api/localization/status" in url:
+                    return {"ok": True, "localized": True, "state": "LOCALIZED", "x": home["x"], "y": home["y"], "yawDeg": home["yaw_deg"], "yaw": home["yaw_rad"], "ageMs": 50}
+                elif "/api/navigation/status" in url:
+                    return {"ok": True, "status": "IDLE", "action_server_ready": True, "ready_to_accept_goals": True, "navigation": {"ready": True, "nodes": {"controller_server": "active", "planner_server": "active", "bt_navigator": "active", "collision_monitor": "active"}}}
+                elif "/api/clearance" in url:
+                    # Obstacle too close: 582 mm (< 1000 mm)
+                    return {"ok": True, "piComputed": {"minFwdMm": 582, "scanAgeMs": 50, "fwdOk": False}}
+                return {"ok": True}
+        return MockResp()
+
+    def mock_post(url, *args, **kwargs):
+        if "/api/drive/arm" in url:
+            arm_called["called"] = True
+        class MockResp:
+            status_code = 200
+            def json(self):
+                return {"ok": True}
+        return MockResp()
+
+    def mock_input(prompt):
+        confirm_reached["reached"] = True
+        return "CONFIRM"
+
+    monkeypatch.setattr("requests.get", mock_get)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setattr("builtins.input", mock_input)
+    monkeypatch.setattr("sys.argv", ["cli.py", "--execute"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli()
+
+    assert exc_info.value.code == 2, f"Expected sys.exit(2) on clearance refusal, got {exc_info.value.code}"
+    assert confirm_reached["reached"] is False, "Must not reach confirmation stage"
+    assert arm_called["called"] is False, "Must not arm drivetrain"
+
+
+def test_cli_refuses_to_arm_when_disarmed_plan_fails(monkeypatch):
+    """
+    Regression test: Executes real CLI entrypoint and verifies that when
+    the disarmed Nav2 plan query fails (e.g. lethal cost), the CLI prints refusal,
+    exits with code 2, and refuses to prompt confirmation or arm drivetrain.
+    """
+    import sys
+    from tools.gold_standard_home_test.cli import run_cli
+    from tools.gold_standard_home_test.home_loader import load_authoritative_home
+
+    home = load_authoritative_home()
+    arm_called = {"called": False}
+    confirm_reached = {"reached": False}
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/drive/status" in url:
+                    return {"ok": True, "status": {"armed": False, "mode": 0, "bootCount": 1}}
+                elif "/api/localization/status" in url:
+                    return {"ok": True, "localized": True, "state": "LOCALIZED", "x": home["x"], "y": home["y"], "yawDeg": home["yaw_deg"], "yaw": home["yaw_rad"], "ageMs": 50}
+                elif "/api/navigation/status" in url:
+                    return {"ok": True, "status": "IDLE", "action_server_ready": True, "ready_to_accept_goals": True, "navigation": {"ready": True, "nodes": {"controller_server": "active", "planner_server": "active", "bt_navigator": "active", "collision_monitor": "active"}}}
+                elif "/api/clearance" in url:
+                    # Clearance is fine (1200 mm)
+                    return {"ok": True, "piComputed": {"minFwdMm": 1200, "scanAgeMs": 50, "fwdOk": True}}
+                return {"ok": True}
+        return MockResp()
+
+    def mock_post(url, *args, **kwargs):
+        if "/api/drive/arm" in url:
+            arm_called["called"] = True
+        class MockResp:
+            status_code = 400
+            def json(self):
+                if "/api/navigation/plan" in url:
+                    return {"ok": False, "error": "Goal Coordinates of(1.812900, -0.067900) was in lethal cost"}
+                return {"ok": True}
+        return MockResp()
+
+    def mock_input(prompt):
+        confirm_reached["reached"] = True
+        return "CONFIRM"
+
+    monkeypatch.setattr("requests.get", mock_get)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setattr("builtins.input", mock_input)
+    monkeypatch.setattr("sys.argv", ["cli.py", "--execute"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli()
+
+    assert exc_info.value.code == 2, f"Expected sys.exit(2) on plan refusal, got {exc_info.value.code}"
+    assert confirm_reached["reached"] is False, "Must not reach confirmation stage"
+    assert arm_called["called"] is False, "Must not arm drivetrain"

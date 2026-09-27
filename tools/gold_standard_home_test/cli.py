@@ -200,6 +200,29 @@ def run_cli():
     else:
         print(f"[PRE-ARM GATE PASSED] {nav_msg}")
 
+    # Evaluate Pre-Arm Corridor Clearance Gate (Leg 1 forward clearance >= 1.0 m)
+    print("\nEvaluating Pre-Arm Corridor Clearance Gate (Leg 1 forward clearance >= 1.0 m)...")
+    clearance_ok, clearance_msg, measured_clearance = mission.check_pre_arm_corridor_clearance()
+    if not clearance_ok:
+        print(f"[PRE-ARM GATE REFUSAL] Refusing to arm drivetrain: {clearance_msg}")
+        if not args.test_safety and not args.dry_run:
+            sys.exit(2)
+    else:
+        print(f"[PRE-ARM GATE PASSED] {clearance_msg}")
+
+    # Evaluate Disarmed Nav2 Plan Gate (Leg 1 forward collision-free path preview)
+    print("\nEvaluating Pre-Arm Disarmed Nav2 Plan Gate (Leg 1 forward path query)...")
+    plan_ok, plan_msg, plan_data = mission.check_disarmed_nav2_plan(
+        start_pose=live_amcl,
+        target_pose=targets["leg1_outbound"]
+    )
+    if not plan_ok:
+        print(f"[PRE-ARM GATE REFUSAL] Refusing to arm drivetrain: {plan_msg}")
+        if not args.test_safety and not args.dry_run:
+            sys.exit(2)
+    else:
+        print(f"[PRE-ARM GATE PASSED] {plan_msg}")
+
     # Safety Test Mode
     if args.test_safety:
         print("\n[TEST-SAFETY] Executing automated verification of safety-abort watchdogs...")
