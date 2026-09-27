@@ -5157,7 +5157,9 @@ app.get('/api/navigation/status', (req, res) => {
         const matchesCurrentGoal = !lastDispatchedNav || !parsed.goal_id || (parsed.goal_id === lastDispatchedNav.goal_id);
         if (isTerminal && matchesCurrentGoal) {
           if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
-            triggerNav2Cancel();
+            if (parsed.status !== 'SUCCEEDED') {
+              triggerNav2Cancel();
+            }
             autonomyState.enabled = false;
             autonomyState.active = false;
             autonomyState.state = 'READY_DISARMED';

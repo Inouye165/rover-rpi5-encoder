@@ -83,12 +83,14 @@ async function runTerminalDisarmSuite() {
   }
 
   let bridgeNavStatus = { ok: true, status: 'EXECUTING', goal_id: 'goal_test_001', distance_remaining_m: 0.5 };
+  let navCancelCalls = [];
 
   const mockNav2Server = http.createServer((req, res) => {
     if (req.url === '/api/nav/status' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(bridgeNavStatus));
     } else if (req.url === '/api/nav/cancel' && req.method === 'POST') {
+      navCancelCalls.push(Date.now());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, message: 'Nav2 cancel called' }));
     } else {
@@ -134,6 +136,7 @@ async function runTerminalDisarmSuite() {
 
       assert.strictEqual(res.statusCode, 200);
       assert.strictEqual(res.json.status, 'SUCCEEDED');
+      assert.strictEqual(navCancelCalls.length, 0, 'triggerNav2Cancel MUST NOT be called when status is SUCCEEDED');
 
       // 1. Cockpit autonomy state transitioned to READY_DISARMED
       assert.strictEqual(autonomyState.state, 'READY_DISARMED', 'Autonomy state must become READY_DISARMED');

@@ -1743,6 +1743,48 @@ class TestDefectCorrectionsAndRegressions:
         assert bridge.active_goal_id == "goal_gen_2"
         assert bridge.active_goal_status == "EXECUTING"
         assert bridge.active_goal_status != "CANCELLED"
+
+    def test_cancel_goal_preserves_terminal_succeeded_status(self):
+        """Verify cancel_goal does not clobber terminal SUCCEEDED status to CANCELLED."""
+        import sys
+        import os
+        from unittest.mock import MagicMock
+        for mod in [
+            'rclpy', 'rclpy.node', 'rclpy.action', 'rclpy.qos',
+            'nav2_msgs', 'nav2_msgs.action', 'nav2_msgs.srv',
+            'lifecycle_msgs', 'lifecycle_msgs.srv',
+            'std_srvs', 'std_srvs.srv',
+            'nav_msgs', 'nav_msgs.msg',
+            'sensor_msgs', 'sensor_msgs.msg',
+            'geometry_msgs', 'geometry_msgs.msg',
+            'tf2_ros', 'builtin_interfaces.msg'
+        ]:
+            if mod not in sys.modules:
+                sys.modules[mod] = MagicMock()
+        sys.modules['rclpy.node'].Node = type('Node', (), {'__init__': lambda self, *args, **kwargs: None})
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bridge_path = os.path.join(repo_root, 'ros2', 'ros2_ws', 'src', 'rover_bringup')
+        if bridge_path not in sys.path:
+            sys.path.insert(0, bridge_path)
+        if 'rover_bringup.rover_nav_bridge' in sys.modules:
+            del sys.modules['rover_bringup.rover_nav_bridge']
+        from rover_bringup.rover_nav_bridge import RoverNavBridge
+        bridge = RoverNavBridge.__new__(RoverNavBridge)
+        bridge.active_goal_handle = None
+        bridge.active_goal_id = "goal_succeeded_1"
+        bridge.active_goal_generation = 5
+        bridge.active_goal_status = "SUCCEEDED"
+        bridge.active_target = None
+        bridge.nav_client = MagicMock()
+
+        res = bridge.cancel_goal()
+        assert res["ok"] is True
+        assert res["status"] == "SUCCEEDED"
+        assert res["cancelled"] is False
+        assert res["ignored"] == "already_terminal"
+        assert bridge.active_goal_status == "SUCCEEDED"
+
     def test_stale_cancelled_status_rejected_by_runner(self):
         """Verify runner rejects stale CANCELLED status before goal is active and never hides genuine cancellations."""
         mission = GoldStandardMission(cockpit_url="http://mock-cockpit", dry_run=False)

@@ -570,6 +570,16 @@ class RoverNavBridge(Node):
                 "goal_id": self.active_goal_id
             }
 
+        if self.active_goal_status in ("SUCCEEDED", "ABORTED", "FAILED"):
+            return {
+                "ok": True,
+                "status": self.active_goal_status,
+                "cancelled": False,
+                "ignored": "already_terminal",
+                "goal_id": self.active_goal_id,
+                "generation": self.active_goal_generation
+            }
+
         cancelled_id = self.active_goal_id
         if self.active_goal_handle is not None:
             try:
