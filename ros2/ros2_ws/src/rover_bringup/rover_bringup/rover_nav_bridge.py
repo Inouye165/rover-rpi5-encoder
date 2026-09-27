@@ -58,6 +58,8 @@ class RoverNavBridge(Node):
         self.active_goal_generation = 0
         self.active_goal_status = "IDLE"
         self.active_target = None
+        self.active_goal_error_code = None
+        self.active_goal_error_msg = ""
         self.last_success_tf_pose = None
         if tf2_ros is not None:
             try:
@@ -498,6 +500,8 @@ class RoverNavBridge(Node):
 
         self.active_goal_handle = future.result()
         self.active_goal_status = "EXECUTING"
+        self.active_goal_error_code = None
+        self.active_goal_error_msg = ""
 
         def _on_done(f, gen=current_gen, gid=new_goal_id):
             if self.active_goal_generation != gen:
@@ -506,6 +510,12 @@ class RoverNavBridge(Node):
             try:
                 res = f.result()
                 status = res.status
+                action_result = getattr(res, 'result', None)
+                err_code = getattr(action_result, 'error_code', None)
+                err_msg = getattr(action_result, 'error_msg', "")
+                self.active_goal_error_code = int(err_code) if err_code is not None else None
+                self.active_goal_error_msg = str(err_msg) if err_msg else ""
+
                 # action_msgs/msg/GoalStatus: 4=STATUS_SUCCEEDED, 5=STATUS_CANCELED, 6=STATUS_ABORTED
                 if status == 4:
                     self.active_goal_status = "SUCCEEDED"
@@ -516,8 +526,10 @@ class RoverNavBridge(Node):
                     self.active_goal_status = "ABORTED"
                 else:
                     self.active_goal_status = f"STOPPED_STATUS_{status}"
-            except Exception:
+            except Exception as e:
                 self.active_goal_status = "FINISHED"
+                self.active_goal_error_code = None
+                self.active_goal_error_msg = str(e)
             self.active_goal_handle = None
 
         res_fut = self.active_goal_handle.get_result_async()
@@ -684,6 +696,8 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                 "success_tf_pose": getattr(bridge_node, 'last_success_tf_pose', None),
                 "global_path": bridge_node.latest_global_plan,
                 "local_path": bridge_node.latest_local_plan,
+                "error_code": getattr(bridge_node, 'active_goal_error_code', None),
+                "error_msg": getattr(bridge_node, 'active_goal_error_msg', ""),
                 "navigation": nav_status,
                 "action_server_ready": action_server_ready,
                 "ready_to_accept_goals": ready_to_accept_goals

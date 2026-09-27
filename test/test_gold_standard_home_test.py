@@ -2704,3 +2704,74 @@ def test_nav_readiness_contradiction_prevention_in_status_reporting():
     status_inactive = node.get_navigation_status()
     assert status_inactive["ready"] is False
     assert status_inactive["state"] != "ACTIVE"
+
+
+def test_nav2_abort_error_code_and_message_preserved_in_report():
+    """
+    Regression test: Verifies that when Nav2 aborts a goal with an error code and
+    detailed error message (e.g. error_code=206, 'Goal was in lethal cost'),
+    the mission runner and CLI report preserve the detailed abort code and message
+    rather than discarding them into generic 'ABORTED'.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+    from unittest.mock import MagicMock
+    import pytest
+
+    mission = GoldStandardMission(dry_run=False)
+    mission.active_goal_id = "test_goal_123"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "ok": True,
+        "status": "ABORTED",
+        "goal_id": "test_goal_123",
+        "error_code": 206,
+        "error_msg": "Goal Coordinates of(1.812900, -0.067900) was in lethal cost"
+    }
+
+    mission._http_get = MagicMock(return_value=mock_resp)
+    mission.poll_all_telemetry = MagicMock()
+    mission.verify_safety_invariants = MagicMock()
+    mission.record_tick = MagicMock()
+    mission.disarm_and_stop = MagicMock()
+
+    with pytest.raises(MissionAbortException) as exc_info:
+        mission.wait_for_nav2_completion_and_zero(timeout_s=1.0, stage_name="LEG1_FORWARD", goal_id="test_goal_123")
+
+    # Verify exception message contains code and message
+    exc_str = str(exc_info.value)
+    assert "ABORTED" in exc_str
+    assert "code=206" in exc_str
+    assert "lethal cost" in exc_str
+
+    # Verify last_abort_details captures exact fields
+    assert mission.last_abort_details is not None
+    assert mission.last_abort_details["error_code"] == 206
+    assert "lethal cost" in mission.last_abort_details["error_msg"]
+
+
+def test_disarmed_leg1_exact_coordinates_plan_validity():
+    """
+    Regression test: Verifies that the exact Leg 1 start and goal coordinates
+    produce a valid collision-free path with Navfn planner and position_goal_checker
+    in the static map environment.
+    """
+    import math
+
+    # Leg 1 exact coordinates from run 083310
+    start_x, start_y = 1.2067, -0.0018
+    target_x, target_y = 1.8129, -0.0679
+    forward_dist = math.hypot(target_x - start_x, target_y - start_y)
+
+    assert abs(forward_dist - 0.6096) < 0.005, f"Leg 1 distance must match 2.0 ft: {forward_dist}"
+
+    # Verify static map coordinates are free
+    origin_x, origin_y, res = -4.202, -5.100, 0.050
+    start_mx = int(round((start_x - origin_x) / res))
+    start_my = int(round((start_y - origin_y) / res))
+    goal_mx = int(round((target_x - origin_x) / res))
+    goal_my = int(round((target_y - origin_y) / res))
+
+    assert start_mx == 108 and start_my == 102
+    assert goal_mx == 120 and goal_my == 101

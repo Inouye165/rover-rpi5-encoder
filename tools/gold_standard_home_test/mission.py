@@ -97,6 +97,7 @@ class GoldStandardMission:
         self.bridge_url = bridge_url.rstrip("/")
         self.dry_run = dry_run
         self.output_dir = output_dir
+        self.last_abort_details = None
 
         self.op_token = get_env_token("ROVER_OPERATOR_TOKEN")
         self.cmd_token = get_env_token("ROVER_CMD_VEL_TOKEN")
@@ -1034,7 +1035,17 @@ class GoldStandardMission:
                             elif status_str in ("ABORTED", "FAILED"):
                                 # Nav2 immediately aborted the newly dispatched goal (fail closed)
                                 self.disarm_and_stop()
-                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
+                                err_code = nav_stat.get("error_code")
+                                err_msg = nav_stat.get("error_msg")
+                                self.last_abort_details = {
+                                    "status": status_str,
+                                    "error_code": err_code,
+                                    "error_msg": err_msg
+                                }
+                                detail_str = f": {status_str}"
+                                if err_code is not None or err_msg:
+                                    detail_str += f" (code={err_code}, msg='{err_msg}')"
+                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack{detail_str}")
                             elif status_str in ("IDLE", "CANCELLED", "STOPPED", "DISPATCHING"):
                                 # Still in pre-start or stale status from a previous cancellation:
                                 # DO NOT accept stale CANCELLED as completing or aborting the new goal!
@@ -1102,7 +1113,17 @@ class GoldStandardMission:
                                 return True
                             elif status_str in ("ABORTED", "FAILED", "CANCELLED") or status_str.startswith("STOPPED"):
                                 self.disarm_and_stop()
-                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack: {status_str}")
+                                err_code = nav_stat.get("error_code")
+                                err_msg = nav_stat.get("error_msg")
+                                self.last_abort_details = {
+                                    "status": status_str,
+                                    "error_code": err_code,
+                                    "error_msg": err_msg
+                                }
+                                detail_str = f": {status_str}"
+                                if err_code is not None or err_msg:
+                                    detail_str += f" (code={err_code}, msg='{err_msg}')"
+                                raise MissionAbortException(f"Nav2 goal aborted by navigation stack{detail_str}")
             except Exception as e:
                 if isinstance(e, MissionAbortException):
                     raise

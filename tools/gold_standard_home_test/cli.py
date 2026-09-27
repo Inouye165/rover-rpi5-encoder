@@ -343,7 +343,10 @@ def run_cli():
 
     except MissionAbortException as mae:
         print(f"\n[MISSION ABORT] Safety watchdog triggered: {mae}")
-        mission.recorder.record_transition("ABORT", {"reason": str(mae)})
+        abort_details = {"reason": str(mae)}
+        if getattr(mission, "last_abort_details", None):
+            abort_details.update(mission.last_abort_details)
+        mission.recorder.record_transition("ABORT", abort_details)
         aborted = True
     except Exception as e:
         print(f"\n[MISSION UNHANDLED EXCEPTION] {e}")
