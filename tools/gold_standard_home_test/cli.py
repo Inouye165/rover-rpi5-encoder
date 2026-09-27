@@ -21,7 +21,9 @@ from .constants import (
     FINAL_POS_CORRECTION_CEILING,
     PASS_FINAL_YAW_ERR_DEG,
     COCKPIT_DEFAULT_URL,
-    BRIDGE_DEFAULT_URL
+    BRIDGE_DEFAULT_URL,
+    NAV2_READINESS_TIMEOUT_S,
+    REQUIRED_NAV_LIFECYCLE_NODES
 )
 from .mission import GoldStandardMission, MissionAbortException
 from .grader import MissionGrader

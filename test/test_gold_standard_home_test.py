@@ -2539,3 +2539,98 @@ def test_nav2_readiness_gate_fails_before_arming_when_bt_navigator_inactive():
 
     # Verify arming was never invoked
     assert armed_called["called"] is False, "Drivetrain must never be armed when bt_navigator is inactive"
+
+def test_cli_execute_pre_arm_path_resolves_symbols_reaches_confirmation(monkeypatch):
+    """
+    Regression test: Executes the real CLI entrypoint (run_cli) with '--execute' and mocked APIs and input.
+    Proves:
+    1. All readiness-gate symbols (including NAV2_READINESS_TIMEOUT_S) resolve without NameError.
+    2. The pre-arm AMCL and Nav2 readiness gates evaluate successfully.
+    3. The confirmation stage is reached.
+    4. When non-confirm input is provided, exits cleanly without arming or moving hardware.
+    """
+    import sys
+    from unittest.mock import MagicMock
+    from tools.gold_standard_home_test.cli import run_cli
+    from tools.gold_standard_home_test.home_loader import load_authoritative_home
+
+    home = load_authoritative_home()
+    arm_called = {"called": False}
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/drive/status" in url:
+                    return {
+                        "ok": True,
+                        "status": {
+                            "armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0,
+                            "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "NONE", "bootCount": 1
+                        }
+                    }
+                elif "/api/localization/status" in url:
+                    return {
+                        "ok": True,
+                        "localized": True,
+                        "state": "LOCALIZED",
+                        "x": home["x"],
+                        "y": home["y"],
+                        "yawDeg": home["yaw_deg"],
+                        "yaw": home["yaw_rad"],
+                        "ageMs": 50,
+                        "sigmaX": 0.02,
+                        "sigmaY": 0.02,
+                        "sigmaYaw": 0.01
+                    }
+                elif "/api/navigation/status" in url:
+                    return {
+                        "ok": True,
+                        "status": "IDLE",
+                        "action_server_ready": True,
+                        "ready_to_accept_goals": True,
+                        "navigation": {
+                            "ready": True,
+                            "state": "ACTIVE",
+                            "details": "All required nodes active",
+                            "nodes": {
+                                "controller_server": "active",
+                                "planner_server": "active",
+                                "bt_navigator": "active",
+                                "collision_monitor": "active"
+                            }
+                        }
+                    }
+                return {"ok": True}
+        return MockResp()
+
+    def mock_post(url, *args, **kwargs):
+        if "/api/drive/arm" in url:
+            arm_called["called"] = True
+        class MockResp:
+            status_code = 200
+            def json(self):
+                return {"ok": True}
+        return MockResp()
+
+    monkeypatch.setattr("requests.get", mock_get)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setattr("sys.argv", ["cli.py", "--execute"])
+
+    # Mock user input to simulate operator rejecting confirmation
+    confirmation_reached = {"reached": False}
+    def mock_input(prompt):
+        if "CONFIRM" in prompt:
+            confirmation_reached["reached"] = True
+            return "ABORT"
+        return ""
+
+    monkeypatch.setattr("builtins.input", mock_input)
+
+    # run_cli should exit with 0 upon operator non-confirmation
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli()
+
+    assert exc_info.value.code == 0, f"Expected sys.exit(0) on non-confirmation, got {exc_info.value.code}"
+    assert confirmation_reached["reached"] is True, "Must reach confirmation stage"
+    assert arm_called["called"] is False, "Must not arm hardware"
