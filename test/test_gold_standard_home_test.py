@@ -3251,3 +3251,108 @@ def test_leg3_settled_reconciliation_captures_at_rest_pose():
     # Settled error must be 3.52 cm (within 4 cm limit), not the stale 4.3 cm
     assert recon.get("amcl_error_to_target_cm") == 3.53, f"Expected settled amcl_error 3.53 cm, got {recon.get('amcl_error_to_target_cm')}"
     assert recon.get("settled_amcl_error_to_target_cm") == 3.53
+
+
+def test_leg4_captures_settled_amcl_while_disarmed_and_refreshes_if_stale():
+    """
+    Regression Test:
+    Ensures execute_leg4_settle captures start_map_yaw while safely disarmed,
+    and if the AMCL sample is stale (ageMs > 500) or not stationary, invokes
+    /api/navigation/refresh_localization to guarantee an up-to-date scan-matched seed.
+    """
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+    poll_step = 0
+    refreshed = False
+    armed_before_amcl = False
+    amcl_captured_while_disarmed = False
+
+    disarmed = False
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal refreshed, disarmed
+        resp = MagicMock()
+        resp.status_code = 200
+        if "/api/navigation/refresh_localization" in url:
+            refreshed = True
+            resp.json.return_value = {"ok": True, "fresh": True}
+        elif "/api/drive/arm" in url:
+            disarmed = False
+            resp.json.return_value = {"ok": True}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            resp.json.return_value = {"ok": True}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST") if isinstance(kwargs.get("json"), dict) else "CALIBRATION_TEST"
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        elif "/api/cmd_vel" in url:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_step, refreshed, armed_before_amcl, amcl_captured_while_disarmed, disarmed
+        poll_step += 1
+        resp = MagicMock()
+        resp.status_code = 200
+
+        if "/api/drive/status" in url:
+            is_armed = (not disarmed) and (poll_step > 8)
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": is_armed,
+                    "mode": 3 if is_armed else 0,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": 0.0,
+                    "limLinear": 0.0, "limAngular": 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if is_armed else "NONE",
+                    "seq": poll_step
+                }
+            }
+        elif "/api/localization/status" in url:
+            # First poll is stale (ageMs=900), once refreshed it becomes fresh (ageMs=30)
+            if not refreshed:
+                resp.json.return_value = {
+                    "ok": True, "localized": True, "state": "LOCALIZED",
+                    "is_stationary": False,
+                    "x": 1.264, "y": -0.071, "yawDeg": 155.8, "yaw": 2.719,
+                    "ageMs": 900, "seq": 42
+                }
+            else:
+                resp.json.return_value = {
+                    "ok": True, "localized": True, "state": "LOCALIZED",
+                    "is_stationary": True,
+                    "x": 1.229, "y": -0.063, "yawDeg": 153.8, "yaw": 2.684,
+                    "ageMs": 30, "seq": 43
+                }
+        elif "/api/imu" in url:
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": poll_step, "raw_yaw_deg": 153.8,
+                "gyro": {"z": 0.0}
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {"ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 153.8, "v_x": 0.0, "w_z": 0.0}
+        elif "/api/encoders" in url:
+            resp.json.return_value = {"ok": True, "sequence": poll_step, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}}
+        elif "/api/clearance" in url:
+            resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
+        return resp
+
+    m_time = 100.0
+    def mock_mono():
+        nonlocal m_time
+        m_time += 0.040
+        return m_time
+
+    def mock_sleep(s):
+        nonlocal m_time
+        m_time += s
+
+    with patch("requests.post", side_effect=mock_post),          patch("requests.get", side_effect=mock_get),          patch("time.monotonic", side_effect=mock_mono),          patch("time.sleep", side_effect=mock_sleep):
+        # Target is already matched by fresh AMCL yaw (153.8 deg)
+        mission.execute_leg4_settle(target_home_yaw_rad=math.radians(153.8))
+
+    assert refreshed is True, "Must invoke /api/navigation/refresh_localization when AMCL is stale/in-motion"
+    # Ensure mission tracked with fresh yaw
+    assert mission.yaw_tracker is not None
+

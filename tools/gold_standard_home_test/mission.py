@@ -1410,12 +1410,13 @@ class GoldStandardMission:
         """
         Leg 4: Final in-place alignment to saved HOME yaw.
         Rover is disarmed after Leg 3.
-        1. Zero handshake.
-        2. Arm explicitly to Mode 3.
-        3. Acquire CALIBRATION_TEST ownership.
-        4. Rotate in place using signed shortest-angle error (<= 0.18 rad/s).
-        5. Stop within 3.0° and settle for 1.5s. Timeout fails the test.
-        6. Disarm to Mode 0, release ownership.
+        1. Zero handshake while disarmed.
+        2. Capture settled baseline map orientation & initialize relative yaw tracking while disarmed.
+        3. Arm explicitly to Mode 3.
+        4. Acquire CALIBRATION_TEST ownership.
+        5. Rotate in place using signed shortest-angle error (<= 0.18 rad/s).
+        6. Stop within 3.0° and settle for 1.5s. Timeout fails the test.
+        7. Disarm to Mode 0, release ownership.
         """
         self.current_stage = "LEG4_SETTLE"
         print(f"\n[LEG 4] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership for final HOME yaw alignment...")
@@ -1424,17 +1425,29 @@ class GoldStandardMission:
         # 1. Zero handshake while disarmed
         self.verify_zero_handshake(expected_cmd_source="ANY")
 
+        # Capture settled baseline map orientation and initialize relative yaw tracking while disarmed
+        self.poll_all_telemetry()
+        amcl = self.latest_telemetry.get("amcl") or {}
+        if not self.dry_run and (amcl.get("ageMs", 0) > 500 or amcl.get("is_stationary") is False):
+            try:
+                self._http_post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
+                t_poll = time.monotonic()
+                while time.monotonic() - t_poll < 2.0:
+                    self.poll_all_telemetry()
+                    amcl = self.latest_telemetry.get("amcl") or {}
+                    if amcl.get("ageMs", 9999) < 250:
+                        break
+                    time.sleep(0.04)
+            except Exception:
+                pass
+        start_map_yaw = amcl.get("yaw_rad", math.radians(amcl.get("yaw_deg", 0.0)))
+        self.yaw_tracker.reset()
+
         # 2. Arm explicitly to Mode 3
         self.arm()
 
         # 3. Acquire CALIBRATION_TEST ownership
         self.set_command_source("CALIBRATION_TEST")
-
-        # Capture settled baseline map orientation and initialize relative yaw tracking
-        self.poll_all_telemetry()
-        amcl = self.latest_telemetry.get("amcl") or {}
-        start_map_yaw = amcl.get("yaw_rad", math.radians(amcl.get("yaw_deg", 0.0)))
-        self.yaw_tracker.reset()
 
         t_start = time.monotonic()
         settle_start_time: Optional[float] = None
