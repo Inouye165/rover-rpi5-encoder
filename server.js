@@ -4883,6 +4883,16 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     lastDispatchedNav = dispatchMeta;
   }
 
+  // Safety check 2.5: Navigation and collision-protection lifecycle gate before arming
+  if (navigationState && navigationState.ready === false) {
+    const detail = navigationState.details || 'Required navigation lifecycle nodes are not all active';
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${detail}). Drivetrain remains safely disarmed.`,
+      navigation: navigationState
+    });
+  }
+
   // Safety check 3: Drivetrain arming & autonomy handshake
   try {
     autonomyState.enabled = true;

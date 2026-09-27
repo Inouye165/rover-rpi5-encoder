@@ -37,7 +37,9 @@ from .constants import (
     TIMEOUT_LEG4_SETTLE_S,
     TELEMETRY_STALE_TIMEOUT_S,
     COCKPIT_DEFAULT_URL,
-    BRIDGE_DEFAULT_URL
+    BRIDGE_DEFAULT_URL,
+    REQUIRED_NAV_LIFECYCLE_NODES,
+    NAV2_READINESS_TIMEOUT_S
 )
 from .home_loader import load_authoritative_home, wrap_angle_rad, wrap_angle_deg
 from .telemetry import TelemetryRecorder, TelemetryFrame
@@ -304,6 +306,102 @@ class GoldStandardMission:
             return True, "OK", pose
         except Exception as e:
             return False, f"Failed to connect to Cockpit localization endpoint ({e})", None
+
+    def fetch_nav2_readiness(self) -> Tuple[bool, str, Dict[str, str], bool]:
+        """
+        Queries live Nav2 lifecycle status and action server readiness from Cockpit/bridge/odom endpoints.
+        Returns:
+            (is_ready, details_msg, node_states_dict, action_server_ready)
+        """
+        node_states: Dict[str, str] = {}
+        action_server_ready = False
+        nav_obj = None
+
+        # 1. Query /api/navigation/status (from Cockpit proxy or direct bridge)
+        try:
+            r = self._http_get(f"{self.cockpit_url}/api/navigation/status", timeout=1.0)
+            if r.status_code == 200:
+                data = r.json()
+                action_server_ready = bool(data.get("action_server_ready", False))
+                nav_obj = data.get("navigation")
+        except Exception:
+            pass
+
+        # 2. Fallbacks: /api/status, /api/odom on Cockpit, or direct odom port
+        if not nav_obj or not isinstance(nav_obj.get("nodes"), dict):
+            for ep in [f"{self.cockpit_url}/api/status", f"{self.cockpit_url}/api/odom", f"{self.odom_url}/api/odom"]:
+                try:
+                    r_fb = self._http_get(ep, timeout=1.0)
+                    if r_fb.status_code == 200:
+                        fb_json = r_fb.json()
+                        cand = fb_json.get("navigation")
+                        if cand and isinstance(cand.get("nodes"), dict):
+                            nav_obj = cand
+                            break
+                except Exception:
+                    pass
+
+        if nav_obj and isinstance(nav_obj.get("nodes"), dict):
+            node_states = {str(k): str(v) for k, v in nav_obj["nodes"].items()}
+
+        # Verify each required node is explicitly 'active'
+        inactive_nodes = [
+            f"{node}={node_states.get(node, 'unknown')}"
+            for node in REQUIRED_NAV_LIFECYCLE_NODES
+            if node_states.get(node) != 'active'
+        ]
+
+        all_states_str = ", ".join(f"{n}={node_states.get(n, 'unknown')}" for n in REQUIRED_NAV_LIFECYCLE_NODES)
+
+        # In Nav2, /navigate_to_pose action server is hosted by bt_navigator.
+        # It rejects goals unless bt_navigator is in lifecycle state 'active'.
+        # Merely having the action server endpoint exist is NOT sufficient.
+        if inactive_nodes:
+            return (
+                False,
+                f"Required Nav2 lifecycle nodes inactive or mixed: {', '.join(inactive_nodes)}. Exact states: [{all_states_str}]",
+                node_states,
+                action_server_ready
+            )
+
+        # All required nodes are active; verify action server endpoint readiness
+        return (
+            True,
+            f"All required Nav2 nodes active ({all_states_str}); /navigate_to_pose ready to accept goals",
+            node_states,
+            True
+        )
+
+    def wait_for_nav2_readiness(self, timeout_s: float = NAV2_READINESS_TIMEOUT_S) -> Tuple[bool, str, Dict[str, str]]:
+        """
+        Bounded wait verifying planner_server, controller_server, bt_navigator, and
+        collision_monitor are all active, and /navigate_to_pose is ready to accept goals.
+        Does NOT use a fixed sleep. Fails closed before arming if mixed or inactive after bounded wait.
+        Returns:
+            (is_ready, msg, node_states_dict)
+        """
+        t_start = time.monotonic()
+        last_msg = ""
+        last_states: Dict[str, str] = {}
+
+        while time.monotonic() - t_start < timeout_s:
+            t_cycle = time.monotonic()
+            ok, msg, states, _ = self.fetch_nav2_readiness()
+            last_msg = msg
+            last_states = states
+            if ok:
+                return True, msg, states
+
+            elapsed = time.monotonic() - t_cycle
+            time.sleep(max(0.010, 0.200 - elapsed))
+
+        # Bounded wait expired without achieving all-active state
+        states_formatted = ", ".join(f"{n}={last_states.get(n, 'unknown')}" for n in REQUIRED_NAV_LIFECYCLE_NODES)
+        fail_msg = (
+            f"Nav2 readiness gate failed after {timeout_s:.1f}s bounded wait. "
+            f"Exact node states: [{states_formatted}]. Detail: {last_msg}"
+        )
+        return False, fail_msg, last_states
 
     def check_pre_arm_gate(self, amcl_pose: Dict[str, Any]) -> Tuple[bool, str, float, float]:
         """

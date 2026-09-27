@@ -50,3 +50,12 @@ TELEMETRY_STALE_TIMEOUT_S = 0.5   # 500 ms stale detection
 # Network Endpoints
 COCKPIT_DEFAULT_URL = "http://127.0.0.1:3000"
 BRIDGE_DEFAULT_URL = "http://127.0.0.1:3010"
+
+# Navigation Lifecycle Readiness
+REQUIRED_NAV_LIFECYCLE_NODES = [
+    'controller_server',
+    'planner_server',
+    'bt_navigator',
+    'collision_monitor'
+]
+NAV2_READINESS_TIMEOUT_S = 15.0

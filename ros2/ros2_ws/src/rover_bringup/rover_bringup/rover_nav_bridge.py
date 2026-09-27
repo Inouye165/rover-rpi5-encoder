@@ -641,17 +641,32 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/nav/status':
             # Query odometry node for current AMCL pose to compute distance remaining
             cur_x, cur_y = 0.0, 0.0
+            nav_status = None
             try:
                 r = requests.get(ODOM_API_URL, timeout=0.25).json()
                 loc = r.get('localization', {}).get('pose', {})
                 cur_x = loc.get('x', 0.0)
                 cur_y = loc.get('y', 0.0)
+                nav_status = r.get('navigation')
             except Exception:
                 pass
 
             dist_rem = 0.0
             if bridge_node.active_target:
                 dist_rem = math.hypot(bridge_node.active_target['x'] - cur_x, bridge_node.active_target['y'] - cur_y)
+
+            action_server_ready = False
+            try:
+                action_server_ready = bool(bridge_node.nav_client.server_is_ready())
+            except Exception:
+                pass
+
+            bt_active = False
+            if nav_status and isinstance(nav_status.get('nodes'), dict):
+                bt_active = (nav_status['nodes'].get('bt_navigator') == 'active')
+
+            all_active = bool(nav_status and nav_status.get('ready'))
+            ready_to_accept_goals = bool(action_server_ready and bt_active and all_active)
 
             data = {
                 "ok": True,
@@ -663,7 +678,10 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                 "tf_pose": bridge_node.get_current_tf_pose(),
                 "success_tf_pose": getattr(bridge_node, 'last_success_tf_pose', None),
                 "global_path": bridge_node.latest_global_plan,
-                "local_path": bridge_node.latest_local_plan
+                "local_path": bridge_node.latest_local_plan,
+                "navigation": nav_status,
+                "action_server_ready": action_server_ready,
+                "ready_to_accept_goals": ready_to_accept_goals
             }
             self._send_json(200, data)
         else:

@@ -69,7 +69,20 @@ def prevent_unmocked_network(monkeypatch):
             }
         elif "/api/navigation/status" in url:
             resp.json.return_value = {
-                "ok": True, "status": "SUCCEEDED", "goal_id": "mock_goal_001", "distance_remaining_m": 0.0
+                "ok": True, "status": "SUCCEEDED", "goal_id": "mock_goal_001", "distance_remaining_m": 0.0,
+                "action_server_ready": True,
+                "ready_to_accept_goals": True,
+                "navigation": {
+                    "ready": True,
+                    "state": "ACTIVE",
+                    "details": "All required navigation and collision-protection nodes active",
+                    "nodes": {
+                        "controller_server": "active",
+                        "planner_server": "active",
+                        "bt_navigator": "active",
+                        "collision_monitor": "active"
+                    }
+                }
             }
         elif "/api/localization/status" in url:
             resp.json.return_value = {
@@ -98,7 +111,18 @@ def prevent_unmocked_network(monkeypatch):
                 "x": 0.0, "y": 0.0, "yaw": 0.0, "yaw_deg": 0.0,
                 "v_x": 0.0, "w_z": 0.0, "odometry_age_ms": 25,
                 "raw_d_left_m": 0.0, "raw_d_right_m": 0.0,
-                "node_health": "ok"
+                "node_health": "ok",
+                "navigation": {
+                    "ready": True,
+                    "state": "ACTIVE",
+                    "details": "All required navigation and collision-protection nodes active",
+                    "nodes": {
+                        "controller_server": "active",
+                        "planner_server": "active",
+                        "bt_navigator": "active",
+                        "collision_monitor": "active"
+                    }
+                }
             }
         elif "/api/clearance" in url:
             resp.json.return_value = {"ok": True, "piComputed": {"minFwdMm": 1000}, "espConfirmed": {"clearanceMask": 3}}
@@ -2313,3 +2337,205 @@ def test_aborted_before_motion_report_formatting_with_none_metrics(capsys):
     assert "Outbound Distance:         N/A (Error: N/A)" in out2
     assert "180° Rotation Error:       N/A" in out2
     assert "Total Mission Duration:    N/A" in out2
+
+
+# ==============================================================================
+# Bounded Pre-Arm Nav2 Readiness Gate Regression Tests
+# ==============================================================================
+
+def test_nav2_readiness_gate_cold_start_mixed_state():
+    """
+    Regression test: In a cold-start mixed lifecycle state
+    (controller_server=active, planner_server=inactive, bt_navigator=inactive),
+    the gate detects mixed lifecycle state, does not declare ready, and fails closed
+    before arming with the exact node states when bounded wait expires.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    mixed_nodes = {
+        "controller_server": "active",
+        "planner_server": "inactive",
+        "bt_navigator": "inactive",
+        "collision_monitor": "active"
+    }
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/navigation/status" in url:
+                    return {
+                        "ok": True,
+                        "status": "IDLE",
+                        "action_server_ready": True,  # Endpoint exists on ROS graph!
+                        "navigation": {
+                            "ready": False,
+                            "state": "WAITING_FOR_LOCALIZATION",
+                            "details": "Awaiting navigation bringup",
+                            "nodes": mixed_nodes
+                        }
+                    }
+                return {"ok": True}
+        return MockResp()
+
+    mission._http_get = mock_get
+
+    # 1. Immediate fetch check
+    ready, msg, states, action_ready = mission.fetch_nav2_readiness()
+    assert not ready, "Must not declare ready when nodes are in mixed state"
+    assert action_ready is True, "Action server endpoint exists, but gate must not arm"
+    assert states["controller_server"] == "active"
+    assert states["planner_server"] == "inactive"
+    assert states["bt_navigator"] == "inactive"
+    assert "bt_navigator=inactive" in msg
+    assert "planner_server=inactive" in msg
+
+    # 2. Bounded wait check (fast timeout for unit test)
+    t0 = time.monotonic()
+    wait_ready, wait_msg, wait_states = mission.wait_for_nav2_readiness(timeout_s=0.25)
+    t_elapsed = time.monotonic() - t0
+    assert not wait_ready, "Bounded wait must fail when mixed lifecycle does not recover"
+    assert 0.20 <= t_elapsed <= 0.60
+    assert "bt_navigator=inactive" in wait_msg
+    assert "planner_server=inactive" in wait_msg
+    assert "controller_server=active" in wait_msg
+    assert wait_states["bt_navigator"] == "inactive"
+
+
+def test_nav2_readiness_gate_delayed_successful_activation():
+    """
+    Regression test: Nav2 starts in mixed/unconfigured state, but background
+    lifecycle recovery activates all nodes after a brief delay.
+    The gate must poll without fixed sleep, succeed as soon as all nodes are active,
+    and report ready to accept goals.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    poll_count = {"calls": 0}
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/navigation/status" in url:
+                    poll_count["calls"] += 1
+                    if poll_count["calls"] < 3:
+                        # Polls 1 and 2: Activating / mixed state
+                        return {
+                            "ok": True,
+                            "status": "IDLE",
+                            "action_server_ready": False,
+                            "navigation": {
+                                "ready": False,
+                                "state": "ACTIVATING",
+                                "details": "Bringing up navigation stack...",
+                                "nodes": {
+                                    "controller_server": "active",
+                                    "planner_server": "inactive",
+                                    "bt_navigator": "inactive",
+                                    "collision_monitor": "active"
+                                }
+                            }
+                        }
+                    else:
+                        # Poll 3+: Delayed activation succeeds
+                        return {
+                            "ok": True,
+                            "status": "IDLE",
+                            "action_server_ready": True,
+                            "navigation": {
+                                "ready": True,
+                                "state": "ACTIVE",
+                                "details": "All required navigation and collision-protection nodes active",
+                                "nodes": {
+                                    "controller_server": "active",
+                                    "planner_server": "active",
+                                    "bt_navigator": "active",
+                                    "collision_monitor": "active"
+                                }
+                            }
+                        }
+                return {"ok": True}
+        return MockResp()
+
+    mission._http_get = mock_get
+
+    t0 = time.monotonic()
+    wait_ready, wait_msg, wait_states = mission.wait_for_nav2_readiness(timeout_s=3.0)
+    t_elapsed = time.monotonic() - t0
+
+    assert wait_ready is True, f"Delayed activation must pass readiness gate: {wait_msg}"
+    assert poll_count["calls"] >= 3
+    assert t_elapsed < 1.5, "Must succeed reactively as soon as active without waiting for full timeout"
+    assert all(wait_states[n] == "active" for n in ["controller_server", "planner_server", "bt_navigator", "collision_monitor"])
+    assert "/navigate_to_pose ready to accept goals" in wait_msg
+
+
+def test_nav2_readiness_gate_fails_before_arming_when_bt_navigator_inactive():
+    """
+    Regression test: Action server endpoint exists on ROS 2 graph and controller/planner
+    are active, BUT bt_navigator remains inactive.
+    The runner must NOT arm merely because the action server endpoint exists.
+    It must fail closed before arming, and output the exact node states.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    def mock_get(url, *args, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/navigation/status" in url:
+                    return {
+                        "ok": True,
+                        "status": "IDLE",
+                        "action_server_ready": True,  # Endpoint exists!
+                        "navigation": {
+                            "ready": False,
+                            "state": "MIXED",
+                            "details": "bt_navigator lifecycle failed to activate",
+                            "nodes": {
+                                "controller_server": "active",
+                                "planner_server": "active",
+                                "bt_navigator": "inactive",
+                                "collision_monitor": "active"
+                            }
+                        }
+                    }
+                elif "/api/drive/status" in url:
+                    return {
+                        "ok": True,
+                        "status": {
+                            "armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0,
+                            "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "NONE"
+                        }
+                    }
+                return {"ok": True}
+        return MockResp()
+
+    armed_called = {"called": False}
+    def mock_post(url, *args, **kwargs):
+        if "/api/drive/arm" in url:
+            armed_called["called"] = True
+        class MockResp:
+            status_code = 200
+            def json(self):
+                return {"ok": True}
+        return MockResp()
+
+    mission._http_get = mock_get
+    mission._http_post = mock_post
+
+    # Verify readiness gate fails
+    wait_ready, wait_msg, wait_states = mission.wait_for_nav2_readiness(timeout_s=0.25)
+    assert wait_ready is False, "Must not arm merely because action server endpoint exists"
+    assert wait_states["bt_navigator"] == "inactive"
+    assert wait_states["controller_server"] == "active"
+    assert wait_states["planner_server"] == "active"
+    assert "bt_navigator=inactive" in wait_msg
+    assert "Exact node states: [controller_server=active, planner_server=active, bt_navigator=inactive, collision_monitor=active]" in wait_msg
+
+    # Verify arming was never invoked
+    assert armed_called["called"] is False, "Drivetrain must never be armed when bt_navigator is inactive"

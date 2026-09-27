@@ -164,12 +164,12 @@ def run_cli():
     ok_amcl, amcl_err, live_amcl = mission.fetch_live_amcl_pose()
 
     if not ok_amcl or live_amcl is None:
-        if not args.test_safety:
+        if not args.test_safety and not args.dry_run:
             print(f"\n[PREFLIGHT FAILED CLOSED] Cannot verify live AMCL starting pose: {amcl_err}")
             print("Refusing to arm drivetrain. Never substituting HOME pose.\n")
             sys.exit(2)
         else:
-            # Fallback for synthetic safety test mode only
+            # Fallback for synthetic safety test mode and dry-run simulation
             live_amcl = dict(mission.home_pose)
             live_amcl["localized"] = True
             live_amcl["state"] = "LOCALIZED"
@@ -184,6 +184,19 @@ def run_cli():
     if not gate_ok and not args.test_safety and not args.dry_run:
         print(f"[PRE-ARM GATE REFUSAL] Refusing to arm drivetrain: {gate_msg}")
         sys.exit(2)
+
+    # Evaluate Bounded Nav2 Readiness Gate
+    print("\nEvaluating Nav2 Pre-Arm Readiness Gate...")
+    nav_timeout = 2.0 if (args.test_safety or args.dry_run) else NAV2_READINESS_TIMEOUT_S
+    nav_ready, nav_msg, nav_node_states = mission.wait_for_nav2_readiness(timeout_s=nav_timeout)
+    if not nav_ready:
+        states_summary = ", ".join(f"{k}={v}" for k, v in nav_node_states.items()) if nav_node_states else "no response"
+        print(f"[PRE-ARM GATE REFUSAL] Refusing to arm drivetrain: {nav_msg}")
+        print(f"Exact Nav2 node states: [{states_summary}]")
+        if not args.test_safety and not args.dry_run:
+            sys.exit(2)
+    else:
+        print(f"[PRE-ARM GATE PASSED] {nav_msg}")
 
     # Safety Test Mode
     if args.test_safety:
