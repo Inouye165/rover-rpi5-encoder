@@ -66,7 +66,7 @@ Planned Mission Legs (Production Nav2 & Approach Distinctions):
 
 def print_grade_report(grade: Dict[str, Any], report_path: str):
     crit = grade["criteria"]
-    perf = grade["performance_metrics"]
+    perf = grade.get("performance_metrics") or grade.get("metrics") or {}
     status = grade["overall_status"]
     
     print("\n" + "="*80)
@@ -76,30 +76,56 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     print("\nCriteria Evaluation:")
     
     pos_res = crit["final_home_position_error"]
-    print(f"  • Final HOME Position Error: {pos_res['measured_cm']:.2f} cm (Threshold <= {pos_res['threshold_m']*100:.1f} cm) -> {'PASS' if pos_res['passed'] else 'FAIL'}")
+    pos_meas = pos_res.get('measured_cm')
+    pos_meas_str = f"{pos_meas:.2f} cm" if pos_meas is not None else "N/A"
+    print(f"  • Final HOME Position Error: {pos_meas_str} (Threshold <= {pos_res['threshold_m']*100:.1f} cm) -> {'PASS' if pos_res['passed'] else 'FAIL'}")
     
     yaw_res = crit["final_home_yaw_error"]
-    print(f"  • Final HOME Yaw Error:      {yaw_res['measured_deg']:.2f}° (Threshold <= {yaw_res['threshold_deg']:.1f}°) -> {'PASS' if yaw_res['passed'] else 'FAIL'}")
+    yaw_meas = yaw_res.get('measured_deg')
+    yaw_meas_str = f"{yaw_meas:.2f}°" if yaw_meas is not None else "N/A"
+    print(f"  • Final HOME Yaw Error:      {yaw_meas_str} (Threshold <= {yaw_res['threshold_deg']:.1f}°) -> {'PASS' if yaw_res['passed'] else 'FAIL'}")
     
     reset_res = crit["no_reset_or_discontinuity"]
-    print(f"  • Hardware Resets / Faults:  {reset_res['resets_detected']} resets, {reset_res['safety_interventions']} interventions -> {'PASS' if reset_res['passed'] else 'FAIL'}")
+    print(f"  • Hardware Resets / Faults:  {reset_res.get('resets_detected', 0)} resets, {reset_res.get('safety_interventions', 0)} interventions -> {'PASS' if reset_res['passed'] else 'FAIL'}")
     
     rev_res = crit["corrective_reversals"]
-    print(f"  • Corrective Reversals:      {rev_res['count']} (linear: {rev_res.get('linear_reversals', 0)}, angular settling: {rev_res.get('angular_settling_reversals', 0)}, settle time: {rev_res.get('settling_time_after_crossing_s', 0.0):.2f}s | Max allowed: {rev_res['max_allowed']}) -> {'PASS' if rev_res['passed'] else 'FAIL'}")
+    settling_s = rev_res.get('settling_time_after_crossing_s')
+    settling_str = f"{settling_s:.2f}s" if settling_s is not None else "N/A"
+    print(f"  • Corrective Reversals:      {rev_res['count']} (linear: {rev_res.get('linear_reversals', 0)}, angular settling: {rev_res.get('angular_settling_reversals', 0)}, settle time: {settling_str} | Max allowed: {rev_res['max_allowed']}) -> {'PASS' if rev_res['passed'] else 'FAIL'}")
     
     crawl_res = crit["low_speed_crawling"]
-    print(f"  • Continuous Crawling (<5cm/s): {crawl_res['max_continuous_s']:.2f}s (Threshold <= {crawl_res['max_allowed_s']:.1f}s) -> {'PASS' if crawl_res['passed'] else 'FAIL'}")
+    crawl_s = crawl_res.get('max_continuous_s')
+    crawl_str = f"{crawl_s:.2f}s" if crawl_s is not None else "N/A"
+    print(f"  • Continuous Crawling (<5cm/s): {crawl_str} (Threshold <= {crawl_res['max_allowed_s']:.1f}s) -> {'PASS' if crawl_res['passed'] else 'FAIL'}")
     
     rate_res = crit["recorder_sample_rate"]
-    print(f"  • Telemetry Sample Rate:     Active motion: {rate_res.get('active_motion_rate_hz', rate_res['achieved_rate_hz']):.1f} Hz across {rate_res.get('active_span_s', 0.0):.2f}s | Whole-run coverage: {rate_res.get('whole_run_coverage_hz', 0.0):.2f} Hz across {rate_res.get('total_duration_s', 0.0):.2f}s (Threshold >= {rate_res['threshold_hz']:.1f} Hz) -> {'PASS' if rate_res['passed'] else 'FAIL'}")
+    active_rate = rate_res.get('active_motion_rate_hz', rate_res.get('achieved_rate_hz'))
+    active_span = rate_res.get('active_span_s')
+    whole_rate = rate_res.get('whole_run_coverage_hz')
+    total_dur = rate_res.get('total_duration_s')
+    active_rate_str = f"{active_rate:.1f} Hz" if active_rate is not None else "N/A"
+    active_span_str = f"{active_span:.2f}s" if active_span is not None else "N/A"
+    whole_rate_str = f"{whole_rate:.2f} Hz" if whole_rate is not None else "N/A"
+    total_dur_str = f"{total_dur:.2f}s" if total_dur is not None else "N/A"
+    print(f"  • Telemetry Sample Rate:     Active motion: {active_rate_str} across {active_span_str} | Whole-run coverage: {whole_rate_str} across {total_dur_str} (Threshold >= {rate_res['threshold_hz']:.1f} Hz) -> {'PASS' if rate_res['passed'] else 'FAIL'}")
 
     safe_res = crit["final_safe_state"]
-    print(f"  • Safe Disarmed State:       armed={safe_res['armed']}, mode={safe_res['mode']} -> {'PASS' if safe_res['passed'] else 'FAIL'}")
+    print(f"  • Safe Disarmed State:       armed={safe_res.get('armed')}, mode={safe_res.get('mode')} -> {'PASS' if safe_res['passed'] else 'FAIL'}")
     
     print("\nMission Metrics:")
-    print(f"  • Outbound Distance:         {perf['outbound_distance_m']:.4f} m (Error: {perf['outbound_distance_error_m']*100:.2f} cm)")
-    print(f"  • 180° Rotation Error:       {perf['rotation_180_error_deg']:.2f}°")
-    print(f"  • Total Mission Duration:    {perf['total_mission_time_s']:.2f} s")
+    outbound_dist = perf.get('outbound_distance_m')
+    outbound_err = perf.get('outbound_distance_error_m')
+    rot_err = perf.get('rotation_180_error_deg')
+    total_time = perf.get('total_mission_time_s')
+
+    outbound_str = f"{outbound_dist:.4f} m" if outbound_dist is not None else "N/A"
+    outbound_err_str = f"(Error: {outbound_err*100:.2f} cm)" if outbound_err is not None else "(Error: N/A)"
+    rot_str = f"{rot_err:.2f}°" if rot_err is not None else "N/A"
+    time_str = f"{total_time:.2f} s" if total_time is not None else "N/A"
+
+    print(f"  • Outbound Distance:         {outbound_str} {outbound_err_str}")
+    print(f"  • 180° Rotation Error:       {rot_str}")
+    print(f"  • Total Mission Duration:    {time_str}")
     print("="*80 + "\n")
 
 def run_cli():

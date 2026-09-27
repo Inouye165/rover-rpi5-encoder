@@ -707,9 +707,6 @@ class RoverEncoderOdometry(Node):
                     self._nav_lifecycle_status["details"] = f"Activating navigation lifecycle nodes (attempt {attempt_num})..."
 
                 if self.nav_manage_client.service_is_ready():
-                    req = ManageLifecycleNodes.Request()
-                    req.command = 0  # 0 = START / BRINGUP
-                    future = self.nav_manage_client.call_async(req)
                     def on_manage_done(f):
                         try:
                             res = f.result()
@@ -719,7 +716,25 @@ class RoverEncoderOdometry(Node):
                                 self.get_logger().warn(f"[Lifecycle Manager] Navigation bringup reported failure: {res}")
                         except Exception as err:
                             self.get_logger().error(f"[Lifecycle Manager] Error calling manage_nodes: {err}")
-                    future.add_done_callback(on_manage_done)
+
+                    any_active = any(s == "active" for s in node_states.values())
+                    if any_active and inactive_nodes:
+                        # Reset mixed/partially active lifecycle state to unconfigured before START
+                        reset_req = ManageLifecycleNodes.Request()
+                        reset_req.command = 3  # RESET
+                        self.get_logger().info("[Lifecycle Manager] Mixed lifecycle states detected; resetting to unconfigured before START...")
+                        future_reset = self.nav_manage_client.call_async(reset_req)
+                        def on_reset_done(f_reset):
+                            req = ManageLifecycleNodes.Request()
+                            req.command = 0  # START
+                            future_start = self.nav_manage_client.call_async(req)
+                            future_start.add_done_callback(on_manage_done)
+                        future_reset.add_done_callback(on_reset_done)
+                    else:
+                        req = ManageLifecycleNodes.Request()
+                        req.command = 0  # 0 = START / BRINGUP
+                        future = self.nav_manage_client.call_async(req)
+                        future.add_done_callback(on_manage_done)
                 else:
                     self.get_logger().warn("[Lifecycle Manager] /lifecycle_manager_navigation/manage_nodes service not ready.")
 

@@ -2217,3 +2217,99 @@ def test_diagnostic_record_home_tolerance_and_open_discrepancy():
     from tools.gold_standard_home_test.mission import GoldStandardMission
     mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=True)
     assert any("4.96 cm" in disc for disc in mission.open_discrepancies)
+
+
+def test_nav2_rejection_root_cause_and_lifecycle_recovery():
+    """
+    Prove the root cause of Leg 1 goal rejection in run 20260927_064443:
+    1. bt_navigator was inactive because lifecycle_manager_navigation failed to bring up planner_server at boot.
+    2. Repeated START bringup failed with 'Unable to start transition 1 from current state active'
+       because controller_server was already in active state.
+    3. Verify that navigation.launch.py defaults autostart_navigation to false to prevent premature startup.
+    4. Verify that mixed lifecycle states (active + inactive) trigger a RESET before START to recover cleanly.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    nav_launch_file = os.path.join(repo_root, "ros2", "ros2_ws", "src", "rover_bringup", "launch", "navigation.launch.py")
+    with open(nav_launch_file, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    assert "default_value='false'" in src and "autostart_navigation" in src, (
+        "navigation.launch.py must default autostart_navigation to false to wait for localization"
+    )
+
+    # Verify that rover_encoder_odometry detects mixed lifecycle states and sends RESET (command 3)
+    odom_file = os.path.join(repo_root, "ros2", "ros2_ws", "src", "rover_bringup", "rover_bringup", "rover_encoder_odometry.py")
+    with open(odom_file, "r", encoding="utf-8") as f:
+        odom_src = f.read()
+
+    assert "reset_req.command = 3" in odom_src, "rover_encoder_odometry must call RESET (command 3) on mixed lifecycle states"
+    assert "Mixed lifecycle states detected" in odom_src
+
+
+def test_aborted_before_motion_report_formatting_with_none_metrics(capsys):
+    """
+    Regression test: Fix CLI report crash when settling_time_after_crossing_s is None.
+    It must print N/A and produce a complete FAIL report without a traceback when a mission aborts before rotation.
+    """
+    import io
+    from contextlib import redirect_stdout
+    from tools.gold_standard_home_test.grader import MissionGrader
+    from tools.gold_standard_home_test.cli import print_grade_report
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    aborted_report_path = os.path.join(repo_root, "reports", "gold_standard_home_test", "gold_standard_run_20260927_064443.json")
+
+    # 1. Test against actual aborted run 20260927_064443
+    if os.path.exists(aborted_report_path):
+        with open(aborted_report_path, "r", encoding="utf-8") as f:
+            run_data = json.load(f)
+        grade = MissionGrader.grade_run(run_data)
+        assert grade["overall_status"] == "FAIL"
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            print_grade_report(grade, aborted_report_path)
+        out = buf.getvalue()
+
+        assert "GOLD STANDARD HOME ACCEPTANCE TEST REPORT: FAIL" in out
+        assert "settle time: N/A" in out, "Must format settling time as N/A when None"
+        assert "Final HOME Position Error: 5.78 cm" in out
+
+    # 2. Test synthetic edge case where all optional metrics are None
+    synthetic_grade = {
+        "overall_status": "FAIL",
+        "criteria": {
+            "final_home_position_error": {"measured_m": None, "measured_cm": None, "threshold_m": 0.04, "passed": False},
+            "final_home_yaw_error": {"measured_deg": None, "threshold_deg": 3.0, "passed": False},
+            "no_reset_or_discontinuity": {"resets_detected": 0, "safety_interventions": 1, "passed": False},
+            "corrective_reversals": {
+                "count": 0, "linear_reversals": 0, "angular_settling_reversals": 0,
+                "settling_time_after_crossing_s": None, "max_allowed": 1, "passed": True
+            },
+            "low_speed_crawling": {"max_continuous_s": None, "max_allowed_s": 2.0, "passed": True},
+            "recorder_sample_rate": {
+                "achieved_rate_hz": None, "active_motion_rate_hz": None, "whole_run_coverage_hz": None,
+                "active_span_s": None, "total_duration_s": None, "threshold_hz": 20.0, "passed": False
+            },
+            "final_safe_state": {"armed": False, "mode": 0, "passed": True}
+        },
+        "performance_metrics": {
+            "outbound_distance_m": None,
+            "outbound_distance_error_m": None,
+            "rotation_180_error_deg": None,
+            "total_mission_time_s": None
+        }
+    }
+
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        print_grade_report(synthetic_grade, "synthetic_abort.json")
+    out2 = buf2.getvalue()
+
+    assert "GOLD STANDARD HOME ACCEPTANCE TEST REPORT: FAIL" in out2
+    assert "settle time: N/A" in out2
+    assert "Final HOME Position Error: N/A" in out2
+    assert "Final HOME Yaw Error:      N/A" in out2
+    assert "Outbound Distance:         N/A (Error: N/A)" in out2
+    assert "180° Rotation Error:       N/A" in out2
+    assert "Total Mission Duration:    N/A" in out2
