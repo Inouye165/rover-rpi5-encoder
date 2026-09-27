@@ -839,8 +839,11 @@ class GoldStandardMission:
         drive = self.latest_telemetry.get("drive") or {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0, "bootCount": 1}
         cm = self.latest_telemetry.get("cm") or {"minFwdMm": 9999, "minRevMm": 9999, "clearanceMask": 3}
 
-        pos_err_m = math.hypot(amcl.get("x", 0.0) - self.home_pose["x"], amcl.get("y", 0.0) - self.home_pose["y"])
-        yaw_err_deg = wrap_angle_deg(amcl.get("yaw_deg", 0.0) - self.home_pose["yaw_deg"])
+        ax = amcl.get("x") if amcl.get("x") is not None else self.home_pose["x"]
+        ay = amcl.get("y") if amcl.get("y") is not None else self.home_pose["y"]
+        ayaw = amcl.get("yaw_deg") if amcl.get("yaw_deg") is not None else self.home_pose["yaw_deg"]
+        pos_err_m = math.hypot(ax - self.home_pose["x"], ay - self.home_pose["y"])
+        yaw_err_deg = wrap_angle_deg(ayaw - self.home_pose["yaw_deg"])
 
         # Determine command stream attribution (do not duplicate commands into fake stages)
         if stage in ("FINAL_DISARMED", "BASELINE"):
