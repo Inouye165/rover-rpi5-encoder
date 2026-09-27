@@ -661,11 +661,16 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            bt_active = False
-            if nav_status and isinstance(nav_status.get('nodes'), dict):
-                bt_active = (nav_status['nodes'].get('bt_navigator') == 'active')
+            nodes_dict = nav_status.get('nodes', {}) if (nav_status and isinstance(nav_status.get('nodes'), dict)) else {}
+            req_nodes = ['controller_server', 'planner_server', 'bt_navigator', 'collision_monitor']
+            all_active = all(nodes_dict.get(n) == 'active' for n in req_nodes) and len(nodes_dict) >= len(req_nodes)
+            bt_active = (nodes_dict.get('bt_navigator') == 'active')
 
-            all_active = bool(nav_status and nav_status.get('ready'))
+            if all_active and nav_status:
+                nav_status['ready'] = True
+                nav_status['state'] = 'ACTIVE'
+                nav_status['details'] = 'All required navigation and collision-protection nodes active'
+
             ready_to_accept_goals = bool(action_server_ready and bt_active and all_active)
 
             data = {

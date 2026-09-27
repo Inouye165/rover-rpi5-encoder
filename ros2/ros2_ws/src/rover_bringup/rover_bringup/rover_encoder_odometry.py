@@ -632,11 +632,25 @@ class RoverEncoderOdometry(Node):
 
     def get_navigation_status(self):
         with self._nav_lock:
+            nodes_copy = dict(self._nav_lifecycle_status["nodes"])
+            inactive_nodes = [n for n in REQUIRED_NAV_NODES if nodes_copy.get(n) != 'active']
+            all_active = (len(inactive_nodes) == 0) and (len(nodes_copy) >= len(REQUIRED_NAV_NODES))
+            if all_active:
+                ready = True
+                state = "ACTIVE"
+                details = "All required navigation and collision-protection nodes active"
+            else:
+                ready = False
+                state = str(self._nav_lifecycle_status["state"])
+                if state == "ACTIVE":
+                    state = "MIXED"
+                details = str(self._nav_lifecycle_status["details"])
+
             return {
-                "ready": bool(self._nav_lifecycle_status["ready"]),
-                "state": str(self._nav_lifecycle_status["state"]),
-                "details": str(self._nav_lifecycle_status["details"]),
-                "nodes": dict(self._nav_lifecycle_status["nodes"]),
+                "ready": ready,
+                "state": state,
+                "details": details,
+                "nodes": nodes_copy,
                 "activation_attempts": int(self._nav_activation_attempts)
             }
 

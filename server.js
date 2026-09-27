@@ -282,6 +282,13 @@ let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
 
+const REQUIRED_NAV_LIFECYCLE_NODES = [
+  'controller_server',
+  'planner_server',
+  'bt_navigator',
+  'collision_monitor'
+];
+
 let navigationState = {
   ready: false,
   state: 'UNCONFIGURED',
@@ -292,10 +299,23 @@ let lastDispatchedNav = null;
 
 function updateNavigationState(nav) {
   if (!nav || typeof nav !== 'object') return;
-  navigationState.ready = Boolean(nav.ready);
-  navigationState.state = nav.state || 'UNKNOWN';
-  navigationState.details = nav.details || '';
-  navigationState.nodes = nav.nodes || {};
+  const nodes = (nav.nodes && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : (navigationState.nodes || {});
+  
+  // Consistency check: response fields cannot report ready=false/inactive while simultaneously listing all required nodes active and action-ready
+  const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+  const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+  const actionReady = (nav.action_server_ready !== false && nav.actionServerReady !== false);
+
+  if (allNodesActive && actionReady) {
+    navigationState.ready = true;
+    navigationState.state = 'ACTIVE';
+    navigationState.details = 'All required navigation and collision-protection nodes active';
+  } else {
+    navigationState.ready = false;
+    navigationState.state = (nav.state && nav.state !== 'ACTIVE') ? nav.state : (inactiveNodes.length > 0 ? 'INACTIVE' : 'UNKNOWN');
+    navigationState.details = (inactiveNodes.length > 0 ? `Required navigation lifecycle nodes inactive: ${inactiveNodes.join(', ')}` : (nav.details || 'Navigation not ready'));
+  }
+  navigationState.nodes = nodes;
 }
 
 let localizationState = {
@@ -4749,6 +4769,86 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   };
 }
 
+async function refreshNavigationReadiness(timeoutMs = 1500) {
+  try {
+    const bridgeUrl = (typeof ROVER_NAV_BRIDGE_URL !== 'undefined' ? ROVER_NAV_BRIDGE_URL : (process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005'));
+    const res = await fetch(`${bridgeUrl}/api/nav/status`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        ready: false,
+        error: `rover_nav_bridge returned HTTP ${res.status}`,
+        navigation: navigationState
+      };
+    }
+    const parsed = await res.json();
+    const nav = parsed.navigation || {};
+    const nodes = (nav && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : {};
+
+    // 1. required lifecycle nodes are active
+    const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+    const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+
+    // 2. bt_navigator is active
+    const btActive = (nodes['bt_navigator'] === 'active');
+
+    // 3. /navigate_to_pose is ready to accept goals
+    const actionReady = Boolean(parsed.action_server_ready);
+    const readyToGoals = Boolean(parsed.ready_to_accept_goals || (actionReady && btActive && allNodesActive));
+
+    const isReady = Boolean(allNodesActive && btActive && actionReady && readyToGoals);
+
+    // Atomically update cached navigationState when recovery succeeds
+    if (isReady) {
+      updateNavigationState({
+        ready: true,
+        state: 'ACTIVE',
+        details: 'All required navigation and collision-protection nodes active',
+        nodes: nodes,
+        action_server_ready: true
+      });
+    } else {
+      let detailMsg = '';
+      if (inactiveNodes.length > 0) {
+        detailMsg = `Required navigation lifecycle nodes inactive: ${inactiveNodes.map(n => `${n}=${nodes[n] || 'unknown'}`).join(', ')}`;
+      } else if (!actionReady) {
+        detailMsg = 'Action server endpoint /navigate_to_pose not ready';
+      } else {
+        detailMsg = nav.details || 'Navigation not ready to accept goals';
+      }
+
+      updateNavigationState({
+        ready: false,
+        state: (nav.state && nav.state !== 'ACTIVE') ? nav.state : 'INACTIVE',
+        details: detailMsg,
+        nodes: nodes,
+        action_server_ready: actionReady
+      });
+    }
+
+    return {
+      ok: isReady,
+      ready: isReady,
+      action_server_ready: actionReady,
+      ready_to_accept_goals: readyToGoals,
+      nodes: nodes,
+      inactive_nodes: inactiveNodes,
+      details: navigationState.details,
+      navigation: navigationState
+    };
+  } catch (err) {
+    const errorMsg = `Failed to refresh navigation readiness: ${err.message}`;
+    return {
+      ok: false,
+      ready: false,
+      error: errorMsg,
+      navigation: navigationState
+    };
+  }
+}
+
 app.post('/api/navigation/init_home', async (req, res) => {
   try {
     const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/init_home', {
@@ -4883,12 +4983,16 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     lastDispatchedNav = dispatchMeta;
   }
 
-  // Safety check 2.5: Navigation and collision-protection lifecycle gate before arming
-  if (navigationState && navigationState.ready === false) {
-    const detail = navigationState.details || 'Required navigation lifecycle nodes are not all active';
+  // Step 2.5: Synchronous, Authoritative Nav2 Readiness Gate Refresh BEFORE arming
+  const navReadiness = await refreshNavigationReadiness(1500);
+  if (!navReadiness.ok || !navReadiness.ready) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Navigation readiness check failed while armed: ${navReadiness.error || navReadiness.details}`);
+    }
     return res.status(409).json({
       ok: false,
-      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${detail}). Drivetrain remains safely disarmed.`,
+      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${navReadiness.error || navReadiness.details || 'Lifecycle inactive'}). Drivetrain remains safely disarmed.`,
       navigation: navigationState
     });
   }
@@ -6773,6 +6877,8 @@ module.exports = {
   updateLocalizationState,
   navigationState,
   updateNavigationState,
+  refreshNavigationReadiness,
+  REQUIRED_NAV_LIFECYCLE_NODES,
   abortAutonomyDueToLocalizationLost,
   setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
 };
