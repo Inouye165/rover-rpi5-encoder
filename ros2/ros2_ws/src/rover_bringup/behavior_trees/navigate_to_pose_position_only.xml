@@ -1,6 +1,6 @@
 <!--
   Behavior Tree for Yahboom Rover Position-Only Navigation:
-  - Defaults explicitly to Smac2D (nav2_smac_planner::SmacPlanner2D).
+  - Defaults explicitly to Navfn (nav2_navfn_planner::NavfnPlanner) for exact endpoint fidelity.
   - Uses position_goal_checker to achieve precise XY position arrival without requiring terminal in-place yaw rotation.
   - Preserves obstacle avoidance, clearance checking, and genuine Nav2 success reporting.
   - Fails cleanly on path/controller abort to allow test harness to safe and inspect.
@@ -10,7 +10,7 @@
     <RecoveryNode number_of_retries="2" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
-        <PlannerSelector selected_planner="{selected_planner}" default_planner="Smac2D" topic_name="planner_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="Navfn" topic_name="planner_selector"/>
         <RateController hz="1.0">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>

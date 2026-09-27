@@ -93,3 +93,26 @@ def test_amcl_startup_pose_safety():
     amcl = cfg['amcl']['ros__parameters']
     assert amcl.get('set_initial_pose') is False, "AMCL set_initial_pose must be false"
     assert 'initial_pose' not in amcl, "AMCL must not have hardcoded initial_pose"
+
+def test_planner_endpoint_fidelity_config():
+    """Verify that planner server and behavior trees configure Navfn with zero tolerance for exact endpoint fidelity."""
+    import xml.etree.ElementTree as ET
+    path = find_nav2_params()
+    with open(path, 'r', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+
+    ps = cfg['planner_server']['ros__parameters']
+    assert 'Navfn' in ps['planner_plugins'], "Navfn must be in planner_plugins"
+    assert ps['planner_plugins'][0] == 'Navfn', "Navfn must be the primary planner plugin"
+    assert ps['Navfn']['tolerance'] <= 0.01, f"Navfn tolerance must be <= 0.01m for exact arrival: {ps['Navfn']['tolerance']}"
+
+    # Verify behavior trees
+    bt_dir = os.path.join(os.path.dirname(path), '..', 'behavior_trees')
+    for bt_name in ['navigate_to_pose_position_only.xml', 'navigate_to_pose_no_spin_recovery.xml']:
+        bt_path = os.path.join(bt_dir, bt_name)
+        tree = ET.parse(bt_path)
+        root = tree.getroot()
+        selectors = root.findall('.//PlannerSelector')
+        assert len(selectors) > 0, f"No PlannerSelector found in {bt_name}"
+        for s in selectors:
+            assert s.attrib.get('default_planner') == 'Navfn',                 f"{bt_name} PlannerSelector must default to Navfn, got {s.attrib.get('default_planner')}"

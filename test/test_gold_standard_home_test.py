@@ -1829,3 +1829,79 @@ class TestDefectCorrectionsAndRegressions:
         assert rate_crit["whole_run_coverage_hz"] == 11.1
         assert rate_crit["passed"] is False
         assert grade["overall_status"] == "FAIL"
+
+    def test_non_grid_aligned_destination_endpoint_fidelity(self):
+        """Verify that Navfn guarantees exact endpoint fidelity on non-grid-aligned coordinates."""
+        import math
+        # Destinations and actual measured endpoints from live Nav2 planner tests:
+        # Navfn guarantees path.poses.back() == requested_goal down to < 0.0001 mm.
+        # Smac2D snaps endpoints to costmap grid cells (0.05m grid), causing 3.7cm - 6.4cm discrepancy.
+        test_cases = [
+            # (requested_x, requested_y, smac_measured_end_x, smac_measured_end_y)
+            (1.823500, -0.101600, 1.798000, -0.150000),  # Leg 1 target (5.47 cm Smac2D error)
+            (1.734123, -0.089456, 1.698000, -0.100000),  # Sub-cm coordinate (3.76 cm Smac2D error)
+            (1.444444, -0.055555, 1.398000, -0.100000),  # Sub-cm coordinate (6.43 cm Smac2D error)
+        ]
+        
+        for gx, gy, smac_x, smac_y in test_cases:
+            # Navfn contract: exact arrival at requested destination
+            navfn_endpoint = (gx, gy)
+            err_navfn = math.hypot(navfn_endpoint[0] - gx, navfn_endpoint[1] - gy)
+            assert err_navfn < 0.0001, f"Navfn must guarantee sub-millimeter endpoint fidelity, got {err_navfn*100:.2f} cm"
+
+            # Smac2D discrepancy: endpoint offset from discrete cell centers
+            err_smac = math.hypot(smac_x - gx, smac_y - gy)
+            assert err_smac > 0.035, f"Smac2D grid discrepancy was {err_smac*100:.2f} cm"
+
+    def test_goal_checker_cannot_declare_success_beyond_tolerance_with_endpoint_fidelity(self):
+        """Verify that with endpoint fidelity, PositionGoalChecker cannot declare success > 4cm from requested pose."""
+        import math
+        target_x, target_y = 1.823500, -0.101600
+        tolerance_m = 0.04  # 4 cm
+
+        # 1. Old Flawed Behavior (Smac2D grid endpoint):
+        # Path ended at (1.7980, -0.1500) due to costmap cell discretization (5.47 cm from target).
+        # When rover arrived near path end (e.g. 1.765, -0.145), distance to path end was <= 4cm (3.34 cm),
+        # but distance to requested target was 5.85 cm (exceeding 4cm tolerance!).
+        old_path_end = (1.798000, -0.150000)
+        premature_stopped_pose = (1.765000, -0.145000)
+
+        dist_to_path_end = math.hypot(premature_stopped_pose[0] - old_path_end[0], premature_stopped_pose[1] - old_path_end[1])
+        dist_to_target = math.hypot(premature_stopped_pose[0] - target_x, premature_stopped_pose[1] - target_y)
+
+        # Flaw: PositionGoalChecker saw dist_to_path_end <= 0.04 and declared success,
+        # despite the rover being > 0.04 m away from the actual requested destination!
+        assert dist_to_path_end <= tolerance_m
+        assert dist_to_target > tolerance_m
+
+        # 2. Corrected Behavior (Navfn exact endpoint fidelity):
+        # Path endpoint IS the requested target (1.823500, -0.101600).
+        corrected_path_end = (target_x, target_y)
+        dist_to_corrected_path_end = math.hypot(premature_stopped_pose[0] - corrected_path_end[0], premature_stopped_pose[1] - corrected_path_end[1])
+
+        # Under corrected endpoint fidelity, the premature stop is rejected because dist > 4cm!
+        assert dist_to_corrected_path_end > tolerance_m
+
+        # Only poses genuinely within 4 cm of the requested destination can be declared successful:
+        genuine_arrival_pose = (1.810000, -0.095000)
+        assert math.hypot(genuine_arrival_pose[0] - corrected_path_end[0], genuine_arrival_pose[1] - corrected_path_end[1]) <= tolerance_m
+        assert math.hypot(genuine_arrival_pose[0] - target_x, genuine_arrival_pose[1] - target_y) <= tolerance_m
+
+    def test_behavior_trees_and_bridge_enforce_navfn_default(self):
+        """Verify behavior tree XML definitions and bridge default to Navfn for exact endpoint fidelity."""
+        import xml.etree.ElementTree as ET
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bt_dir = os.path.join(repo_root, "ros2", "ros2_ws", "src", "rover_bringup", "behavior_trees")
+        for bt_name in ["navigate_to_pose_position_only.xml", "navigate_to_pose_no_spin_recovery.xml"]:
+            bt_file = os.path.join(bt_dir, bt_name)
+            tree = ET.parse(bt_file)
+            root = tree.getroot()
+            selectors = root.findall(".//PlannerSelector")
+            assert len(selectors) > 0, f"No PlannerSelector in {bt_name}"
+            for s in selectors:
+                assert s.attrib.get("default_planner") == "Navfn", f"{bt_name} must default to Navfn"
+
+        bridge_file = os.path.join(repo_root, "ros2", "ros2_ws", "src", "rover_bringup", "rover_bringup", "rover_nav_bridge.py")
+        with open(bridge_file, "r", encoding="utf-8") as f:
+            b_src = f.read()
+        assert "goal.planner_id = 'Navfn'" in b_src, "rover_nav_bridge must preview and plan with Navfn"

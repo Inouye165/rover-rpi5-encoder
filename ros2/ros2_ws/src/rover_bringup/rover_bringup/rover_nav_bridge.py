@@ -3,7 +3,7 @@
 # rover_nav_bridge.py - Lightweight Nav2 HTTP Navigation Bridge Node
 # Provides clean HTTP endpoints on port 3005 for Cockpit:
 #   - GET  /api/nav/map       -> Static map metadata & occupancy pixels
-#   - POST /api/nav/plan      -> Disarmed Smac2D collision-free path preview
+#   - POST /api/nav/plan      -> Disarmed Navfn collision-free path preview with exact endpoint fidelity
 #   - POST /api/nav/dispatch  -> NavigateToPose action dispatch
 #   - POST /api/nav/cancel    -> Goal cancellation & safe stop
 #   - GET  /api/nav/status    -> Active goal, global path & local DWB trajectory
@@ -339,7 +339,7 @@ class RoverNavBridge(Node):
         goal.goal.pose.position.y = float(target_y)
         goal.goal.pose.orientation.z = math.sin(target_yaw / 2.0)
         goal.goal.pose.orientation.w = math.cos(target_yaw / 2.0)
-        goal.planner_id = 'Smac2D'
+        goal.planner_id = 'Navfn'
 
         t_send_goal_start = time.perf_counter()
         future = self.compute_path_client.send_goal_async(goal)
@@ -348,7 +348,7 @@ class RoverNavBridge(Node):
             time.sleep(0.001)
 
         if not future.done() or not future.result().accepted:
-            return {"ok": False, "error": "Plan goal was rejected or timed out by Smac2D planner"}
+            return {"ok": False, "error": "Plan goal was rejected or timed out by Navfn planner"}
         t_goal_accept_end = time.perf_counter()
 
         handle = future.result()

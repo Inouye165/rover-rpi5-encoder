@@ -151,7 +151,12 @@ planner_server:
   ros__parameters:
     expected_planner_frequency: 1.0
     use_sim_time: false
-    planner_plugins: ["Smac2D", "Navfn"]
+    planner_plugins: ["Navfn", "Smac2D"]
+    Navfn:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.0
+      use_astar: false
+      allow_unknown: true
     Smac2D:
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.5
@@ -167,11 +172,6 @@ planner_server:
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
-    Navfn:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
-      use_astar: false
-      allow_unknown: true
 
 local_costmap:
   local_costmap:
