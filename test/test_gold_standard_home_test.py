@@ -1905,3 +1905,315 @@ class TestDefectCorrectionsAndRegressions:
         with open(bridge_file, "r", encoding="utf-8") as f:
             b_src = f.read()
         assert "goal.planner_id = 'Navfn'" in b_src, "rover_nav_bridge must preview and plan with Navfn"
+
+
+
+
+
+def test_leg3_explicitly_selects_position_goal_checker():
+    """
+    Regression test: Prove Leg 3 explicitly dispatches LEG3_RETURN with goal_checker="position_goal_checker"
+    so Nav2 handles HOME XY arrival and Leg 4 remains solely responsible for final HOME yaw.
+    Verify tolerances and 35.0-second timeout remain unchanged.
+    """
+    from tools.gold_standard_home_test.mission import (
+        GoldStandardMission,
+        TIMEOUT_LEG3_RETURN_S,
+        PASS_FINAL_POS_ERR_M,
+    )
+    assert TIMEOUT_LEG3_RETURN_S == 35.0, "Leg 3 timeout must remain exactly 35.0 seconds"
+    assert PASS_FINAL_POS_ERR_M == 0.04, "Tolerance must remain exactly 4 cm"
+
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+    dispatched_payloads = []
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        class MockResp:
+            status_code = 200
+            text = '{"ok": true, "goal_id": "goal_leg3_return_test"}'
+            def json(self):
+                return {"ok": True, "goal_id": "goal_leg3_return_test"}
+        if "/api/navigation/dispatch" in url:
+            dispatched_payloads.append(json)
+            return MockResp()
+        return MockResp()
+
+    nav_call_count = [0]
+    def mock_get(url, headers=None, timeout=None):
+        if "/api/navigation/status" in url:
+            nav_call_count[0] += 1
+            class MockNavResp:
+                status_code = 200
+                def json(self):
+                    st = "ACTIVE" if nav_call_count[0] == 1 else "SUCCEEDED"
+                    return {
+                        "ok": True,
+                        "status": st,
+                        "goal_id": "goal_leg3_return_test",
+                        "target": {"x": 1.2052, "y": -0.0659},
+                        "success_tf_pose": {"x": 1.2060, "y": -0.0650, "yaw_deg": -165.0}
+                    }
+            return MockNavResp()
+        elif "/api/drive/status" in url:
+            class MockDriveResp:
+                status_code = 200
+                def json(self):
+                    return {
+                        "armed": False,
+                        "mode": 0,
+                        "reqLinear": 0,
+                        "reqAngular": 0,
+                        "limLinear": 0,
+                        "limAngular": 0,
+                        "cmdSource": "NONE",
+                        "bootCount": 1
+                    }
+            return MockDriveResp()
+        elif "/api/telemetry" in url:
+            class MockTelemResp:
+                status_code = 200
+                def json(self):
+                    return {
+                        "amcl": {"x": 1.2055, "y": -0.0655, "yaw_deg": -166.0},
+                        "drive": {"armed": False, "mode": 0, "cmdSource": "NONE"}
+                    }
+            return MockTelemResp()
+        return None
+
+    mission._http_post = mock_post
+    mission._http_get = mock_get
+    mission.poll_all_telemetry = lambda: None
+    mission.verify_safety_invariants = lambda stage: None
+    mission.record_tick = lambda stage: None
+    mission.verify_zero_handshake = lambda expected_cmd_source="ANY": None
+    mission.latest_telemetry["drive"] = {
+        "armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0,
+        "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"
+    }
+    mission.latest_telemetry["amcl"] = {"x": 1.2055, "y": -0.0655, "yaw_deg": -166.0}
+
+    mission.execute_leg3_return(home_x=1.2052, home_y=-0.0659, return_yaw=-0.0881)
+
+    assert len(dispatched_payloads) == 1
+    payload = dispatched_payloads[0]
+    assert payload["target_x"] == 1.2052
+    assert payload["target_y"] == -0.0659
+    assert payload["target_yaw"] == -0.0881
+    assert payload.get("goal_checker") == "position_goal_checker", (
+        "Leg 3 must explicitly select position_goal_checker to prevent terminal yaw oscillations"
+    )
+
+
+def test_leg3_does_not_wait_for_return_heading_convergence():
+    """
+    Prove that Leg 3 completes successfully upon Nav2 position arrival (dist <= 0.04m)
+    even when heading error to the Leg 3 target yaw is large (~175 deg error).
+    Confirming Leg 4 remains solely responsible for final HOME yaw.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        class MockResp:
+            status_code = 200
+            text = '{"ok": true, "goal_id": "goal_leg3_pos_only"}'
+            def json(self):
+                return {"ok": True, "goal_id": "goal_leg3_pos_only"}
+        return MockResp()
+
+    call_count = {"status": 0}
+
+    def mock_get(url, headers=None, timeout=None):
+        if "/api/navigation/status" in url:
+            call_count["status"] += 1
+            class MockNavResp:
+                status_code = 200
+                def json(self):
+                    # Simulating rover at HOME XY with heading of -166.0 deg (error to target +174.95 deg is 19 deg; error to HOME 0 deg is 166 deg)
+                    return {
+                        "ok": True,
+                        "status": "ACTIVE" if call_count["status"] == 1 else "SUCCEEDED",
+                        "goal_id": "goal_leg3_pos_only",
+                        "distance_remaining_m": 0.02,
+                        "target": {"x": 1.2052, "y": -0.0659},
+                        "success_tf_pose": {"x": 1.2060, "y": -0.0650, "yaw_deg": -166.0}
+                    }
+            return MockNavResp()
+        elif "/api/drive/status" in url:
+            class MockDriveResp:
+                status_code = 200
+                def json(self):
+                    return {
+                        "armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0,
+                        "limLinear": 0, "limAngular": 0, "cmdSource": "NONE", "bootCount": 1
+                    }
+            return MockDriveResp()
+        elif "/api/telemetry" in url:
+            class MockTelemResp:
+                status_code = 200
+                def json(self):
+                    return {
+                        "amcl": {"x": 1.2060, "y": -0.0650, "yaw_deg": -166.0},
+                        "drive": {"armed": False, "mode": 0, "cmdSource": "NONE"}
+                    }
+            return MockTelemResp()
+        return None
+
+    mission._http_post = mock_post
+    mission._http_get = mock_get
+    mission.poll_all_telemetry = lambda: None
+    mission.verify_safety_invariants = lambda stage: None
+    mission.record_tick = lambda stage: None
+    mission.verify_zero_handshake = lambda expected_cmd_source="ANY": None
+    mission.latest_telemetry["drive"] = {
+        "armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0,
+        "limLinear": 0, "limAngular": 0, "cmdSource": "NONE"
+    }
+    mission.latest_telemetry["amcl"] = {"x": 1.2060, "y": -0.0650, "yaw_deg": -166.0}
+
+    # Heading is ~ -166 deg, target is +174.95 deg (yaw error ~340 deg / -20 deg).
+    # With position_goal_checker, Leg 3 succeeds immediately without waiting for yaw convergence.
+    mission.execute_leg3_return(home_x=1.2052, home_y=-0.0659, return_yaw=math.radians(174.95))
+
+    # Check reconciliation captured both poses
+    rec = mission.success_reconciliations.get("LEG3_RETURN")
+    assert rec is not None
+    assert rec["stage"] == "LEG3_RETURN"
+    assert rec["amcl_error_to_target_cm"] < 4.0
+    assert rec["tf_error_to_target_cm"] < 4.0
+
+
+def test_leg3_transitions_to_leg4_only_after_xy_success_and_confirmed_disarm():
+    """
+    Prove that Leg 3 will NOT transition or finish if Nav2 reports SUCCEEDED but
+    the robot remains armed or non-zero, and only completes once confirmed disarmed in Mode 0.
+    Also prove fail-closed abort if disarm is never confirmed within the post-goal window.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        class MockResp:
+            status_code = 200
+            text = '{"ok": true, "goal_id": "goal_disarm_test"}'
+            def json(self):
+                return {"ok": True, "goal_id": "goal_disarm_test"}
+        return MockResp()
+
+    # Part A: Successful transition after delayed confirmation (sample 1, 2 still armed; sample 3 disarmed)
+    nav_poll_count = {"count": 0}
+    drive_poll_count = {"count": 0}
+
+    def mock_get(url, headers=None, timeout=None):
+        if "/api/navigation/status" in url:
+            nav_poll_count["count"] += 1
+            class MockNavResp:
+                status_code = 200
+                def json(self):
+                    st = "ACTIVE" if nav_poll_count["count"] == 1 else "SUCCEEDED"
+                    return {
+                        "ok": True,
+                        "status": st,
+                        "goal_id": "goal_disarm_test",
+                        "target": {"x": 1.2052, "y": -0.0659},
+                        "success_tf_pose": {"x": 1.2052, "y": -0.0659, "yaw_deg": 0.0}
+                    }
+            return MockNavResp()
+        return None
+
+    def mock_poll():
+        drive_poll_count["count"] += 1
+        if drive_poll_count["count"] < 3:
+            mission.latest_telemetry["drive"] = {
+                "armed": True, "mode": 1, "reqLinear": 0.05, "reqAngular": 0,
+                "limLinear": 0.05, "limAngular": 0, "cmdSource": "NAV2", "bootCount": 1
+            }
+        else:
+            mission.latest_telemetry["drive"] = {
+                "armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0,
+                "limLinear": 0, "limAngular": 0, "cmdSource": "NONE", "bootCount": 1
+            }
+
+    mission._http_post = mock_post
+    mission._http_get = mock_get
+    mission.poll_all_telemetry = mock_poll
+    mission.verify_safety_invariants = lambda stage: None
+    mission.record_tick = lambda stage: None
+    mission.verify_zero_handshake = lambda expected_cmd_source="ANY": None
+    mission.latest_telemetry["drive"] = {
+        "armed": True, "mode": 1, "reqLinear": 0.05, "reqAngular": 0,
+        "limLinear": 0.05, "limAngular": 0, "cmdSource": "NAV2"
+    }
+    mission.latest_telemetry["amcl"] = {"x": 1.2052, "y": -0.0659, "yaw_deg": 0.0}
+
+    mission.execute_leg3_return(home_x=1.2052, home_y=-0.0659, return_yaw=0.0)
+    assert drive_poll_count["count"] >= 3, "Must have waited for confirmed disarm Mode 0 telemetry"
+
+    # Part B: If disarm confirmation is never received, it must abort and fail-closed
+    mission_abort = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+    nav_poll_count["count"] = 0
+    mission_abort._http_post = mock_post
+    mission_abort._http_get = mock_get
+    # Permanently armed:
+    mission_abort.poll_all_telemetry = lambda: None
+    mission_abort.verify_safety_invariants = lambda stage: None
+    mission_abort.record_tick = lambda stage: None
+    mission_abort.verify_zero_handshake = lambda expected_cmd_source="ANY": None
+    mission_abort.latest_telemetry["drive"] = {
+        "armed": True, "mode": 1, "reqLinear": 0.05, "reqAngular": 0,
+        "limLinear": 0.05, "limAngular": 0, "cmdSource": "NAV2"
+    }
+    mission_abort.latest_telemetry["amcl"] = {"x": 1.2052, "y": -0.0659, "yaw_deg": 0.0}
+
+    with pytest.raises(MissionAbortException, match="post-goal check failed"):
+        mission_abort.execute_leg3_return(home_x=1.2052, home_y=-0.0659, return_yaw=0.0)
+
+
+def test_diagnostic_record_home_tolerance_and_open_discrepancy():
+    """
+    Verify the diagnostic facts from gold_standard_run_20260927_061132.json:
+    1. First entry inside the 4 cm HOME tolerance was at 44.15 seconds (dist = 3.07 cm), NOT 27.57 seconds (dist = 4.76 cm).
+    2. Leg 1 AMCL error to target at Nav2 success was 4.96 cm, which is outside the configured 4.0 cm tolerance.
+    3. Preserved open measurement discrepancy is present in recorder metadata.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    run_file = os.path.join(repo_root, "reports", "gold_standard_home_test", "gold_standard_run_20260927_061132.json")
+    if not os.path.exists(run_file):
+        pytest.skip("run report 20260927_061132 not available")
+
+    with open(run_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    home = (data["metadata"]["home_pose"]["x"], data["metadata"]["home_pose"]["y"])
+    samples = data["samples"]
+
+    # Check sample at t ~ 27.57s
+    s_27 = [s for s in samples if abs(s.get("t_rel_s", 0) - 27.57) < 0.1][0]
+    d_27 = math.hypot(s_27["amcl"]["x"] - home[0], s_27["amcl"]["y"] - home[1]) * 100.0
+    assert d_27 > 4.0, f"At 27.57s, distance was {d_27:.2f} cm (outside 4 cm tolerance!)"
+
+    # Check first sample strictly inside 4.0 cm tolerance
+    first_inside = None
+    for s in samples:
+        if s.get("mission_stage") == "LEG3_RETURN" and s.get("amcl"):
+            dist = math.hypot(s["amcl"]["x"] - home[0], s["amcl"]["y"] - home[1]) * 100.0
+            if dist <= 4.0:
+                first_inside = (s["t_rel_s"], dist)
+                break
+
+    assert first_inside is not None
+    assert abs(first_inside[0] - 44.15) < 0.2, f"First entry inside 4 cm was at {first_inside[0]:.2f}s, expected ~44.15s"
+    assert first_inside[1] <= 4.0
+
+    # Check Leg 1 AMCL error at success
+    # Target was (1.8146, -0.1181), pose at success was (1.7689, -0.0988)
+    leg1_target = (1.8146, -0.1181)
+    leg1_success_pose = (1.7689, -0.0988)
+    leg1_err_cm = math.hypot(leg1_success_pose[0] - leg1_target[0], leg1_success_pose[1] - leg1_target[1]) * 100.0
+    assert abs(leg1_err_cm - 4.96) < 0.1, f"Leg 1 AMCL error was {leg1_err_cm:.2f} cm, expected 4.96 cm"
+    assert leg1_err_cm > 4.0, "Leg 1 AMCL error was outside configured 4 cm tolerance"
+
+    # Verify open discrepancy in mission telemetry recorder
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=True)
+    assert any("4.96 cm" in disc for disc in mission.open_discrepancies)

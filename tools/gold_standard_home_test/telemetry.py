@@ -110,6 +110,9 @@ class TelemetryRecorder:
                 "active_motion_rate_hz": active_motion_rate_hz,
                 "whole_run_coverage_hz": whole_run_coverage_hz,
                 "sample_rate_hz": active_motion_rate_hz,
+                "open_measurement_discrepancies": [
+                    "Leg 1 AMCL error of 4.96 cm at Nav2 success vs configured 4.0 cm PositionGoalChecker tolerance (preserved for reconciliation)"
+                ],
                 **self.metadata
             },
             "transitions": self.transitions,

@@ -33,6 +33,10 @@ from std_srvs.srv import Empty
 from nav_msgs.msg import Path
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
+try:
+    import tf2_ros
+except ImportError:
+    tf2_ros = None
 
 DEFAULT_PORT = 3005
 ODOM_API_URL = "http://127.0.0.1:3003/api/odom"
@@ -54,6 +58,17 @@ class RoverNavBridge(Node):
         self.active_goal_generation = 0
         self.active_goal_status = "IDLE"
         self.active_target = None
+        self.last_success_tf_pose = None
+        if tf2_ros is not None:
+            try:
+                self.tf_buffer = tf2_ros.Buffer()
+                self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+            except Exception:
+                self.tf_buffer = None
+                self.tf_listener = None
+        else:
+            self.tf_buffer = None
+            self.tf_listener = None
 
         self.sub_plan = self.create_subscription(Path, '/plan', self._plan_cb, 10)
         self.sub_local_plan = self.create_subscription(Path, '/local_plan', self._local_plan_cb, 10)
@@ -398,6 +413,28 @@ class RoverNavBridge(Node):
             "timing_bridge": timing_bridge
         }
 
+
+    def get_current_tf_pose(self):
+        if not getattr(self, 'tf_buffer', None):
+            return None
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            siny_cosp = 2.0 * (rot.w * rot.z + rot.x * rot.y)
+            cosy_cosp = 1.0 - 2.0 * (rot.y * rot.y + rot.z * rot.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            return {
+                "x": round(tr.x, 6),
+                "y": round(tr.y, 6),
+                "z": round(tr.z, 6),
+                "yaw_rad": round(yaw, 6),
+                "yaw_deg": round(math.degrees(yaw), 2),
+                "stamp_sec": round(t.header.stamp.sec + t.header.stamp.nanosec * 1e-9, 4)
+            }
+        except Exception:
+            return None
+
     def dispatch_goal(self, target_x, target_y, target_yaw, goal_id=None, behavior_tree=None, goal_checker=None):
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/navigate_to_pose action server unavailable"}
@@ -472,6 +509,7 @@ class RoverNavBridge(Node):
                 # action_msgs/msg/GoalStatus: 4=STATUS_SUCCEEDED, 5=STATUS_CANCELED, 6=STATUS_ABORTED
                 if status == 4:
                     self.active_goal_status = "SUCCEEDED"
+                    self.last_success_tf_pose = self.get_current_tf_pose()
                 elif status == 5:
                     self.active_goal_status = "CANCELLED"
                 elif status == 6:
@@ -622,6 +660,8 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                 "generation": getattr(bridge_node, 'active_goal_generation', 0),
                 "target": bridge_node.active_target,
                 "distance_remaining_m": round(dist_rem, 3),
+                "tf_pose": bridge_node.get_current_tf_pose(),
+                "success_tf_pose": getattr(bridge_node, 'last_success_tf_pose', None),
                 "global_path": bridge_node.latest_global_plan,
                 "local_path": bridge_node.latest_local_plan
             }

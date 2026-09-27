@@ -103,6 +103,10 @@ class GoldStandardMission:
         self.home_pose = load_authoritative_home()
         self.recorder = TelemetryRecorder(output_dir=self.output_dir)
         self.recorder.metadata["home_pose"] = self.home_pose
+        self.success_reconciliations = {}
+        self.open_discrepancies = [
+            "Leg 1 AMCL error of 4.96 cm at Nav2 success vs configured 4.0 cm PositionGoalChecker tolerance (preserved for reconciliation)"
+        ]
         self.yaw_tracker = ContinuousYawTracker()
 
         # Sidecar / proxy endpoints
@@ -938,6 +942,29 @@ class GoldStandardMission:
                         # Phase 2: Once active, require SUCCEEDED or genuine abort/cancel
                         if goal_observed_active:
                             if status_str == "SUCCEEDED":
+                                # Reconcile both controller/TF pose and AMCL pose at Nav2 success
+                                amcl_pose = self.latest_telemetry.get("amcl") or {}
+                                tf_pose = nav_stat.get("success_tf_pose") or nav_stat.get("tf_pose") or {}
+                                target_coords = getattr(self, f"{stage_name.lower()}_target_coords", None)
+                                amcl_err_cm = None
+                                tf_err_cm = None
+                                if target_coords and amcl_pose.get("x") is not None:
+                                    amcl_err_cm = round(math.hypot(amcl_pose["x"] - target_coords[0], amcl_pose["y"] - target_coords[1]) * 100.0, 2)
+                                if target_coords and tf_pose.get("x") is not None:
+                                    tf_err_cm = round(math.hypot(tf_pose["x"] - target_coords[0], tf_pose["y"] - target_coords[1]) * 100.0, 2)
+
+                                reconciliation = {
+                                    "stage": stage_name,
+                                    "goal_id": target_goal_id,
+                                    "target_coords": target_coords,
+                                    "amcl_pose": amcl_pose,
+                                    "amcl_error_to_target_cm": amcl_err_cm,
+                                    "tf_pose": tf_pose,
+                                    "tf_error_to_target_cm": tf_err_cm,
+                                    "timestamp_epoch": round(time.time(), 4)
+                                }
+                                self.success_reconciliations[stage_name] = reconciliation
+
                                 # Post-goal zero and disarm verification:
                                 # Must verify matching goal_id, zero requested/limited velocities,
                                 # armed=false, mode=0, and cmdSource=NONE before starting next leg.
@@ -1052,10 +1079,11 @@ class GoldStandardMission:
         
         # Use position_goal_checker for Leg 1 outbound to achieve exact position arrival
         # without commanding a terminal yaw correction immediately undone by the explicit 180° turn.
+        self.leg1_forward_target_coords = (target_x, target_y)
         goal_id = self.dispatch_nav2_goal(target_x, target_y, target_yaw, goal_checker="position_goal_checker")
         self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG1_FORWARD_S, "LEG1_FORWARD", goal_id, 0.04)
         print("[LEG 1 COMPLETE] Reached turnaround point, Nav2 reported SUCCEEDED, rover finished disarmed.")
-        self.recorder.record_transition("LEG1_FORWARD_END")
+        self.recorder.record_transition("LEG1_FORWARD_END", {"reconciliation": self.success_reconciliations.get("LEG1_FORWARD")})
 
     def execute_leg2_rotation(self, target_cw_deg: float = 180.0):
         """
@@ -1133,13 +1161,14 @@ class GoldStandardMission:
         # 1. Zero handshake while disarmed
         self.verify_zero_handshake(expected_cmd_source="ANY")
 
-        # 2. Dispatch Nav2 goal
-        goal_id = self.dispatch_nav2_goal(home_x, home_y, return_yaw)
+        # 2. Dispatch Nav2 goal with position_goal_checker
+        self.leg3_return_target_coords = (home_x, home_y)
+        goal_id = self.dispatch_nav2_goal(home_x, home_y, return_yaw, goal_checker="position_goal_checker")
 
         # 3. Wait for Nav2 completion
         self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG3_RETURN_S, "LEG3_RETURN", goal_id, PASS_FINAL_POS_ERR_M)
         print("[LEG 3 COMPLETE] Returned to HOME position, Nav2 reported SUCCEEDED, rover finished disarmed.")
-        self.recorder.record_transition("LEG3_RETURN_END")
+        self.recorder.record_transition("LEG3_RETURN_END", {"reconciliation": self.success_reconciliations.get("LEG3_RETURN")})
 
     def execute_leg4_settle(self, target_home_yaw_rad: float):
         """
