@@ -4865,7 +4865,8 @@ app.post('/api/navigation/init_home', async (req, res) => {
 
 app.get('/api/navigation/validate_home', async (req, res) => {
   try {
-    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/validate_home');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const bridgeResp = await fetch(`http://127.0.0.1:3005/api/nav/validate_home${query}`);
     const data = await bridgeResp.json();
     return res.status(bridgeResp.ok ? 200 : 400).json(data);
   } catch (err) {

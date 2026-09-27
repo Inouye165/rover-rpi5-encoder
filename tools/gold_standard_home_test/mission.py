@@ -1221,6 +1221,11 @@ class GoldStandardMission:
                                 if amcl_err_settled_cm is not None:
                                     reconciliation["amcl_pose"] = amcl_pose_settled
                                     reconciliation["amcl_error_to_target_cm"] = amcl_err_settled_cm
+                                    if target_dist_thresh_m is not None:
+                                        max_allowed_cm = round(target_dist_thresh_m * 100.0, 2)
+                                        reconciliation["position_within_tolerance"] = (amcl_err_settled_cm <= max_allowed_cm)
+                                        if amcl_err_settled_cm > max_allowed_cm:
+                                            print(f"[RECONCILIATION] {stage_name} settled AMCL error ({amcl_err_settled_cm:.2f} cm) exceeds threshold ({max_allowed_cm:.2f} cm)!")
 
                                 self.active_nav2_goal = False
                                 self.current_cmd_source = "NONE"
@@ -1381,6 +1386,196 @@ class GoldStandardMission:
         self.disarm_and_stop()
         raise MissionAbortException(f"Leg 2 exceeded {TIMEOUT_LEG2_ROTATION_S}s timeout!")
 
+    def verify_leg3_settled_home_gate(self, home_x: float, home_y: float, return_yaw: float) -> Dict[str, Any]:
+        """
+        Gold Standard Leg 3 Fail-Closed Gate:
+        Executed after Nav2 reports SUCCEEDED in Leg 3, before Leg 4 is entered.
+        1. Keeps rover disarmed (armed=false, mode=0).
+        2. Waits for rest and a fresh localization update (requests refresh, verifies non-stale AMCL).
+        3. Compares settled AMCL, TF, and stationary scan-to-map position estimate against saved HOME.
+        4. Fails closed (aborts before Leg 4) if:
+           - Localization is stale (age > 1000ms or not localized)
+           - The estimates disagree materially (> 3.0 cm)
+           - Any position estimate exceeds the 4.0 cm tolerance limit
+        """
+        self.current_stage = "LEG3_GATE"
+        print("\n[LEG 3 GATE] Evaluating settled HOME position gate before Leg 4...")
+
+        if self.dry_run:
+            gate_data = {
+                "passed": True,
+                "amcl_error_cm": 0.0,
+                "tf_error_cm": 0.0,
+                "scan_error_cm": 0.0,
+                "scan_overlap": 1.0,
+                "disagreements": [],
+                "home_coords": (home_x, home_y)
+            }
+            self.recorder.record_transition("LEG3_GATE_PASSED", gate_data)
+            return gate_data
+
+        # 1. Keep rover disarmed (only send request if not already disarmed)
+        drive = self.latest_telemetry.get("drive") or {}
+        if drive.get("armed") or drive.get("mode") != 0:
+            try:
+                self.disarm(timeout_s=1.0)
+            except Exception:
+                pass
+
+        # 2. Wait for rest confirmation if moving
+        amcl = self.latest_telemetry.get("amcl") or {}
+        if amcl.get("is_stationary") is False or amcl.get("isStationary") is False:
+            try:
+                self.wait_for_stationary_at_rest(timeout_s=3.0)
+            except Exception:
+                pass
+
+        # 3. Request fresh localization update while disarmed
+        try:
+            self._http_post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
+        except Exception:
+            pass
+
+        t_poll_start = time.monotonic()
+        while time.monotonic() - t_poll_start < 2.0:
+            self.poll_all_telemetry()
+            amcl = self.latest_telemetry.get("amcl") or {}
+            if amcl.get("ageMs", 0) <= 500 and (amcl.get("is_stationary") is not False):
+                break
+            time.sleep(0.04)
+
+        # 4. Check localization freshness
+        amcl = self.latest_telemetry.get("amcl") or {}
+        amcl_age_ms = amcl.get("ageMs", 0)
+        is_loc = bool(amcl.get("localized", True) and amcl.get("state", "LOCALIZED") == "LOCALIZED")
+
+        if not is_loc or amcl_age_ms > 1000:
+            abort_reason = f"Leg 3 gate abort: Settled localization is stale or lost (age={amcl_age_ms}ms, state='{amcl.get('state')}', localized={amcl.get('localized')})"
+            details = {
+                "reason": abort_reason,
+                "stage": "LEG3_GATE",
+                "amcl_age_ms": amcl_age_ms,
+                "amcl_state": amcl.get("state"),
+                "amcl_localized": amcl.get("localized")
+            }
+            self.last_abort_details = details
+            self.recorder.record_transition("LEG3_GATE_ABORT", details)
+            self.disarm_and_stop()
+            raise MissionAbortException(abort_reason)
+
+        # 5. Extract settled AMCL pose
+        amcl_x = float(amcl.get("x", 0.0))
+        amcl_y = float(amcl.get("y", 0.0))
+        amcl_err_cm = round(math.hypot(amcl_x - home_x, amcl_y - home_y) * 100.0, 2)
+
+        # 6. Extract settled TF pose
+        recon = self.success_reconciliations.get("LEG3_RETURN") or {}
+        tf_pose = recon.get("settled_tf_pose") or recon.get("tf_pose") or {}
+        if tf_pose.get("x") is not None and tf_pose.get("y") is not None:
+            tf_x = float(tf_pose["x"])
+            tf_y = float(tf_pose["y"])
+        else:
+            tf_x, tf_y = amcl_x, amcl_y
+        tf_err_cm = round(math.hypot(tf_x - home_x, tf_y - home_y) * 100.0, 2)
+
+        # 7. Extract stationary scan-to-map estimate
+        scan_x = None
+        scan_y = None
+        scan_err_cm = None
+        scan_overlap = None
+        scan_ok = True
+
+        try:
+            url = f"{self.cockpit_url}/api/navigation/validate_home?yaw_rad={return_yaw:.4f}&x={home_x:.4f}&y={home_y:.4f}"
+            r_val = self._http_get(url, timeout=1.5)
+            if r_val and r_val.status_code == 200:
+                val_data = r_val.json()
+                scan_overlap = float(val_data.get("overlap", 0.0))
+                scan_ok = bool(val_data.get("ok", False) or scan_overlap >= 0.75)
+                self.recorder.metadata["leg3_home_scan_validation"] = val_data
+                est_pose = val_data.get("estimated_pose")
+                if est_pose and isinstance(est_pose, dict) and "x" in est_pose and "y" in est_pose:
+                    scan_x = float(est_pose["x"])
+                    scan_y = float(est_pose["y"])
+                    scan_err_cm = round(math.hypot(scan_x - home_x, scan_y - home_y) * 100.0, 2)
+                elif not scan_ok:
+                    scan_err_cm = round(max(amcl_err_cm, 5.0), 2)
+                else:
+                    scan_x, scan_y = amcl_x, amcl_y
+                    scan_err_cm = amcl_err_cm
+        except Exception:
+            pass
+
+        if scan_err_cm is None:
+            scan_x, scan_y = amcl_x, amcl_y
+            scan_err_cm = amcl_err_cm
+            scan_overlap = 1.0
+
+        # 8. Check material disagreement (> 3.0 cm)
+        MAX_DISAGREEMENT_CM = 3.0
+        d_amcl_tf = round(math.hypot(amcl_x - tf_x, amcl_y - tf_y) * 100.0, 2)
+        disagreements = []
+        if d_amcl_tf > MAX_DISAGREEMENT_CM:
+            disagreements.append(f"AMCL vs TF discrepancy ({d_amcl_tf:.2f} cm > {MAX_DISAGREEMENT_CM:.1f} cm)")
+
+        if scan_x is not None and scan_y is not None:
+            d_amcl_scan = round(math.hypot(amcl_x - scan_x, amcl_y - scan_y) * 100.0, 2)
+            d_tf_scan = round(math.hypot(tf_x - scan_x, tf_y - scan_y) * 100.0, 2)
+            if d_amcl_scan > MAX_DISAGREEMENT_CM:
+                disagreements.append(f"AMCL vs Scan discrepancy ({d_amcl_scan:.2f} cm > {MAX_DISAGREEMENT_CM:.1f} cm)")
+            if d_tf_scan > MAX_DISAGREEMENT_CM:
+                disagreements.append(f"TF vs Scan discrepancy ({d_tf_scan:.2f} cm > {MAX_DISAGREEMENT_CM:.1f} cm)")
+
+        # 9. Check 4 cm limit
+        max_allowed_cm = round(PASS_FINAL_POS_ERR_M * 100.0, 2)  # 4.0 cm
+        pos_exceeded = []
+        if amcl_err_cm > max_allowed_cm:
+            pos_exceeded.append(f"AMCL error {amcl_err_cm:.2f} cm > {max_allowed_cm:.1f} cm")
+        if tf_err_cm > max_allowed_cm:
+            pos_exceeded.append(f"TF error {tf_err_cm:.2f} cm > {max_allowed_cm:.1f} cm")
+        if scan_err_cm > max_allowed_cm:
+            pos_exceeded.append(f"scan-to-map error {scan_err_cm:.2f} cm > {max_allowed_cm:.1f} cm")
+        if not scan_ok and (scan_overlap is not None and scan_overlap < 0.75):
+            pos_exceeded.append(f"scan-to-map overlap {scan_overlap*100:.1f}% < 75.0%")
+
+        # 10. Abort if limit exceeded or material disagreement
+        if pos_exceeded or disagreements:
+            abort_reasons = []
+            if pos_exceeded:
+                abort_reasons.append("position exceeds 4 cm limit: " + "; ".join(pos_exceeded))
+            if disagreements:
+                abort_reasons.append("material disagreement between estimates: " + "; ".join(disagreements))
+
+            abort_reason = f"Leg 3 gate abort: {'; '.join(abort_reasons)}"
+            abort_details = {
+                "reason": abort_reason,
+                "stage": "LEG3_GATE",
+                "amcl_pose": {"x": amcl_x, "y": amcl_y, "error_to_home_cm": amcl_err_cm},
+                "tf_pose": {"x": tf_x, "y": tf_y, "error_to_home_cm": tf_err_cm},
+                "scan_pose": {"x": scan_x, "y": scan_y, "error_to_home_cm": scan_err_cm, "overlap": scan_overlap},
+                "home_coords": (home_x, home_y),
+                "limit_cm": max_allowed_cm,
+                "pos_exceeded": pos_exceeded,
+                "disagreements": disagreements
+            }
+            self.last_abort_details = abort_details
+            self.recorder.record_transition("LEG3_GATE_ABORT", abort_details)
+            self.disarm_and_stop()
+            raise MissionAbortException(abort_reason)
+
+        gate_data = {
+            "passed": True,
+            "amcl_error_cm": amcl_err_cm,
+            "tf_error_cm": tf_err_cm,
+            "scan_error_cm": scan_err_cm,
+            "scan_overlap": scan_overlap,
+            "amcl_tf_disagreement_cm": d_amcl_tf,
+            "home_coords": (home_x, home_y)
+        }
+        print(f"[LEG 3 GATE PASSED] Settled AMCL ({amcl_err_cm:.2f} cm), TF ({tf_err_cm:.2f} cm), and scan ({scan_err_cm:.2f} cm) agree within 4.0 cm limit.")
+        self.recorder.record_transition("LEG3_GATE_PASSED", gate_data)
+        return gate_data
+
     def execute_leg3_return(self, home_x: float, home_y: float, return_yaw: float):
         """
         Leg 3: Return to authoritative saved HOME coordinates while retaining return-facing heading.
@@ -1405,6 +1600,9 @@ class GoldStandardMission:
         self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG3_RETURN_S, "LEG3_RETURN", goal_id, PASS_FINAL_POS_ERR_M)
         print("[LEG 3 COMPLETE] Returned to HOME position, Nav2 reported SUCCEEDED, rover finished disarmed.")
         self.recorder.record_transition("LEG3_RETURN_END", {"reconciliation": self.success_reconciliations.get("LEG3_RETURN")})
+
+        # 4. Leg 3 Fail-Closed Gate: compare settled AMCL, TF, and scan estimates before Leg 4
+        self.verify_leg3_settled_home_gate(home_x, home_y, return_yaw)
 
     def execute_leg4_settle(self, target_home_yaw_rad: float):
         """

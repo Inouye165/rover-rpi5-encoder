@@ -82,6 +82,16 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     pos_meas_str = f"{pos_meas:.2f} cm" if pos_meas is not None else "N/A"
     print(f"  • Final HOME Position Error: {pos_meas_str} (Threshold <= {pos_res['threshold_m']*100:.1f} cm) -> {'PASS' if pos_res['passed'] else 'FAIL'}")
     
+    if "leg3_return_position_error" in crit:
+        l3_res = crit["leg3_return_position_error"]
+        l3_meas = l3_res.get('measured_cm')
+        l3_meas_str = f"{l3_meas:.2f} cm" if l3_meas is not None else "N/A"
+        print(f"  • Leg 3 Return Position Error: {l3_meas_str} (Threshold <= {l3_res['threshold_cm']:.1f} cm) -> {'PASS' if l3_res['passed'] else 'FAIL'}")
+
+    if "final_home_scan_agreement" in crit:
+        scan_res = crit["final_home_scan_agreement"]
+        print(f"  • Final HOME Scan Agreement:  {scan_res.get('overlap_pct', 0.0):.1f}% (Threshold >= {scan_res['threshold_pct']:.1f}%) -> {'PASS' if scan_res['passed'] else 'FAIL'}")
+
     yaw_res = crit["final_home_yaw_error"]
     yaw_meas = yaw_res.get('measured_deg')
     yaw_meas_str = f"{yaw_meas:.2f}°" if yaw_meas is not None else "N/A"
@@ -139,8 +149,16 @@ def run_cli():
     parser.add_argument("--bridge-url", default=BRIDGE_DEFAULT_URL, help="Internal velocity bridge endpoint URL.")
     parser.add_argument("--report-dir", default="reports/gold_standard_home_test", help="Directory for JSON reports.")
     parser.add_argument("--skip-confirm", action="store_true", help="Skip interactive confirmation (dry-run/test-safety only).")
+    parser.add_argument("--grade", type=str, help="Grade an existing run report JSON file and exit.")
 
     args = parser.parse_args()
+
+    if args.grade:
+        with open(args.grade, "r", encoding="utf-8") as f:
+            run_data = json.load(f)
+        grade = MissionGrader.grade_run(run_data)
+        print_grade_report(grade, args.grade)
+        sys.exit(0 if grade.get("overall_status") == "PASS" else 1)
 
     if not args.execute and not args.dry_run and not args.test_safety:
         print("[ERROR] You must specify either --execute, --dry-run, or --test-safety.")
@@ -363,6 +381,15 @@ def run_cli():
             
             # Leg 4: Final signed in-place yaw alignment to saved HOME yaw and settle
             mission.execute_leg4_settle(targets["home"]["yaw_rad"])
+
+            # Capture post-mission stationary LiDAR scan agreement at HOME
+            if not args.dry_run:
+                try:
+                    r_val = mission._http_get(f"{mission.cockpit_url}/api/navigation/validate_home", timeout=1.5)
+                    if r_val.status_code == 200:
+                        mission.recorder.metadata["final_home_scan_validation"] = r_val.json()
+                except Exception:
+                    pass
 
     except MissionAbortException as mae:
         print(f"\n[MISSION ABORT] Safety watchdog triggered: {mae}")

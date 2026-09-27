@@ -239,6 +239,26 @@ class MissionGrader:
         # Require BOTH active-motion sampling and baseline-to-final whole-run coverage to be at least 20 Hz; 11.1 Hz must not pass
         crit_rate = (active_motion_rate_hz >= PASS_MIN_RECORDER_RATE_HZ) and (whole_run_coverage_hz >= PASS_MIN_RECORDER_RATE_HZ)
 
+        # Leg 3 Return Position Error from reconciliation (if Leg 3 was run)
+        leg3_pos_err_cm = None
+        for t in transitions:
+            if t.get("stage") == "LEG3_RETURN_END":
+                recon = t.get("details", {}).get("reconciliation", {}) or {}
+                leg3_pos_err_cm = recon.get("settled_amcl_error_to_target_cm")
+                if leg3_pos_err_cm is None:
+                    leg3_pos_err_cm = recon.get("amcl_error_to_target_cm")
+                break
+
+        crit_leg3_pos = True
+        if leg3_pos_err_cm is not None:
+            crit_leg3_pos = (leg3_pos_err_cm <= round(PASS_FINAL_POS_ERR_M * 100.0, 2))
+
+        # Final HOME LiDAR scan agreement at rest (if captured in metadata)
+        final_scan_val = metadata.get("final_home_scan_validation")
+        crit_scan_agreement = True
+        if final_scan_val and isinstance(final_scan_val, dict) and "overlap" in final_scan_val:
+            crit_scan_agreement = bool(final_scan_val.get("ok", False) or final_scan_val.get("overlap", 0.0) >= 0.75)
+
         all_passed = (
             crit_final_pos and
             crit_final_yaw and
@@ -246,58 +266,76 @@ class MissionGrader:
             crit_reversals and
             crit_crawling and
             crit_safe_stop and
-            crit_rate
+            crit_rate and
+            crit_leg3_pos and
+            crit_scan_agreement
         )
+
+        criteria_dict = {
+            "final_home_position_error": {
+                "measured_m": round(final_pos_err_m, 4),
+                "measured_cm": round(final_pos_err_m * 100.0, 2),
+                "threshold_m": PASS_FINAL_POS_ERR_M,
+                "passed": crit_final_pos
+            },
+            "final_home_yaw_error": {
+                "measured_deg": round(final_yaw_err_deg, 2),
+                "threshold_deg": PASS_FINAL_YAW_ERR_DEG,
+                "passed": crit_final_yaw
+            },
+            "no_reset_or_discontinuity": {
+                "resets_detected": resets_detected,
+                "safety_interventions": safety_interventions,
+                "passed": crit_resets
+            },
+            "corrective_reversals": {
+                "count": reversal_count,
+                "linear_reversals": linear_reversals,
+                "angular_settling_reversals": angular_settling_reversals,
+                "target_crossed": any_target_crossed,
+                "target_crossing_status": "crossed" if any_target_crossed else "no crossing",
+                "settling_time_after_crossing_s": round(total_settling_time_after_crossing_s, 2) if any_target_crossed else None,
+                "max_allowed": PASS_MAX_CORRECTIVE_REVERSALS,
+                "passed": crit_reversals
+            },
+            "low_speed_crawling": {
+                "max_continuous_s": round(max_continuous_crawl_s, 2),
+                "max_allowed_s": PASS_MAX_CRAWL_WINDOW_SEC,
+                "passed": crit_crawling
+            },
+            "recorder_sample_rate": {
+                "achieved_rate_hz": achieved_rate_hz,
+                "active_motion_rate_hz": active_motion_rate_hz,
+                "whole_run_coverage_hz": whole_run_coverage_hz,
+                "active_span_s": round(active_span_s, 2),
+                "total_duration_s": round(total_time_s, 2),
+                "threshold_hz": PASS_MIN_RECORDER_RATE_HZ,
+                "passed": crit_rate
+            },
+            "final_safe_state": {
+                "armed": final_armed,
+                "mode": final_mode,
+                "passed": crit_safe_stop
+            }
+        }
+
+        if leg3_pos_err_cm is not None:
+            criteria_dict["leg3_return_position_error"] = {
+                "measured_cm": leg3_pos_err_cm,
+                "threshold_cm": round(PASS_FINAL_POS_ERR_M * 100.0, 2),
+                "passed": crit_leg3_pos
+            }
+
+        if final_scan_val and isinstance(final_scan_val, dict) and "overlap" in final_scan_val:
+            criteria_dict["final_home_scan_agreement"] = {
+                "overlap_pct": round(final_scan_val.get("overlap", 0.0) * 100.0, 1),
+                "threshold_pct": 75.0,
+                "passed": crit_scan_agreement
+            }
 
         return {
             "overall_status": "PASS" if all_passed else "FAIL",
-            "criteria": {
-                "final_home_position_error": {
-                    "measured_m": round(final_pos_err_m, 4),
-                    "measured_cm": round(final_pos_err_m * 100.0, 2),
-                    "threshold_m": PASS_FINAL_POS_ERR_M,
-                    "passed": crit_final_pos
-                },
-                "final_home_yaw_error": {
-                    "measured_deg": round(final_yaw_err_deg, 2),
-                    "threshold_deg": PASS_FINAL_YAW_ERR_DEG,
-                    "passed": crit_final_yaw
-                },
-                "no_reset_or_discontinuity": {
-                    "resets_detected": resets_detected,
-                    "safety_interventions": safety_interventions,
-                    "passed": crit_resets
-                },
-                "corrective_reversals": {
-                    "count": reversal_count,
-                    "linear_reversals": linear_reversals,
-                    "angular_settling_reversals": angular_settling_reversals,
-                    "target_crossed": any_target_crossed,
-                    "target_crossing_status": "crossed" if any_target_crossed else "no crossing",
-                    "settling_time_after_crossing_s": round(total_settling_time_after_crossing_s, 2) if any_target_crossed else None,
-                    "max_allowed": PASS_MAX_CORRECTIVE_REVERSALS,
-                    "passed": crit_reversals
-                },
-                "low_speed_crawling": {
-                    "max_continuous_s": round(max_continuous_crawl_s, 2),
-                    "max_allowed_s": PASS_MAX_CRAWL_WINDOW_SEC,
-                    "passed": crit_crawling
-                },
-                "recorder_sample_rate": {
-                    "achieved_rate_hz": achieved_rate_hz,
-                    "active_motion_rate_hz": active_motion_rate_hz,
-                    "whole_run_coverage_hz": whole_run_coverage_hz,
-                    "active_span_s": round(active_span_s, 2),
-                    "total_duration_s": round(total_time_s, 2),
-                    "threshold_hz": PASS_MIN_RECORDER_RATE_HZ,
-                    "passed": crit_rate
-                },
-                "final_safe_state": {
-                    "armed": final_armed,
-                    "mode": final_mode,
-                    "passed": crit_safe_stop
-                }
-            },
+            "criteria": criteria_dict,
             "metrics": {
                 "outbound_distance_m": round(actual_outbound_dist, 4),
                 "outbound_distance_error_m": round(outbound_dist_err_m, 4),

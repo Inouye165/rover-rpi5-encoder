@@ -133,8 +133,8 @@ class RoverNavBridge(Node):
             "qw": qw
         }
 
-    def validate_scan_against_home(self, timeout_sec=5.0, min_overlap=0.75, max_age_sec=0.75):
-        """Compares live LiDAR scan against map assuming rover is at saved HOME pose."""
+    def validate_scan_against_home(self, timeout_sec=5.0, min_overlap=0.75, max_age_sec=0.75, home_dict=None):
+        """Compares live LiDAR scan against map assuming rover is at saved HOME pose (or custom pose)."""
         t0 = time.time()
         while self.latest_scan is None and (time.time() - t0) < timeout_sec:
             time.sleep(0.1)
@@ -150,13 +150,13 @@ class RoverNavBridge(Node):
             }
 
         map_dict = self._load_map()
-        home_dict = self._get_home_dict()
+        target_home = home_dict if home_dict is not None else self._get_home_dict()
         now_sec = time.time()
 
         return validate_laserscan_msg(
             scan_msg=self.latest_scan,
             map_dict=map_dict,
-            home_dict=home_dict,
+            home_dict=target_home,
             now_sec=now_sec,
             max_age_sec=max_age_sec,
             min_overlap=min_overlap
@@ -646,8 +646,25 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                     return
             self._send_json(404, {"ok": False, "error": "Home pose file not found"})
 
-        elif self.path == '/api/nav/validate_home':
-            val_res = bridge_node.validate_scan_against_home()
+        elif self.path.startswith('/api/nav/validate_home'):
+            import urllib.parse
+            query_str = self.path.split('?', 1)[1] if '?' in self.path else ''
+            params = urllib.parse.parse_qs(query_str) if query_str else {}
+            custom_home = None
+            if params:
+                home_base = bridge_node._get_home_dict().copy()
+                if 'x' in params:
+                    home_base['x'] = float(params['x'][0])
+                if 'y' in params:
+                    home_base['y'] = float(params['y'][0])
+                if 'yaw_deg' in params:
+                    home_base['yaw_deg'] = float(params['yaw_deg'][0])
+                    home_base['yaw_rad'] = math.radians(home_base['yaw_deg'])
+                elif 'yaw_rad' in params:
+                    home_base['yaw_rad'] = float(params['yaw_rad'][0])
+                    home_base['yaw_deg'] = math.degrees(home_base['yaw_rad'])
+                custom_home = home_base
+            val_res = bridge_node.validate_scan_against_home(home_dict=custom_home)
             self._send_json(200, val_res)
 
         elif self.path == '/api/nav/status':

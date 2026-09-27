@@ -3356,3 +3356,245 @@ def test_leg4_captures_settled_amcl_while_disarmed_and_refreshes_if_stale():
     # Ensure mission tracked with fresh yaw
     assert mission.yaw_tracker is not None
 
+
+
+def test_leg3_return_position_error_and_scan_agreement_criteria():
+    """Verify that MissionGrader enforces Leg 3 return position error <= 4.0 cm and LiDAR scan agreement >= 75%."""
+    from tools.gold_standard_home_test.grader import MissionGrader
+
+    # Case 1: Leg 3 settled AMCL error > 4.0 cm (e.g. 7.48 cm from run 122459) -> must FAIL
+    run_failing_leg3 = {
+        "metadata": {
+            "duration_s": 25.0, "active_motion_rate_hz": 25.0, "whole_run_coverage_hz": 25.0,
+            "final_home_scan_validation": {"ok": True, "overlap": 0.85}
+        },
+        "transitions": [
+            {
+                "stage": "LEG3_RETURN_END",
+                "details": {
+                    "reconciliation": {
+                        "settled_amcl_error_to_target_cm": 7.48,
+                        "settled_tf_error_to_target_cm": 4.16
+                    }
+                }
+            }
+        ],
+        "samples": [
+            {"mission_stage": "BASELINE", "t_rel_s": 0.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "drive": {"armed": False, "mode": 0}},
+            {"mission_stage": "FINAL_DISARMED", "t_rel_s": 25.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "to_home": {"pos_err_m": 0.02, "yaw_err_deg": 1.0}, "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0}}
+        ]
+    }
+    grade = MissionGrader.grade_run(run_failing_leg3)
+    assert grade["overall_status"] == "FAIL"
+    crit_leg3 = grade["criteria"]["leg3_return_position_error"]
+    assert crit_leg3["measured_cm"] == 7.48
+    assert crit_leg3["threshold_cm"] == 4.0
+    assert crit_leg3["passed"] is False
+
+    # Case 2: Leg 3 settled AMCL error <= 4.0 cm (e.g. 3.2 cm) -> PASS
+    run_passing_leg3 = {
+        "metadata": {
+            "duration_s": 25.0, "active_motion_rate_hz": 25.0, "whole_run_coverage_hz": 25.0,
+            "final_home_scan_validation": {"ok": True, "overlap": 0.85}
+        },
+        "transitions": [
+            {
+                "stage": "LEG3_RETURN_END",
+                "details": {
+                    "reconciliation": {
+                        "settled_amcl_error_to_target_cm": 3.20,
+                        "settled_tf_error_to_target_cm": 2.50
+                    }
+                }
+            }
+        ],
+        "samples": [
+            {"mission_stage": "BASELINE", "t_rel_s": 0.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "drive": {"armed": False, "mode": 0}},
+            {"mission_stage": "FINAL_DISARMED", "t_rel_s": 25.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "to_home": {"pos_err_m": 0.02, "yaw_err_deg": 1.0}, "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0}}
+        ]
+    }
+    grade2 = MissionGrader.grade_run(run_passing_leg3)
+    assert grade2["overall_status"] == "PASS"
+    assert grade2["criteria"]["leg3_return_position_error"]["passed"] is True
+    assert grade2["criteria"]["final_home_scan_agreement"]["passed"] is True
+
+    # Case 3: Scan agreement fails (< 75%)
+    run_failing_scan = {
+        "metadata": {
+            "duration_s": 25.0, "active_motion_rate_hz": 25.0, "whole_run_coverage_hz": 25.0,
+            "final_home_scan_validation": {"ok": False, "overlap": 0.62}
+        },
+        "transitions": [
+            {
+                "stage": "LEG3_RETURN_END",
+                "details": {
+                    "reconciliation": {
+                        "settled_amcl_error_to_target_cm": 3.20,
+                        "settled_tf_error_to_target_cm": 2.50
+                    }
+                }
+            }
+        ],
+        "samples": [
+            {"mission_stage": "BASELINE", "t_rel_s": 0.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "drive": {"armed": False, "mode": 0}},
+            {"mission_stage": "FINAL_DISARMED", "t_rel_s": 25.0, "amcl": {"x": 1.20, "y": -0.05, "yaw_deg": 0.0}, "to_home": {"pos_err_m": 0.02, "yaw_err_deg": 1.0}, "drive": {"armed": False, "mode": 0, "reqLinear": 0, "reqAngular": 0}}
+        ]
+    }
+    grade3 = MissionGrader.grade_run(run_failing_scan)
+    assert grade3["overall_status"] == "FAIL"
+    assert grade3["criteria"]["final_home_scan_agreement"]["passed"] is False
+
+
+def test_leg3_gate_aborts_on_run_122459_failure():
+    """
+    Contract & Regression Test:
+    Verify that verify_leg3_settled_home_gate blocks Leg 4 and aborts when given the exact
+    settled conditions from run 122459:
+    - Settled AMCL: (1.2642, -0.0708) -> 7.48 cm error to HOME (1.1939, -0.0452)
+    - Settled TF:   (1.2313, -0.0635) -> 4.16 cm error to HOME
+    - Disagreement: 3.37 cm between AMCL and TF
+    Must raise MissionAbortException, record LEG3_GATE_ABORT, and never execute Leg 4.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    home_x = 1.1939
+    home_y = -0.0452
+    return_yaw = math.radians(174.95)
+
+    # Mock reconciliation with run 122459 settled TF pose
+    mission.success_reconciliations["LEG3_RETURN"] = {
+        "settled_tf_pose": {"x": 1.231277, "y": -0.063510, "yaw_deg": 155.49},
+        "settled_tf_error_to_target_cm": 4.16
+    }
+    # Mock telemetry with run 122459 settled AMCL pose
+    mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0}
+    mission.latest_telemetry["amcl"] = {
+        "x": 1.264156, "y": -0.070839, "yaw_deg": 155.81,
+        "localized": True, "state": "LOCALIZED", "ageMs": 50, "is_stationary": True
+    }
+
+    # Mock _http_post and _http_get
+    def mock_get(url, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                if "/api/navigation/validate_home" in url:
+                    # Scan mismatch because rover is 7.5 cm away
+                    return {"ok": False, "overlap": 0.45, "reason": "SCAN_MISMATCH"}
+                return {"ok": True}
+        return MockResp()
+
+    mission._http_get = mock_get
+    mission._http_post = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True})
+    mission.poll_all_telemetry = lambda: None
+    mission.disarm_and_stop = MagicMock()
+
+    with pytest.raises(MissionAbortException) as exc_info:
+        mission.verify_leg3_settled_home_gate(home_x=home_x, home_y=home_y, return_yaw=return_yaw)
+
+    err_str = str(exc_info.value)
+    assert "Leg 3 gate abort" in err_str
+    assert "7.48 cm" in err_str or "exceeds 4 cm limit" in err_str
+
+    # Verify abort details recorded
+    assert mission.last_abort_details is not None
+    assert mission.last_abort_details["stage"] == "LEG3_GATE"
+    assert mission.last_abort_details["amcl_pose"]["error_to_home_cm"] == 7.48
+    assert mission.last_abort_details["tf_pose"]["error_to_home_cm"] == 4.16
+
+    # Verify transition logged
+    transitions = mission.recorder.transitions
+    assert any(t["stage"] == "LEG3_GATE_ABORT" for t in transitions)
+
+
+def test_leg3_gate_aborts_on_stale_localization():
+    """Verify verify_leg3_settled_home_gate aborts before Leg 4 if AMCL localization is stale (> 1000ms)."""
+    from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    mission.latest_telemetry["drive"] = {"armed": False, "mode": 0}
+    mission.latest_telemetry["amcl"] = {
+        "x": 1.1939, "y": -0.0452, "yaw_deg": 174.95,
+        "localized": True, "state": "LOCALIZED", "ageMs": 1450, "is_stationary": True
+    }
+    mission._http_get = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True})
+    mission._http_post = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True})
+    mission.poll_all_telemetry = lambda: None
+    mission.disarm_and_stop = MagicMock()
+
+    with pytest.raises(MissionAbortException) as exc_info:
+        mission.verify_leg3_settled_home_gate(home_x=1.1939, home_y=-0.0452, return_yaw=0.0)
+
+    assert "stale or lost" in str(exc_info.value)
+    assert mission.last_abort_details["amcl_age_ms"] == 1450
+
+
+def test_leg3_gate_aborts_on_material_disagreement():
+    """Verify verify_leg3_settled_home_gate aborts if estimates disagree materially (> 3.0 cm) even if within 4 cm."""
+    from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    home_x = 1.1939
+    home_y = -0.0452
+
+    # AMCL is 2.5 cm north of home, TF is 2.5 cm south of home -> both are <= 4cm from home, but 5.0 cm apart!
+    mission.success_reconciliations["LEG3_RETURN"] = {
+        "settled_tf_pose": {"x": 1.1939, "y": -0.0452 - 0.025, "yaw_deg": 174.95}
+    }
+    mission.latest_telemetry["drive"] = {"armed": False, "mode": 0}
+    mission.latest_telemetry["amcl"] = {
+        "x": 1.1939, "y": -0.0452 + 0.025, "yaw_deg": 174.95,
+        "localized": True, "state": "LOCALIZED", "ageMs": 50, "is_stationary": True
+    }
+    mission._http_get = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True, "overlap": 0.85})
+    mission._http_post = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True})
+    mission.poll_all_telemetry = lambda: None
+    mission.disarm_and_stop = MagicMock()
+
+    with pytest.raises(MissionAbortException) as exc_info:
+        mission.verify_leg3_settled_home_gate(home_x=home_x, home_y=home_y, return_yaw=0.0)
+
+    assert "material disagreement between estimates" in str(exc_info.value)
+    assert any(t["stage"] == "LEG3_GATE_ABORT" for t in mission.recorder.transitions)
+
+
+def test_leg3_gate_passes_when_all_estimates_agree_within_tolerance():
+    """Verify verify_leg3_settled_home_gate passes cleanly when AMCL, TF, and scan agree <= 4 cm of HOME."""
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(cockpit_url="http://127.0.0.1:3000", dry_run=False)
+
+    home_x = 1.1939
+    home_y = -0.0452
+
+    # All within 1.5 cm of HOME and within 1.0 cm of each other
+    mission.success_reconciliations["LEG3_RETURN"] = {
+        "settled_tf_pose": {"x": 1.2050, "y": -0.0500, "yaw_deg": 174.95}
+    }
+    mission.latest_telemetry["drive"] = {"armed": False, "mode": 0}
+    mission.latest_telemetry["amcl"] = {
+        "x": 1.2080, "y": -0.0480, "yaw_deg": 174.95,
+        "localized": True, "state": "LOCALIZED", "ageMs": 50, "is_stationary": True
+    }
+
+    def mock_get(url, **kwargs):
+        class MockResp:
+            status_code = 200
+            def json(self):
+                return {
+                    "ok": True, "overlap": 0.86,
+                    "estimated_pose": {"x": 1.2060, "y": -0.0490, "overlap": 0.88}
+                }
+        return MockResp()
+
+    mission._http_get = mock_get
+    mission._http_post = lambda *args, **kwargs: MagicMock(status_code=200, json=lambda: {"ok": True})
+    mission.poll_all_telemetry = lambda: None
+
+    gate_res = mission.verify_leg3_settled_home_gate(home_x=home_x, home_y=home_y, return_yaw=0.0)
+    assert gate_res["passed"] is True
+    assert gate_res["amcl_error_cm"] < 4.0
+    assert gate_res["tf_error_cm"] < 4.0
+    assert gate_res["scan_error_cm"] < 4.0
+    assert gate_res["scan_overlap"] == 0.86
+    assert any(t["stage"] == "LEG3_GATE_PASSED" for t in mission.recorder.transitions)
