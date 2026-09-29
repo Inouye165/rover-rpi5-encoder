@@ -529,6 +529,48 @@ class GoldStandardMission:
 
         return True, "Pre-arm gate passed", pos_err_m, yaw_err_deg
 
+    def verify_and_capture_baseline_imu_reference(self, max_retries: int = 10, retry_delay_s: float = 0.05) -> float:
+        """
+        Captures a fresh, valid starting IMU yaw reference at HOME baseline before Leg 1.
+        Verifies:
+        - IMU serial connection is active
+        - Telemetry is not marked stale
+        - Packet age <= 500 ms (TELEMETRY_STALE_TIMEOUT_S)
+        - Sequence is present
+        Initializes ContinuousYawTracker with this verified HOME reference.
+        Fails closed (raises MissionAbortException) if fresh reference cannot be captured.
+        """
+        if self.dry_run:
+            raw_yaw = float(self.home_pose.get("yaw_deg", 0.0))
+            self.baseline_home_imu_yaw_deg = raw_yaw
+            self.yaw_tracker.update(math.radians(raw_yaw))
+            return raw_yaw
+
+        for attempt in range(max_retries):
+            self.poll_all_telemetry()
+            imu = self.latest_telemetry.get("imu") or {}
+
+            serial_ok = imu.get("serialConnected", False)
+            stale = imu.get("stale", True)
+            age_ms = imu.get("dataAgeMs", 9999)
+            raw_yaw = imu.get("raw_yaw_deg")
+
+            if serial_ok and not stale and age_ms <= (TELEMETRY_STALE_TIMEOUT_S * 1000) and raw_yaw is not None:
+                self.baseline_home_imu_yaw_deg = float(raw_yaw)
+                if self.yaw_tracker.initial_yaw is None:
+                    self.yaw_tracker.update(math.radians(float(raw_yaw)))
+                print(f"[BASELINE] Captured fresh starting HOME IMU reference: {self.baseline_home_imu_yaw_deg:.2f}° (age: {age_ms}ms, seq: {imu.get('sequence')})")
+                return self.baseline_home_imu_yaw_deg
+
+            time.sleep(retry_delay_s)
+
+        imu = self.latest_telemetry.get("imu") or {}
+        raise MissionAbortException(
+            f"Pre-mission IMU reference check failed: Cannot capture fresh starting HOME IMU heading! "
+            f"(connected={imu.get('serialConnected')}, stale={imu.get('stale')}, age={imu.get('dataAgeMs')}ms). "
+            f"Refusing to arm or execute mission."
+        )
+
     def arm(self) -> bool:
         """Arms the drivetrain explicitly. Fails closed on any rejection."""
         if self.dry_run:
@@ -1329,16 +1371,37 @@ class GoldStandardMission:
     def execute_leg2_rotation(self, target_cw_deg: float = 180.0):
         """
         Leg 2: Perform an explicit 180° CLOCKWISE in-place rotation using exact-motion controller.
+        Settled target is the reciprocal of the recorded starting HOME heading,
+        using continuous, signed IMU yaw across Leg 1 and Leg 2.
         State transition: Rover is disarmed after Leg 1.
-        1. Zero handshake.
-        2. Arm explicitly to Mode 3.
-        3. Acquire CALIBRATION_TEST ownership.
-        4. Execute rotation using CALIBRATION_TEST commands.
-        5. Stop, disarm to Mode 0, release ownership.
+        1. Refuse if starting HOME IMU reference is missing or active IMU telemetry is stale.
+        2. Zero handshake.
+        3. Arm explicitly to Mode 3.
+        4. Acquire CALIBRATION_TEST ownership.
+        5. Execute rotation using CALIBRATION_TEST commands.
+        6. Stop, disarm to Mode 0, release ownership.
         """
         self.current_stage = "LEG2_ROTATION"
+
+        # Fail-closed guard: starting HOME IMU reference must be captured and continuous across Leg 1 and Leg 2.
+        # Refuse the mission rather than silently falling back to an unanchored relative 180° turn.
+        if self.yaw_tracker.initial_yaw is None:
+            self.disarm_and_stop()
+            raise MissionAbortException(
+                "Leg 2 refused: Missing starting HOME IMU reference across Leg 1 and Leg 2. "
+                "Refusing relative 180° fallback turn."
+            )
+
+        self.poll_all_telemetry()
+        imu = self.latest_telemetry.get("imu") or {}
+        if imu.get("stale") is True or imu.get("dataAgeMs", 0) > (TELEMETRY_STALE_TIMEOUT_S * 1000):
+            self.disarm_and_stop()
+            raise MissionAbortException(
+                f"Leg 2 refused: Active IMU telemetry is stale ({imu.get('dataAgeMs')}ms > {int(TELEMETRY_STALE_TIMEOUT_S * 1000)}ms). "
+                f"Refusing to execute rotation."
+            )
+
         print(f"\n[LEG 2] Handshaking zero, arming Mode 3, acquiring CALIBRATION_TEST ownership...")
-        self.recorder.record_transition("LEG2_ROTATION_START", {"target_deg": -target_cw_deg})
 
         # 1. Zero handshake while disarmed
         self.verify_zero_handshake(expected_cmd_source="ANY")
@@ -1349,7 +1412,21 @@ class GoldStandardMission:
         # 3. Acquire CALIBRATION_TEST command ownership
         self.set_command_source("CALIBRATION_TEST")
 
-        self.yaw_tracker.reset()
+        # Starting reference heading and reciprocal target calculation
+        home_yaw_rad = self.yaw_tracker.initial_yaw
+        home_yaw_deg = math.degrees(home_yaw_rad)
+        leg1_veer_cw_deg = -self.yaw_tracker.relative_yaw_deg
+        # Reciprocal of starting HOME heading under a clockwise turn
+        target_reciprocal_yaw_deg = wrap_angle_deg(home_yaw_deg - target_cw_deg)
+
+        self.recorder.record_transition("LEG2_ROTATION_START", {
+            "target_deg": -target_cw_deg,
+            "target_cw_deg": target_cw_deg,
+            "home_yaw_deg": round(home_yaw_deg, 2),
+            "leg1_veer_cw_deg": round(leg1_veer_cw_deg, 2),
+            "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2)
+        })
+
         t_start = time.monotonic()
 
         while time.monotonic() - t_start < TIMEOUT_LEG2_ROTATION_S:
@@ -1357,13 +1434,19 @@ class GoldStandardMission:
             self.poll_all_telemetry()
             self.verify_safety_invariants("LEG2_ROTATION")
 
+            # Continuous signed CW rotation accumulated from starting HOME baseline
             turned_cw = -self.yaw_tracker.relative_yaw_deg
             remaining_deg = target_cw_deg - turned_cw
 
             if remaining_deg <= 1.0: # Turn complete
                 self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
-                print(f"[LEG 2 COMPLETE] 180° CW rotation completed in {time.monotonic() - t_start:.2f}s (Traveled: {turned_cw:.1f}°).")
-                self.recorder.record_transition("LEG2_ROTATION_END")
+                print(f"[LEG 2 COMPLETE] Reciprocal CW rotation completed in {time.monotonic() - t_start:.2f}s (Traveled: {turned_cw:.1f}° CW from HOME, Leg 1 veer: {leg1_veer_cw_deg:+.1f}°).")
+                self.recorder.record_transition("LEG2_ROTATION_END", {
+                    "turned_cw_from_home_deg": round(turned_cw, 2),
+                    "final_rel_yaw_deg": round(self.yaw_tracker.relative_yaw_deg, 2),
+                    "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2),
+                    "leg1_veer_cw_deg": round(leg1_veer_cw_deg, 2)
+                })
                 # Disarm explicitly and release ownership
                 self.disarm()
                 self.set_command_source("NONE")

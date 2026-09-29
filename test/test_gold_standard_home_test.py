@@ -3640,3 +3640,649 @@ def test_leg3_gate_passes_when_all_estimates_agree_within_tolerance():
     assert gate_res["scan_error_cm"] < 4.0
     assert gate_res["scan_overlap"] == 0.86
     assert any(t["stage"] == "LEG3_GATE_PASSED" for t in mission.recorder.transitions)
+
+# ==============================================================================
+# Focused Tests: Leg 2 Continuous Reciprocal Yaw & Clockwise Turn Contract
+# ==============================================================================
+
+def test_leg2_reciprocal_target_clockwise_leg1_veer():
+    """
+    Focused Test: Leg 2 settled target is the reciprocal of starting HOME heading
+    when Leg 1 veers CLOCKWISE (e.g. +7.20° CW veer).
+    Verifies:
+    1. Tracker is not reset between Leg 1 and Leg 2.
+    2. Remaining turn is reduced from 180.0° to 172.80° CW.
+    3. Commanded wz is strictly negative (clockwise turn contract).
+    4. Settled orientation lands on the exact reciprocal of HOME.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    actions = []
+    wz_commands = []
+    poll_count = 0
+    disarmed = False
+
+    home_raw_yaw = 0.0
+    leg1_veer_cw = 7.20 # Veered CW during Leg 1
+    # Initialize tracker at baseline HOME
+    mission.yaw_tracker.update(math.radians(home_raw_yaw))
+    # Leg 1 ended at -7.20° raw yaw (veered CW)
+    leg1_end_yaw = home_raw_yaw - leg1_veer_cw
+    mission.yaw_tracker.update(math.radians(leg1_end_yaw))
+    assert round(mission.yaw_tracker.relative_yaw_deg, 2) == -7.20
+
+    current_yaw = leg1_end_yaw
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            actions.append("ARM")
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            actions.append("DISARM")
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "NONE")
+            actions.append(f"SOURCE:{src}")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        elif "/api/cmd_vel" in url:
+            wz = kwargs.get("json", {}).get("angular", {}).get("z", 0.0)
+            wz_commands.append(wz)
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_count, current_yaw
+        poll_count += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed,
+                    "mode": 0 if disarmed else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "limLinear": 0.0, "limAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": poll_count
+                }
+            }
+        elif "/api/imu" in url:
+            # Step yaw CW in increments of 10° once turning
+            if wz_commands and wz_commands[-1] < -0.05:
+                current_yaw = max(-180.0, current_yaw - 10.0)
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": poll_count,
+                "raw_yaw_deg": current_yaw, "gyro": {"z": -0.40 if not disarmed else 0.001}
+            }
+        elif "/api/localization/status" in url:
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.20, "y": -0.05, "yawDeg": current_yaw, "yaw": math.radians(current_yaw),
+                "is_stationary": disarmed
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {
+                "ok": True, "x": 0.0, "y": 0.0, "yaw_deg": current_yaw, "v_x": 0.0, "w_z": 0.0
+            }
+        elif "/api/encoders" in url:
+            resp.json.return_value = {
+                "ok": True, "schema_version": "1.0", "serialConnected": True,
+                "sequence": poll_count, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    curr_time = 100.0
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.05
+        return curr_time
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_time), \
+         patch("time.sleep", return_value=None):
+
+        mission.execute_leg2_rotation(180.0)
+
+    # 1. State transitions & ownership
+    assert "ARM" in actions
+    assert "SOURCE:CALIBRATION_TEST" in actions
+    assert "DISARM" in actions
+    assert actions[-1] == "SOURCE:NONE"
+
+    # 2. Clockwise turn contract: all active angular velocity commands must be strictly negative
+    active_wz = [w for w in wz_commands if abs(w) > 0.001]
+    assert len(active_wz) > 0
+    assert all(w < 0 for w in active_wz), f"Violated clockwise contract: {active_wz}"
+
+    # 3. Transitions logged with correct provenance
+    end_t = [t for t in mission.recorder.transitions if t["stage"] == "LEG2_ROTATION_END"]
+    assert len(end_t) == 1
+    details = end_t[0]["details"]
+    assert details["leg1_veer_cw_deg"] == 7.20
+    assert abs(details["turned_cw_from_home_deg"] - 180.0) <= 1.0
+    assert abs(details["final_rel_yaw_deg"] - (-180.0)) <= 1.0
+
+
+def test_leg2_reciprocal_target_counter_clockwise_leg1_veer():
+    """
+    Focused Test: Leg 2 settled target is the reciprocal of starting HOME heading
+    when Leg 1 veers COUNTER-CLOCKWISE (e.g. -4.18° CW / +4.18° CCW veer, as in run 20260927_114620).
+    Verifies:
+    1. Remaining turn increases from 180.0° to 184.18° CW.
+    2. Rotation is strictly CLOCKWISE (wz < 0) for the full 184.18° arc; no CCW motion.
+    3. Completes at exactly 180.0° CW from HOME.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    actions = []
+    wz_commands = []
+    poll_count = 0
+    disarmed = False
+
+    home_raw_yaw = 0.16
+    leg1_veer_cw = -4.18 # CCW veer during Leg 1
+    mission.yaw_tracker.update(math.radians(home_raw_yaw))
+    leg1_end_yaw = home_raw_yaw - leg1_veer_cw # +4.34°
+    mission.yaw_tracker.update(math.radians(leg1_end_yaw))
+    assert round(mission.yaw_tracker.relative_yaw_deg, 2) == 4.18
+
+    # In this test, current_yaw turns CW from +4.34° down to -179.84° (184.18° CW turn)
+    current_acc_cw = 0.0 # CW degrees turned during Leg 2
+    required_turn_cw = 184.18
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            actions.append("ARM")
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            actions.append("DISARM")
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "NONE")
+            actions.append(f"SOURCE:{src}")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        elif "/api/cmd_vel" in url:
+            wz = kwargs.get("json", {}).get("angular", {}).get("z", 0.0)
+            wz_commands.append(wz)
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_count, current_acc_cw
+        poll_count += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed,
+                    "mode": 0 if disarmed else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "limLinear": 0.0, "limAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": poll_count
+                }
+            }
+        elif "/api/imu" in url:
+            if wz_commands and wz_commands[-1] < -0.05:
+                current_acc_cw = min(required_turn_cw, current_acc_cw + 12.0)
+            # Physical raw yaw: leg1_end_yaw - current_acc_cw
+            raw_val = leg1_end_yaw - current_acc_cw
+            while raw_val < -180.0: raw_val += 360.0
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": poll_count,
+                "raw_yaw_deg": raw_val, "gyro": {"z": -0.40 if not disarmed else 0.001}
+            }
+        elif "/api/localization/status" in url:
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.20, "y": -0.05, "yawDeg": leg1_end_yaw - current_acc_cw,
+                "is_stationary": disarmed
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {
+                "ok": True, "x": 0.0, "y": 0.0, "yaw_deg": leg1_end_yaw - current_acc_cw, "v_x": 0.0, "w_z": 0.0
+            }
+        elif "/api/encoders" in url:
+            resp.json.return_value = {
+                "ok": True, "schema_version": "1.0", "serialConnected": True,
+                "sequence": poll_count, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    curr_time = 100.0
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.05
+        return curr_time
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_time), \
+         patch("time.sleep", return_value=None):
+
+        mission.execute_leg2_rotation(180.0)
+
+    # 1. Clockwise turn contract preserved: all active wz strictly negative
+    active_wz = [w for w in wz_commands if abs(w) > 0.001]
+    assert len(active_wz) > 0
+    assert all(w < 0 for w in active_wz), f"Violated clockwise contract: {active_wz}"
+
+    # 2. Transition records
+    end_t = [t for t in mission.recorder.transitions if t["stage"] == "LEG2_ROTATION_END"]
+    assert len(end_t) == 1
+    details = end_t[0]["details"]
+    assert details["leg1_veer_cw_deg"] == -4.18
+    assert abs(details["turned_cw_from_home_deg"] - 180.0) <= 1.0
+
+
+def test_leg2_reciprocal_target_angle_wrap_positive_boundary():
+    """
+    Focused Test: Leg 2 explicit angle wrap handling across +180° / -180° boundary.
+    HOME raw yaw is +170.0°. Reciprocal is -10.0°.
+    Leg 1 veers CW by +5.0° (raw yaw +165.0°).
+    Leg 2 turns CW through +180° / -180° to -10.0°.
+    Verifies ContinuousYawTracker unwraps correctly without discontinuity and reaches reciprocal.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    actions = []
+    wz_commands = []
+    poll_count = 0
+    disarmed = False
+
+    home_raw_yaw = 170.0
+    leg1_veer_cw = 5.0
+    mission.yaw_tracker.update(math.radians(home_raw_yaw))
+    leg1_end_yaw = home_raw_yaw - leg1_veer_cw # +165.0°
+    mission.yaw_tracker.update(math.radians(leg1_end_yaw))
+
+    current_acc_cw = 0.0
+    required_turn_cw = 175.0 # 180.0 - 5.0
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            actions.append("ARM")
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            actions.append("DISARM")
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "NONE")
+            actions.append(f"SOURCE:{src}")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        elif "/api/cmd_vel" in url:
+            wz = kwargs.get("json", {}).get("angular", {}).get("z", 0.0)
+            wz_commands.append(wz)
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_count, current_acc_cw
+        poll_count += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed,
+                    "mode": 0 if disarmed else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "limLinear": 0.0, "limAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": poll_count
+                }
+            }
+        elif "/api/imu" in url:
+            if wz_commands and wz_commands[-1] < -0.05:
+                current_acc_cw = min(required_turn_cw, current_acc_cw + 15.0)
+            # Physical raw yaw wrapping across +180°/-180°:
+            # 165° -> 150° -> ... -> 0° -> -10°
+            raw_val = leg1_end_yaw - current_acc_cw
+            while raw_val > 180.0: raw_val -= 360.0
+            while raw_val < -180.0: raw_val += 360.0
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": poll_count,
+                "raw_yaw_deg": raw_val, "gyro": {"z": -0.40 if not disarmed else 0.001}
+            }
+        elif "/api/localization/status" in url:
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.20, "y": -0.05, "yawDeg": -10.0,
+                "is_stationary": disarmed
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {
+                "ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0
+            }
+        elif "/api/encoders" in url:
+            resp.json.return_value = {
+                "ok": True, "schema_version": "1.0", "serialConnected": True,
+                "sequence": poll_count, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    curr_time = 100.0
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.05
+        return curr_time
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_time), \
+         patch("time.sleep", return_value=None):
+
+        mission.execute_leg2_rotation(180.0)
+
+    end_t = [t for t in mission.recorder.transitions if t["stage"] == "LEG2_ROTATION_END"]
+    assert len(end_t) == 1
+    details = end_t[0]["details"]
+    assert details["target_reciprocal_yaw_deg"] == -10.0
+    assert abs(details["turned_cw_from_home_deg"] - 180.0) <= 1.0
+
+
+def test_leg2_reciprocal_target_angle_wrap_negative_boundary():
+    """
+    Focused Test: Leg 2 angle wrap across negative boundary.
+    HOME raw yaw is -170.0°. Reciprocal is +10.0°.
+    Leg 1 veers CCW by 3.0° (raw yaw -167.0°).
+    Rover turns CW: -167° -> -180° / +180° -> +10.0°.
+    Verifies that angle unwrapping correctly traverses the branch cut in the CW direction.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    actions = []
+    wz_commands = []
+    poll_count = 0
+    disarmed = False
+
+    home_raw_yaw = -170.0
+    leg1_veer_cw = -3.0 # CCW veer
+    mission.yaw_tracker.update(math.radians(home_raw_yaw))
+    leg1_end_yaw = home_raw_yaw - leg1_veer_cw # -167.0°
+    mission.yaw_tracker.update(math.radians(leg1_end_yaw))
+
+    current_acc_cw = 0.0
+    required_turn_cw = 183.0 # 180.0 - (-3.0)
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            actions.append("ARM")
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            actions.append("DISARM")
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "NONE")
+            actions.append(f"SOURCE:{src}")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        elif "/api/cmd_vel" in url:
+            wz = kwargs.get("json", {}).get("angular", {}).get("z", 0.0)
+            wz_commands.append(wz)
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal poll_count, current_acc_cw
+        poll_count += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed,
+                    "mode": 0 if disarmed else 3,
+                    "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "limLinear": 0.0, "limAngular": wz_commands[-1] if wz_commands else 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": poll_count
+                }
+            }
+        elif "/api/imu" in url:
+            if wz_commands and wz_commands[-1] < -0.05:
+                current_acc_cw = min(required_turn_cw, current_acc_cw + 15.0)
+            # Turning CW from -167°: -167 -> -175 -> -180/+180 -> +170 -> ... -> +10
+            raw_val = leg1_end_yaw - current_acc_cw
+            while raw_val > 180.0: raw_val -= 360.0
+            while raw_val < -180.0: raw_val += 360.0
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": poll_count,
+                "raw_yaw_deg": raw_val, "gyro": {"z": -0.40 if not disarmed else 0.001}
+            }
+        elif "/api/localization/status" in url:
+            resp.json.return_value = {
+                "ok": True, "localized": True, "state": "LOCALIZED",
+                "x": 1.20, "y": -0.05, "yawDeg": 10.0,
+                "is_stationary": disarmed
+            }
+        elif "/api/odom" in url:
+            resp.json.return_value = {
+                "ok": True, "x": 0.0, "y": 0.0, "yaw_deg": 0.0, "v_x": 0.0, "w_z": 0.0
+            }
+        elif "/api/encoders" in url:
+            resp.json.return_value = {
+                "ok": True, "schema_version": "1.0", "serialConnected": True,
+                "sequence": poll_count, "encoders": {"m1": 0, "m2": 0, "m3": 0, "m4": 0}
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    curr_time = 100.0
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.05
+        return curr_time
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_time), \
+         patch("time.sleep", return_value=None):
+
+        mission.execute_leg2_rotation(180.0)
+
+    end_t = [t for t in mission.recorder.transitions if t["stage"] == "LEG2_ROTATION_END"]
+    assert len(end_t) == 1
+    details = end_t[0]["details"]
+    assert details["target_reciprocal_yaw_deg"] == 10.0
+    assert abs(details["turned_cw_from_home_deg"] - 180.0) <= 1.0
+
+
+def test_leg2_refuses_when_starting_home_reference_missing():
+    """
+    Focused Test: Leg 2 refuses mission when starting HOME IMU reference is missing.
+    Verifies that rather than silently falling back to a relative 180° turn,
+    the controller immediately stops, disarms, and raises MissionAbortException.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    assert mission.yaw_tracker.initial_yaw is None
+
+    disarmed = False
+    seq_num = 1
+    curr_time = 100.0
+
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.060
+        return curr_time
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal seq_num
+        seq_num += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed, "mode": 0 if disarmed else 3, "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": seq_num
+                }
+            }
+        elif "/api/imu" in url:
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 10,
+                "stale": False, "sequence": seq_num, "raw_yaw_deg": 0.0
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    with patch("requests.post", side_effect=mock_post),          patch("requests.get", side_effect=mock_get),          patch("time.monotonic", side_effect=mock_time),          patch("time.sleep", return_value=None):
+
+        with pytest.raises(MissionAbortException) as exc_info:
+            mission.execute_leg2_rotation(180.0)
+
+    assert "Missing starting HOME IMU reference across Leg 1 and Leg 2" in str(exc_info.value)
+    assert "Refusing relative 180° fallback turn" in str(exc_info.value)
+
+
+def test_leg2_refuses_when_imu_telemetry_stale():
+    """
+    Focused Test: Leg 2 refuses mission when active IMU telemetry is stale (>500 ms).
+    Verifies that rather than executing rotation on stale heading data,
+    the controller immediately stops, disarms, and raises MissionAbortException.
+    """
+    mission = GoldStandardMission(dry_run=False)
+    # Provide initial reference so it passes the missing-check
+    mission.yaw_tracker.update(0.0)
+
+    disarmed = False
+    seq_num = 1
+    curr_time = 100.0
+
+    def mock_time():
+        nonlocal curr_time
+        curr_time += 0.060
+        return curr_time
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal disarmed
+        resp = MagicMock(status_code=200)
+        if "/api/drive/arm" in url:
+            disarmed = False
+            resp.json.return_value = {"ok": True, "armed": True, "mode": 3}
+        elif "/api/drive/disarm" in url:
+            disarmed = True
+            resp.json.return_value = {"ok": True, "armed": False, "mode": 0}
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST")
+            resp.json.return_value = {"ok": True, "cmdSource": src}
+        return resp
+
+    def mock_get(url, **kwargs):
+        nonlocal seq_num
+        seq_num += 1
+        resp = MagicMock(status_code=200)
+        if "/api/drive/status" in url:
+            resp.json.return_value = {
+                "ok": True,
+                "status": {
+                    "armed": not disarmed, "mode": 0 if disarmed else 3, "bootCount": 1,
+                    "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0,
+                    "cmdSource": "CALIBRATION_TEST" if not disarmed else "NONE",
+                    "seq": seq_num
+                }
+            }
+        elif "/api/imu" in url:
+            # First polls during handshake can be fresh, then stale when entering Leg 2 rotation
+            resp.json.return_value = {
+                "ok": True, "serialConnected": True, "dataAgeMs": 850,
+                "stale": True, "sequence": seq_num, "raw_yaw_deg": 0.0
+            }
+        else:
+            resp.json.return_value = {"ok": True}
+        return resp
+
+    with patch("requests.post", side_effect=mock_post),          patch("requests.get", side_effect=mock_get),          patch("time.monotonic", side_effect=mock_time),          patch("time.sleep", return_value=None):
+
+        with pytest.raises(MissionAbortException) as exc_info:
+            mission.execute_leg2_rotation(180.0)
+
+    assert "Active IMU telemetry is stale" in str(exc_info.value)
+    assert "Refusing to execute rotation" in str(exc_info.value)
+
+
+def test_baseline_imu_reference_capture_and_stale_refusal():
+    """
+    Focused Test: verify_and_capture_baseline_imu_reference captures fresh heading
+    and fails closed if IMU telemetry is stale or disconnected.
+    """
+    mission = GoldStandardMission(dry_run=False)
+
+    # Case 1: Fresh telemetry -> Successfully captures reference
+    def mock_fresh_poll():
+        mission.latest_telemetry["imu"] = {
+            "raw_yaw_deg": 14.5,
+            "serialConnected": True,
+            "stale": False,
+            "dataAgeMs": 15,
+            "sequence": 101
+        }
+    mission.poll_all_telemetry = mock_fresh_poll
+
+    ref_yaw = mission.verify_and_capture_baseline_imu_reference()
+    assert ref_yaw == 14.5
+    assert mission.yaw_tracker.initial_yaw is not None
+    assert round(math.degrees(mission.yaw_tracker.initial_yaw), 1) == 14.5
+
+    # Case 2: Stale telemetry -> Fails closed with MissionAbortException
+    mission2 = GoldStandardMission(dry_run=False)
+    def mock_stale_poll():
+        mission2.latest_telemetry["imu"] = {
+            "raw_yaw_deg": 14.5,
+            "serialConnected": True,
+            "stale": True,
+            "dataAgeMs": 750,
+            "sequence": 101
+        }
+    mission2.poll_all_telemetry = mock_stale_poll
+
+    with pytest.raises(MissionAbortException) as exc_info:
+        mission2.verify_and_capture_baseline_imu_reference(max_retries=2, retry_delay_s=0.01)
+
+    assert "Pre-mission IMU reference check failed" in str(exc_info.value)
+    assert "Refusing to arm or execute mission" in str(exc_info.value)

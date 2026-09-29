@@ -53,8 +53,10 @@ Planned Mission Legs (Production Nav2 & Approach Distinctions):
   1. LEG 1 (Outbound Forward 2.000 ft / {FORWARD_DISTANCE_M:.4f} m via Nav2):
      - Target:   ({l1['x']:.4f} m, {l1['y']:.4f} m, heading: {l1['yaw_deg']:+.2f}°)
      - Velocity: Production Nav2 cap {NORMAL_LINEAR_SPEED:.2f} m/s linear, 0.50 rad/s angular
-  2. LEG 2 (Explicit 180.0° CLOCKWISE In-Place Rotation via Exact-Motion):
-     - Target:   In-place CW rotation to {l2['yaw_deg']:+.2f}° (Delta: -180.0°)
+  2. LEG 2 (Explicit CLOCKWISE Reciprocal In-Place Rotation via Exact-Motion):
+     - Target:   Reciprocal of starting HOME heading ({l2['yaw_deg']:+.2f}°)
+     - Contract: Clockwise rotation angle varies with outbound Leg 1 heading change
+                 to settle at exact reciprocal (nominal -180.0° adjusted by Leg 1 veer)
      - Velocity: Cruise limit {ROTATION_180_MAX_SPEED:.2f} rad/s, Creep limit {FINAL_YAW_ALIGNMENT_MAX_SPEED:.2f} rad/s
   3. LEG 3 (Return to HOME Coordinates via Nav2 - Retaining Return Heading):
      - Target:   ({l3['x']:.4f} m, {l3['y']:.4f} m, heading: {l3['yaw_deg']:+.2f}°)
@@ -309,7 +311,7 @@ def run_cli():
 
             print("[DRY-RUN] Simulating Leg 2 (180° CW In-Place Rotation via Exact-Motion)...")
             mission.recorder.record_transition("LEG2_ROTATION")
-            mission.yaw_tracker.reset()
+            # Preserve continuous signed IMU yaw across Leg 1 and Leg 2
             for step in range(30):
                 progress = step / 29.0
                 curr_turn = progress * 180.0
@@ -367,7 +369,7 @@ def run_cli():
 
             # Capture baseline telemetry frame before dispatch
             mission.start_continuous_recording(rate_hz=25.0)
-            mission.poll_all_telemetry()
+            mission.verify_and_capture_baseline_imu_reference()
             mission.record_tick("BASELINE")
             
             # Leg 1: Outbound Forward 2.000 ft (0.6096 m) along saved HOME heading
