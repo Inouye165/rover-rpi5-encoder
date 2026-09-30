@@ -1246,8 +1246,30 @@ class GoldStandardMission:
                                         f"{stage_name} post-goal check failed: rover did not confirm armed=false, mode=0, cmdSource=NONE, and zero velocity! (drive={drive})"
                                     )
 
+                                # Request fresh localization after stopping to avoid reporting stale in-motion pose
+                                if not self.dry_run:
+                                    try:
+                                        self._http_post(f"{self.cockpit_url}/api/navigation/refresh_localization", timeout=1.5)
+                                    except Exception:
+                                        pass
+
+                                    t_refresh_start = time.monotonic()
+                                    while time.monotonic() - t_refresh_start < 2.0:
+                                        self.poll_all_telemetry()
+                                        amcl_check = self.latest_telemetry.get("amcl") or {}
+                                        if amcl_check.get("ageMs", 9999) <= 500 and (amcl_check.get("is_stationary") is not False):
+                                            break
+                                        time.sleep(0.04)
+
                                 # Update reconciliation snapshot with verified settled rest pose
                                 amcl_pose_settled = self.latest_telemetry.get("amcl") or {}
+                                if not self.dry_run:
+                                    try:
+                                        r_stat = self._http_get(f"{self.bridge_url}/api/nav/status", timeout=0.5)
+                                        if r_stat and r_stat.status_code == 200:
+                                            nav_stat = r_stat.json().get("navigation") or nav_stat
+                                    except Exception:
+                                        pass
                                 tf_pose_settled = nav_stat.get("success_tf_pose") or nav_stat.get("tf_pose") or {}
                                 amcl_err_settled_cm = None
                                 tf_err_settled_cm = None
@@ -1419,10 +1441,25 @@ class GoldStandardMission:
         # Reciprocal of starting HOME heading under a clockwise turn
         target_reciprocal_yaw_deg = wrap_angle_deg(home_yaw_deg - target_cw_deg)
 
+        # Capture sensor readings at turn start
+        turn_start_raw_yaw = float(imu.get("raw_yaw_deg", 0.0))
+        turn_start_rel_yaw = float(self.yaw_tracker.relative_yaw_deg)
+        turn_start_turned_cw = -turn_start_rel_yaw
+        odom0 = self.latest_telemetry.get("odom") or {}
+        amcl0 = self.latest_telemetry.get("amcl") or {}
+        turn_start_odom_yaw = float(odom0.get("yaw_deg", 0.0))
+        turn_start_amcl_yaw = float(amcl0.get("yaw_deg", 0.0))
+
         self.recorder.record_transition("LEG2_ROTATION_START", {
             "target_deg": -target_cw_deg,
             "target_cw_deg": target_cw_deg,
             "home_yaw_deg": round(home_yaw_deg, 2),
+            "starting_heading_deg": round(home_yaw_deg, 2),
+            "turn_start_heading_deg": round(turn_start_raw_yaw, 2),
+            "turn_start_rel_yaw_deg": round(turn_start_rel_yaw, 2),
+            "turn_start_turned_cw_deg": round(turn_start_turned_cw, 2),
+            "turn_start_odom_yaw_deg": round(turn_start_odom_yaw, 2),
+            "turn_start_amcl_yaw_deg": round(turn_start_amcl_yaw, 2),
             "leg1_veer_cw_deg": round(leg1_veer_cw_deg, 2),
             "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2)
         })
@@ -1438,15 +1475,122 @@ class GoldStandardMission:
             turned_cw = -self.yaw_tracker.relative_yaw_deg
             remaining_deg = target_cw_deg - turned_cw
 
-            if remaining_deg <= 1.0: # Turn complete
+            if remaining_deg <= 1.0: # Target reached: command zero and begin settling verification
                 self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
-                print(f"[LEG 2 COMPLETE] Reciprocal CW rotation completed in {time.monotonic() - t_start:.2f}s (Traveled: {turned_cw:.1f}° CW from HOME, Leg 1 veer: {leg1_veer_cw_deg:+.1f}°).")
-                self.recorder.record_transition("LEG2_ROTATION_END", {
-                    "turned_cw_from_home_deg": round(turned_cw, 2),
-                    "final_rel_yaw_deg": round(self.yaw_tracker.relative_yaw_deg, 2),
-                    "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2),
-                    "leg1_veer_cw_deg": round(leg1_veer_cw_deg, 2)
+
+                # Capture milestone: heading when zero was commanded
+                imu_zero = self.latest_telemetry.get("imu") or {}
+                odom_zero = self.latest_telemetry.get("odom") or {}
+                amcl_zero = self.latest_telemetry.get("amcl") or {}
+
+                zero_cmd_raw_yaw = float(imu_zero.get("raw_yaw_deg", 0.0))
+                zero_cmd_rel_yaw = float(self.yaw_tracker.relative_yaw_deg)
+                zero_cmd_turned_cw = -zero_cmd_rel_yaw
+                zero_cmd_gyro_z = float(imu_zero.get("gyro_z", 0.0))
+                zero_cmd_odom_yaw = float(odom_zero.get("yaw_deg", 0.0))
+                zero_cmd_amcl_yaw = float(amcl_zero.get("yaw_deg", 0.0))
+
+                self.recorder.record_transition("LEG2_ZERO_COMMANDED", {
+                    "zero_cmd_raw_yaw_deg": round(zero_cmd_raw_yaw, 2),
+                    "zero_cmd_rel_yaw_deg": round(zero_cmd_rel_yaw, 2),
+                    "zero_cmd_turned_cw_deg": round(zero_cmd_turned_cw, 2),
+                    "zero_cmd_heading_deg": round(zero_cmd_raw_yaw, 2),
+                    "zero_cmd_gyro_z": round(zero_cmd_gyro_z, 4),
+                    "zero_cmd_odom_yaw_deg": round(zero_cmd_odom_yaw, 2),
+                    "zero_cmd_amcl_yaw_deg": round(zero_cmd_amcl_yaw, 2),
+                    "remaining_deg": round(remaining_deg, 2),
+                    "target_cw_deg": round(target_cw_deg, 2),
+                    "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2)
                 })
+
+                # Settle verification phase: hold zero velocity, continue recording ticks, and wait for verified rest
+                t_settle_start = time.monotonic()
+                settle_rest_start = None
+                min_settle_duration_s = 1.0
+                max_settle_timeout_s = 3.0
+
+                while time.monotonic() - t_settle_start < max_settle_timeout_s:
+                    t_settle_cycle = time.monotonic()
+                    self.poll_all_telemetry()
+                    self.verify_safety_invariants("LEG2_ROTATION")
+                    self.send_velocity(0.0, 0.0, source="CALIBRATION_TEST", force_zero=True)
+                    self.record_tick("LEG2_ROTATION")
+
+                    measured_wz = abs(self.latest_telemetry.get("imu", {}).get("gyro_z", 0.0))
+                    if measured_wz <= 0.02:
+                        if settle_rest_start is None:
+                            settle_rest_start = time.monotonic()
+                        elif time.monotonic() - settle_rest_start >= min_settle_duration_s:
+                            break
+                    else:
+                        settle_rest_start = None
+
+                    elapsed = time.monotonic() - t_settle_cycle
+                    time.sleep(max(0.002, (1.0 / TELEMETRY_RATE_HZ) - elapsed))
+
+                # Capture fully settled heading and milestone measurements
+                imu_settled = self.latest_telemetry.get("imu") or {}
+                odom_settled = self.latest_telemetry.get("odom") or {}
+                amcl_settled = self.latest_telemetry.get("amcl") or {}
+
+                settled_raw_yaw = float(imu_settled.get("raw_yaw_deg", 0.0))
+                settled_rel_yaw = float(self.yaw_tracker.relative_yaw_deg)
+                settled_turned_cw = -settled_rel_yaw
+                settled_odom_yaw = float(odom_settled.get("yaw_deg", 0.0))
+                settled_amcl_yaw = float(amcl_settled.get("yaw_deg", 0.0))
+                settled_gyro_z = float(imu_settled.get("gyro_z", 0.0))
+
+                rotation_after_zero_deg = round(settled_turned_cw - zero_cmd_turned_cw, 2)
+                settled_error_deg = round(abs(settled_turned_cw - target_cw_deg), 2)
+                settled_error_to_reciprocal_deg = round(abs(wrap_angle_deg(settled_raw_yaw - target_reciprocal_yaw_deg)), 2)
+
+                # Sensor disagreement calculations across the turn
+                delta_imu_cw = round(settled_turned_cw - turn_start_turned_cw, 2)
+                delta_odom_deg = round(wrap_angle_deg(turn_start_odom_yaw - settled_odom_yaw), 2)
+                delta_amcl_deg = round(wrap_angle_deg(turn_start_amcl_yaw - settled_amcl_yaw), 2)
+
+                imu_vs_odom_diff = round(abs(delta_imu_cw - delta_odom_deg), 2)
+                imu_vs_amcl_diff = round(abs(delta_imu_cw - delta_amcl_deg), 2)
+                settled_imu_vs_amcl_diff = round(abs(wrap_angle_deg(settled_raw_yaw - settled_amcl_yaw)), 2)
+                settled_imu_vs_odom_diff = round(abs(wrap_angle_deg(settled_raw_yaw - settled_odom_yaw)), 2)
+
+                print(f"[LEG 2 COMPLETE] Reciprocal CW rotation fully settled in {time.monotonic() - t_start:.2f}s (Zeroed at: {zero_cmd_turned_cw:.1f}° CW, Settled at: {settled_turned_cw:.1f}° CW, Post-zero rotation: {rotation_after_zero_deg:+.2f}°, Settled error: {settled_error_deg:.2f}°).")
+
+                leg2_details = {
+                    "starting_heading_deg": round(home_yaw_deg, 2),
+                    "turn_start_heading_deg": round(turn_start_raw_yaw, 2),
+                    "turn_start_rel_yaw_deg": round(turn_start_rel_yaw, 2),
+                    "leg1_veer_cw_deg": round(leg1_veer_cw_deg, 2),
+                    "target_cw_deg": round(target_cw_deg, 2),
+                    "target_reciprocal_yaw_deg": round(target_reciprocal_yaw_deg, 2),
+                    "zero_cmd_heading_deg": round(zero_cmd_raw_yaw, 2),
+                    "zero_cmd_rel_yaw_deg": round(zero_cmd_rel_yaw, 2),
+                    "zero_cmd_turned_cw_deg": round(zero_cmd_turned_cw, 2),
+                    "settled_heading_deg": round(settled_raw_yaw, 2),
+                    "settled_rel_yaw_deg": round(settled_rel_yaw, 2),
+                    "settled_turned_cw_deg": round(settled_turned_cw, 2),
+                    "rotation_after_zero_deg": round(rotation_after_zero_deg, 2),
+                    "settled_error_deg": round(settled_error_deg, 2),
+                    "settled_error_to_reciprocal_deg": round(settled_error_to_reciprocal_deg, 2),
+                    "settled_amcl_yaw_deg": round(settled_amcl_yaw, 2),
+                    "settled_odom_yaw_deg": round(settled_odom_yaw, 2),
+                    "settled_gyro_z": round(settled_gyro_z, 4),
+                    "sensor_disagreement": {
+                        "delta_imu_cw_deg": delta_imu_cw,
+                        "delta_odom_cw_deg": delta_odom_deg,
+                        "delta_amcl_cw_deg": delta_amcl_deg,
+                        "imu_vs_odom_deg": imu_vs_odom_diff,
+                        "imu_vs_amcl_deg": imu_vs_amcl_diff,
+                        "settled_imu_vs_amcl_heading_diff_deg": settled_imu_vs_amcl_diff,
+                        "settled_imu_vs_odom_heading_diff_deg": settled_imu_vs_odom_diff
+                    },
+                    "turned_cw_from_home_deg": round(settled_turned_cw, 2),
+                    "final_rel_yaw_deg": round(settled_rel_yaw, 2)
+                }
+
+                self.recorder.record_transition("LEG2_ROTATION_END", leg2_details)
+                self.leg2_rotation_details = leg2_details
+
                 # Disarm explicitly and release ownership
                 self.disarm()
                 self.set_command_source("NONE")
@@ -1561,15 +1705,18 @@ class GoldStandardMission:
             tf_x, tf_y = amcl_x, amcl_y
         tf_err_cm = round(math.hypot(tf_x - home_x, tf_y - home_y) * 100.0, 2)
 
-        # 7. Extract stationary scan-to-map estimate
+        # 7. Extract stationary scan-to-map estimate using robot's actual settled orientation
         scan_x = None
         scan_y = None
         scan_err_cm = None
         scan_overlap = None
         scan_ok = True
 
+        # Use actual settled heading from fresh AMCL localization rather than assuming theoretical return_yaw
+        eval_yaw = float(amcl.get("yaw_rad", math.radians(float(amcl.get("yaw_deg", math.degrees(return_yaw))))))
+
         try:
-            url = f"{self.cockpit_url}/api/navigation/validate_home?yaw_rad={return_yaw:.4f}&x={home_x:.4f}&y={home_y:.4f}"
+            url = f"{self.cockpit_url}/api/navigation/validate_home?yaw_rad={eval_yaw:.4f}&x={home_x:.4f}&y={home_y:.4f}"
             r_val = self._http_get(url, timeout=1.5)
             if r_val and r_val.status_code == 200:
                 val_data = r_val.json()

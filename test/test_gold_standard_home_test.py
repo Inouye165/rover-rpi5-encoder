@@ -4286,3 +4286,246 @@ def test_baseline_imu_reference_capture_and_stale_refusal():
 
     assert "Pre-mission IMU reference check failed" in str(exc_info.value)
     assert "Refusing to arm or execute mission" in str(exc_info.value)
+
+
+def test_forward_and_turn_shortened_mission_cli_and_grading(tmp_path):
+    """
+    Verifies the shortened Rover 1 test (Forward 2 ft -> stop -> clockwise reciprocal turn -> stop & disarm -> end):
+    1. CLI handles --stop-after-leg2 and --forward-turn-only.
+    2. Dry-run executes Legs 1 and 2 only (no Leg 3 or Leg 4).
+    3. Metadata records mission_type="FORWARD_AND_TURN".
+    4. Grader evaluates leg1_outbound_distance and leg2_settled_reciprocal_heading.
+    5. Exposes zero commanded heading, post-zero rotation drift, settled heading, and sensor disagreement.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from tools.gold_standard_home_test.grader import MissionGrader
+    from tools.gold_standard_home_test.cli import run_cli
+    import sys
+    import json
+
+    report_dir = str(tmp_path / "reports")
+    test_args = [
+        "cli.py",
+        "--dry-run",
+        "--stop-after-leg2",
+        "--skip-confirm",
+        "--report-dir", report_dir
+    ]
+
+    with patch.object(sys, "argv", test_args):
+        try:
+            run_cli()
+        except SystemExit as e:
+            assert e.code == 0 or e.code is None
+
+    # Load the generated report
+    report_files = os.listdir(report_dir)
+    assert len(report_files) == 1
+    report_file = os.path.join(report_dir, report_files[0])
+    with open(report_file, "r", encoding="utf-8") as f:
+        run_data = json.load(f)
+
+    meta = run_data["metadata"]
+    assert meta["mission_type"] == "FORWARD_AND_TURN"
+    assert meta["stop_after_leg2"] is True
+
+    trans = run_data["transitions"]
+    stages = [t["stage"] for t in trans]
+    assert "LEG1_FORWARD_START" in stages
+    assert "LEG1_FORWARD_END" in stages
+    assert "LEG2_ROTATION_START" in stages
+    assert "LEG2_ZERO_COMMANDED" in stages
+    assert "LEG2_ROTATION_END" in stages
+    # Verify no Leg 3 or Leg 4 stages
+    assert "LEG3_RETURN_START" not in stages
+    assert "LEG4_SETTLE_START" not in stages
+
+    # Grade the run
+    grade = MissionGrader.grade_run(run_data)
+    assert grade["overall_status"] == "PASS"
+    crit = grade["criteria"]
+    assert "leg1_outbound_distance" in crit
+    assert crit["leg1_outbound_distance"]["passed"] is True
+    assert "leg2_settled_reciprocal_heading" in crit
+    assert crit["leg2_settled_reciprocal_heading"]["passed"] is True
+    assert "final_home_position_error" not in crit
+
+    metrics = grade["metrics"]
+    assert metrics["mission_type"] == "FORWARD_AND_TURN"
+    assert "zero_cmd_heading_deg" in metrics
+    assert "settled_heading_deg" in metrics
+    assert "rotation_after_zero_deg" in metrics
+    assert "sensor_disagreement" in metrics
+
+
+def test_leg2_zero_command_and_settling_drift_separation():
+    """
+    Verifies that execute_leg2_rotation cleanly separates the angle at zero request
+    from post-zero rotation drift during the settling phase.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(dry_run=False)
+    mission.yaw_tracker.update(0.0)
+
+    armed_state = False
+    turn_loop_step = 0
+    seq_counter = 0
+    zero_commanded = False
+    sim_time = [100.0]
+
+    def mock_monotonic():
+        sim_time[0] += 0.06
+        return sim_time[0]
+
+    def mock_poll():
+        nonlocal turn_loop_step, seq_counter, zero_commanded
+        seq_counter += 1
+        # Baseline heading: 0.0 deg. Turn target: 180.0 deg CW.
+        if not zero_commanded and (not armed_state or mission.current_cmd_source != "CALIBRATION_TEST"):
+            turned = 0.0
+            wz = 0.0
+        elif not zero_commanded:
+            turn_loop_step += 1
+            if turn_loop_step == 1:
+                turned = 160.0
+                wz = -0.20
+            elif turn_loop_step == 2:
+                turned = 175.0
+                wz = -0.18
+            else:
+                # Reached zero command trigger (remaining <= 1.0)
+                turned = 179.5
+                wz = -0.18
+                zero_commanded = True
+        else:
+            # Post-zero settling: drifts an additional 1.2 deg to 180.7 deg, wz drops to rest
+            turned = 180.7
+            wz = 0.01
+
+        yaw_deg = -turned
+        mission.latest_telemetry = {
+            "imu": {
+                "raw_yaw_deg": yaw_deg,
+                "gyro_z": wz,
+                "serialConnected": True,
+                "stale": False,
+                "dataAgeMs": 10,
+                "sequence": 1000 + seq_counter
+            },
+            "odom": {"yaw_deg": yaw_deg},
+            "amcl": {"yaw_deg": yaw_deg, "localized": True, "state": "LOCALIZED", "is_stationary": True, "isStationary": True},
+            "drive": {"armed": armed_state, "mode": 3 if armed_state else 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "CALIBRATION_TEST" if armed_state else "NONE"}
+        }
+        mission.last_imu_seq_adv_time = sim_time[0]
+        mission.yaw_tracker.update(math.radians(yaw_deg))
+
+    mission.poll_all_telemetry = mock_poll
+
+    def mock_post(url, *args, **kwargs):
+        nonlocal armed_state
+        if "/api/drive/arm" in url:
+            armed_state = True
+            return MagicMock(status_code=200, json=lambda: {"ok": True, "armed": True, "mode": 3})
+        elif "/api/drive/disarm" in url:
+            armed_state = False
+            return MagicMock(status_code=200, json=lambda: {"ok": True, "armed": False, "mode": 0})
+        elif "/api/command-source" in url:
+            src = kwargs.get("json", {}).get("source", "CALIBRATION_TEST")
+            return MagicMock(status_code=200, json=lambda: {"ok": True, "cmdSource": src})
+        return MagicMock(status_code=200, json=lambda: {"ok": True})
+
+    def mock_get(url, *args, **kwargs):
+        return MagicMock(status_code=200, json=lambda: {
+            "ok": True,
+            "status": {
+                "armed": armed_state,
+                "mode": 3 if armed_state else 0,
+                "seq": 999,
+                "is_stationary": True,
+                "reqLinear": 0.0, "reqAngular": 0.0,
+                "limLinear": 0.0, "limAngular": 0.0,
+                "cmdSource": "CALIBRATION_TEST" if armed_state else "NONE"
+            }
+        })
+
+    with patch("requests.post", side_effect=mock_post), \
+         patch("requests.get", side_effect=mock_get), \
+         patch("time.monotonic", side_effect=mock_monotonic), \
+         patch("time.sleep", return_value=None):
+
+        mission.execute_leg2_rotation(180.0)
+
+    # Check recorded transitions
+    zero_trans = [t for t in mission.recorder.transitions if t.get("stage") == "LEG2_ZERO_COMMANDED"]
+    assert len(zero_trans) == 1
+    zero_details = zero_trans[0]["details"]
+    assert zero_details["zero_cmd_turned_cw_deg"] == 179.5
+
+    end_trans = [t for t in mission.recorder.transitions if t.get("stage") == "LEG2_ROTATION_END"]
+    assert len(end_trans) == 1
+    end_details = end_trans[0]["details"]
+    assert end_details["settled_turned_cw_deg"] == 180.7
+    # Post-zero drift should be exactly +1.20 deg
+    assert round(end_details["rotation_after_zero_deg"], 2) == 1.20
+    assert end_details["settled_error_deg"] == 0.70
+
+
+def test_scan_validation_uses_actual_settled_yaw_not_assumed_return_yaw():
+    """
+    Verifies that verify_leg3_settled_home_gate passes the robot's actual settled yaw
+    (from fresh AMCL localization) to the validate_home endpoint, rather than assuming
+    the theoretical intended return yaw.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    mission = GoldStandardMission(dry_run=False)
+
+    # Actual settled AMCL yaw is 171.0 deg, while intended return_yaw is 175.0 deg (3.054 rad)
+    actual_amcl_yaw_deg = 171.0
+    actual_amcl_yaw_rad = math.radians(actual_amcl_yaw_deg)
+
+    captured_url = None
+    def mock_get(url, **kwargs):
+        nonlocal captured_url
+        if "/api/navigation/validate_home" in url:
+            captured_url = url
+            return MagicMock(status_code=200, json=lambda: {"ok": True, "overlap": 0.85, "estimated_pose": {"x": 1.194, "y": -0.045}})
+        elif "/api/drive/status" in url:
+            return MagicMock(status_code=200, json=lambda: {"ok": True, "status": {"armed": False, "mode": 0, "seq": 100, "is_stationary": True}})
+        elif "/api/odom" in url or "/api/nav/status" in url:
+            return MagicMock(status_code=200, json=lambda: {
+                "ok": True,
+                "localization": {
+                    "pose": {"x": 1.194, "y": -0.045, "yaw_deg": actual_amcl_yaw_deg, "yaw_rad": actual_amcl_yaw_rad},
+                    "state": "LOCALIZED",
+                    "localized": True,
+                    "is_stationary": True,
+                    "dataAgeMs": 50,
+                    "cov_x": 0.01, "cov_y": 0.01, "cov_yaw": 0.01
+                }
+            })
+        return MagicMock(status_code=200, json=lambda: {"ok": True})
+
+    def mock_poll():
+        mission.latest_telemetry["amcl"] = {
+            "x": 1.194,
+            "y": -0.045,
+            "yaw_deg": actual_amcl_yaw_deg,
+            "yaw_rad": actual_amcl_yaw_rad,
+            "localized": True,
+            "state": "LOCALIZED",
+            "is_stationary": True,
+            "ageMs": 50
+        }
+        mission.latest_telemetry["drive"] = {"armed": False, "mode": 0}
+
+    mission.poll_all_telemetry = mock_poll
+
+    with patch("requests.get", side_effect=mock_get), \
+         patch("requests.post", return_value=MagicMock(status_code=200, json=lambda: {"ok": True})), \
+         patch("time.sleep", return_value=None):
+        gate_res = mission.verify_leg3_settled_home_gate(home_x=1.194, home_y=-0.045, return_yaw=math.radians(175.0))
+
+    assert captured_url is not None
+    # Must use actual settled yaw (2.9845 rad / 171 deg), NOT 175 deg (3.0543 rad)
+    assert f"yaw_rad={actual_amcl_yaw_rad:.4f}" in captured_url
+    assert gate_res["passed"] is True
