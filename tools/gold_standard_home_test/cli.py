@@ -101,12 +101,19 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
 
     if "leg2_settled_reciprocal_heading" in crit:
         l2_res = crit["leg2_settled_reciprocal_heading"]
-        settled_err = l2_res.get('measured_err_deg', 0.0)
-        settled_h = l2_res.get('settled_heading_deg')
-        tgt_recip = l2_res.get('target_reciprocal_yaw_deg')
-        post_rot = l2_res.get('rotation_after_zero_deg')
-        post_rot_str = f"{post_rot:+.2f}°" if post_rot is not None else "N/A"
-        print(f"  • Leg 2 Settled Reciprocal:  Settled: {settled_h}° vs Target: {tgt_recip}° (Error: {settled_err:.2f}° | Post-zero drift: {post_rot_str} | Threshold <= {l2_res['threshold_deg']:.1f}°) -> {'PASS' if l2_res['passed'] else 'FAIL'}")
+        l2_status = l2_res.get("status") or ("PASS" if l2_res.get("passed") else "FAIL")
+        if l2_status == "NOT RUN":
+            print(f"  • Leg 2 Settled Reciprocal:  {l2_res.get('details', 'NOT RUN')} -> NOT RUN")
+        else:
+            settled_err = l2_res.get('measured_err_deg')
+            settled_h = l2_res.get('settled_heading_deg')
+            tgt_recip = l2_res.get('target_reciprocal_yaw_deg')
+            post_rot = l2_res.get('rotation_after_zero_deg')
+            settled_str = f"{settled_h:+.2f}°" if settled_h is not None else "NOT RUN"
+            tgt_str = f"{tgt_recip:+.2f}°" if tgt_recip is not None else "NOT RUN"
+            err_str = f"{settled_err:.2f}°" if settled_err is not None else "NOT RUN"
+            post_rot_str = f"{post_rot:+.2f}°" if post_rot is not None else "NOT RUN"
+            print(f"  • Leg 2 Settled Reciprocal:  Settled: {settled_str} vs Target: {tgt_str} (Error: {err_str} | Post-zero drift: {post_rot_str} | Threshold <= {l2_res['threshold_deg']:.1f}°) -> {l2_status}")
 
     if "final_home_position_error" in crit:
         pos_res = crit["final_home_position_error"]
@@ -159,17 +166,22 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     
     print("\nMission Metrics:")
     if perf.get("mission_type") == "FORWARD_AND_TURN":
+        def fmt_deg(val):
+            return f"{val:+.2f}°" if val is not None else "NOT RUN"
+        def fmt_err(val):
+            return f"{val:.2f}°" if val is not None else "NOT RUN"
+
         print(f"  • Mission Type:              Forward 2 ft -> Clockwise Reciprocal Turn")
-        print(f"  • Starting Baseline Heading: {perf.get('starting_heading_deg')}°")
-        print(f"  • Turn Start Heading:        {perf.get('turn_start_heading_deg')}°")
-        print(f"  • Zero Commanded Heading:    {perf.get('zero_cmd_heading_deg')}°")
+        print(f"  • Starting Baseline Heading: {fmt_deg(perf.get('starting_heading_deg'))}")
+        print(f"  • Turn Start Heading:        {fmt_deg(perf.get('turn_start_heading_deg'))}")
+        print(f"  • Zero Commanded Heading:    {fmt_deg(perf.get('zero_cmd_heading_deg'))}")
         post_rot_val = perf.get('rotation_after_zero_deg')
-        post_rot_disp = f"{post_rot_val:+.2f}°" if post_rot_val is not None else "N/A"
+        post_rot_disp = f"{post_rot_val:+.2f}°" if post_rot_val is not None else "NOT RUN"
         print(f"  • Post-Zero Rotation Drift:  {post_rot_disp}")
-        print(f"  • Fully Settled Heading:     {perf.get('settled_heading_deg')}°")
-        print(f"  • Target Reciprocal Heading: {perf.get('target_reciprocal_yaw_deg')}°")
-        print(f"  • Settled Reciprocal Error:  {perf.get('settled_error_deg'):.2f}°")
-        dis = perf.get("sensor_disagreement", {})
+        print(f"  • Fully Settled Heading:     {fmt_deg(perf.get('settled_heading_deg'))}")
+        print(f"  • Target Reciprocal Heading: {fmt_deg(perf.get('target_reciprocal_yaw_deg'))}")
+        print(f"  • Settled Reciprocal Error:  {fmt_err(perf.get('settled_error_deg'))}")
+        dis = perf.get("sensor_disagreement") or {}
         if dis:
             print(f"  • Sensor Disagreement:       IMU vs Odom: {dis.get('imu_vs_odom_deg')}° | IMU vs AMCL: {dis.get('imu_vs_amcl_deg')}° | Settled IMU vs AMCL diff: {dis.get('settled_imu_vs_amcl_heading_diff_deg')}°")
 

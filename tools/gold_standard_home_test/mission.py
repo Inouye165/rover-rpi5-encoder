@@ -49,7 +49,31 @@ from .grader import MissionGrader
 
 def get_env_token(var_name: str) -> str:
     """Reads credential from supported environment mechanism without copying files."""
-    return os.environ.get(var_name, "").strip()
+    val = os.environ.get(var_name, "").strip()
+    if val:
+        return val
+    base_dirs = [
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "/home/ron/yahboom-encoder",
+        r"c:\Users\Ron\electronic_projects\yahboom-encoder",
+    ]
+    for d in base_dirs:
+        env_file = os.path.join(d, ".env")
+        if os.path.isfile(env_file):
+            try:
+                with open(env_file, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        if k.strip() == var_name:
+                            token_val = v.strip().strip('"\'')
+                            if token_val:
+                                return token_val
+            except Exception:
+                pass
+    return ""
 
 class MissionAbortException(Exception):
     """Raised when a safety invariant or watchdog triggers an immediate abort."""
@@ -499,6 +523,47 @@ class GoldStandardMission:
 
         except Exception as e:
             return False, f"Failed to query disarmed Nav2 plan: {e}", None
+
+    def check_authentication_gate(self) -> Tuple[bool, str]:
+        """
+        Verifies that operator and velocity-bridge credentials are valid and accepted
+        BEFORE arming drivetrain, without commanding any physical motion.
+        """
+        if self.dry_run:
+            return True, "Authentication verified (dry-run)"
+
+        if not self.op_token:
+            return False, "Pre-arm refusal: ROVER_OPERATOR_TOKEN is missing or empty"
+
+        if not self.cmd_token:
+            return False, "Pre-arm refusal: ROVER_CMD_VEL_TOKEN is missing or empty"
+
+        # Verify bridge token with safe zero-velocity command to /api/cmd_vel (no physical motion)
+        try:
+            payload = {
+                "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "source": "CALIBRATION_TEST"
+            }
+            headers = {"X-Rover-Bridge-Token": self.cmd_token}
+            r = self._http_post(f"{self.bridge_url}/api/cmd_vel", json=payload, headers=headers, timeout=1.0)
+            if r.status_code in (401, 403):
+                return False, f"Pre-arm refusal: Bridge token authentication failed on /api/cmd_vel (HTTP {r.status_code})"
+            elif r.status_code != 200:
+                return False, f"Pre-arm refusal: /api/cmd_vel returned HTTP {r.status_code}"
+        except Exception as e:
+            return False, f"Pre-arm refusal: Failed to reach bridge endpoint at {self.bridge_url}: {e}"
+
+        # Verify operator token with Cockpit status endpoint
+        try:
+            headers = {"X-Rover-Operator-Token": self.op_token}
+            r = requests.get(f"{self.cockpit_url}/api/status", headers=headers, timeout=1.5)
+            if r.status_code in (401, 403):
+                return False, f"Pre-arm refusal: Operator token rejected by Cockpit (HTTP {r.status_code})"
+        except Exception as e:
+            return False, f"Pre-arm refusal: Failed to reach Cockpit endpoint at {self.cockpit_url}: {e}"
+
+        return True, "Operator and bridge credentials verified without commanding motion"
 
     def check_pre_arm_gate(self, amcl_pose: Dict[str, Any]) -> Tuple[bool, str, float, float]:
         """

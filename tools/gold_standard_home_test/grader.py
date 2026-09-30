@@ -260,14 +260,30 @@ class MissionGrader:
         if final_scan_val and isinstance(final_scan_val, dict) and "overlap" in final_scan_val:
             crit_scan_agreement = bool(final_scan_val.get("ok", False) or final_scan_val.get("overlap", 0.0) >= 0.75)
 
-        # Extract Leg 2 rotation details from transition
-        leg2_details = {}
+        # Extract Leg 2 rotation details from transitions
+        leg2_start = {}
+        leg2_zero = {}
+        leg2_end = {}
         for t in transitions:
-            if t.get("stage") == "LEG2_ROTATION_END":
-                leg2_details = t.get("details", {})
-                break
+            stage = t.get("stage")
+            if stage == "LEG2_ROTATION_START":
+                leg2_start = t.get("details", {})
+            elif stage == "LEG2_ZERO_COMMANDED":
+                leg2_zero = t.get("details", {})
+            elif stage == "LEG2_ROTATION_END":
+                leg2_end = t.get("details", {})
 
-        settled_heading_err = leg2_details.get("settled_error_to_reciprocal_deg", leg2_details.get("settled_error_deg", rot_180_err_deg))
+        turn_executed = bool(leg2_end)
+        if turn_executed:
+            settled_heading_err = leg2_end.get("settled_error_to_reciprocal_deg", leg2_end.get("settled_error_deg", 0.0))
+            crit_settled_heading = settled_heading_err <= PASS_FINAL_YAW_ERR_DEG
+            l2_status = "PASS" if crit_settled_heading else "FAIL"
+            l2_details_str = f"Settled: {leg2_end.get('settled_heading_deg', 0.0):+.2f}° vs Target: {leg2_end.get('target_reciprocal_yaw_deg', 0.0):+.2f}° (Error: {settled_heading_err:.2f}° | Threshold <= {PASS_FINAL_YAW_ERR_DEG:.1f}°)"
+        else:
+            settled_heading_err = None
+            crit_settled_heading = False
+            l2_status = "NOT RUN"
+            l2_details_str = "NOT RUN (Turn maneuver was not executed or aborted before completion)"
 
         # Check if mission was run as forward-and-turn only (Legs 1 and 2 only)
         is_forward_and_turn = (
@@ -276,11 +292,11 @@ class MissionGrader:
         )
 
         crit_leg1_dist = outbound_dist_err_m <= PRE_ARM_MAX_POS_ERR_M
-        crit_settled_heading = settled_heading_err <= PASS_FINAL_YAW_ERR_DEG
 
         if is_forward_and_turn:
             all_passed = (
                 crit_leg1_dist and
+                turn_executed and
                 crit_settled_heading and
                 crit_resets and
                 crit_reversals and
@@ -297,13 +313,15 @@ class MissionGrader:
                     "passed": crit_leg1_dist
                 },
                 "leg2_settled_reciprocal_heading": {
-                    "measured_err_deg": round(settled_heading_err, 2),
-                    "settled_heading_deg": leg2_details.get("settled_heading_deg"),
-                    "target_reciprocal_yaw_deg": leg2_details.get("target_reciprocal_yaw_deg"),
-                    "zero_cmd_heading_deg": leg2_details.get("zero_cmd_heading_deg"),
-                    "rotation_after_zero_deg": leg2_details.get("rotation_after_zero_deg"),
+                    "status": l2_status,
+                    "measured_err_deg": round(settled_heading_err, 2) if settled_heading_err is not None else None,
+                    "settled_heading_deg": leg2_end.get("settled_heading_deg"),
+                    "target_reciprocal_yaw_deg": leg2_end.get("target_reciprocal_yaw_deg") or leg2_start.get("target_reciprocal_yaw_deg"),
+                    "zero_cmd_heading_deg": leg2_end.get("zero_commanded_yaw_deg") or leg2_end.get("zero_cmd_heading_deg") or leg2_zero.get("zero_commanded_yaw_deg") or leg2_zero.get("zero_cmd_heading_deg"),
+                    "rotation_after_zero_deg": leg2_end.get("rotation_after_zero_deg"),
                     "threshold_deg": PASS_FINAL_YAW_ERR_DEG,
-                    "passed": crit_settled_heading
+                    "passed": crit_settled_heading,
+                    "details": l2_details_str
                 },
                 "no_reset_or_discontinuity": {
                     "resets_detected": resets_detected,
@@ -428,14 +446,18 @@ class MissionGrader:
             "achieved_rate_hz": achieved_rate_hz,
             "active_motion_rate_hz": active_motion_rate_hz,
             "whole_run_coverage_hz": whole_run_coverage_hz,
-            "starting_heading_deg": leg2_details.get("starting_heading_deg"),
-            "turn_start_heading_deg": leg2_details.get("turn_start_heading_deg"),
-            "zero_cmd_heading_deg": leg2_details.get("zero_cmd_heading_deg"),
-            "settled_heading_deg": leg2_details.get("settled_heading_deg"),
-            "target_reciprocal_yaw_deg": leg2_details.get("target_reciprocal_yaw_deg"),
-            "settled_error_deg": round(settled_heading_err, 2),
-            "rotation_after_zero_deg": leg2_details.get("rotation_after_zero_deg"),
-            "sensor_disagreement": leg2_details.get("sensor_disagreement", {})
+            "starting_heading_deg": leg2_end.get("starting_heading_deg") or leg2_start.get("starting_heading_deg") or (metadata.get("home_pose", {}).get("yaw_deg") if metadata else None),
+            "turn_start_heading_deg": leg2_end.get("turn_start_heading_deg") or leg2_start.get("turn_start_heading_deg"),
+            "zero_cmd_heading_deg": leg2_end.get("zero_commanded_yaw_deg") or leg2_end.get("zero_cmd_heading_deg") or leg2_zero.get("zero_commanded_yaw_deg") or leg2_zero.get("zero_cmd_heading_deg"),
+            "settled_heading_deg": leg2_end.get("settled_heading_deg"),
+            "target_reciprocal_yaw_deg": leg2_end.get("target_reciprocal_yaw_deg") or leg2_start.get("target_reciprocal_yaw_deg"),
+            "settled_error_deg": round(settled_heading_err, 2) if settled_heading_err is not None else None,
+            "rotation_after_zero_deg": leg2_end.get("rotation_after_zero_deg"),
+            "sensor_disagreement": leg2_end.get("sensor_disagreement") or {},
+            "starting_baseline_heading_deg": leg2_end.get("starting_heading_deg") or leg2_start.get("starting_heading_deg") or (metadata.get("home_pose", {}).get("yaw_deg") if metadata else None),
+            "target_reciprocal_heading_deg": leg2_end.get("target_reciprocal_yaw_deg") or leg2_start.get("target_reciprocal_yaw_deg"),
+            "settled_reciprocal_error_deg": round(settled_heading_err, 2) if settled_heading_err is not None else None,
+            "post_zero_drift_deg": leg2_end.get("rotation_after_zero_deg")
         }
 
         return {

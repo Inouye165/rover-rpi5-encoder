@@ -4529,3 +4529,129 @@ def test_scan_validation_uses_actual_settled_yaw_not_assumed_return_yaw():
     # Must use actual settled yaw (2.9845 rad / 171 deg), NOT 175 deg (3.0543 rad)
     assert f"yaw_rad={actual_amcl_yaw_rad:.4f}" in captured_url
     assert gate_res["passed"] is True
+
+
+def test_authentication_gate_verification():
+    """
+    Verifies that check_authentication_gate:
+    1. Rejects missing operator or bridge token.
+    2. Sends zero-motion /api/cmd_vel request with X-Rover-Bridge-Token.
+    3. Fails closed on HTTP 401/403.
+    4. Passes when both tokens are valid, without commanding any motion.
+    """
+    from tools.gold_standard_home_test.mission import GoldStandardMission
+    from unittest.mock import patch, MagicMock
+
+    # Case 1: Missing tokens
+    m_no_token = GoldStandardMission(dry_run=False)
+    m_no_token.op_token = ""
+    m_no_token.cmd_token = ""
+    ok, msg = m_no_token.check_authentication_gate()
+    assert ok is False
+    assert "ROVER_OPERATOR_TOKEN is missing" in msg
+
+    # Case 2: Rejected bridge token (HTTP 401)
+    m_rej = GoldStandardMission(dry_run=False)
+    m_rej.op_token = "valid_op_token"
+    m_rej.cmd_token = "bad_cmd_token"
+    with patch.object(m_rej, "_http_post", return_value=MagicMock(status_code=401, text='{"error":"Missing token"}')):
+        ok, msg = m_rej.check_authentication_gate()
+        assert ok is False
+        assert "Bridge token authentication failed" in msg
+
+    # Case 3: Validated tokens (HTTP 200 on zero cmd_vel and status)
+    m_ok = GoldStandardMission(dry_run=False)
+    m_ok.op_token = "valid_op_token"
+    m_ok.cmd_token = "valid_cmd_token"
+    with patch.object(m_ok, "_http_post", return_value=MagicMock(status_code=200, json=lambda: {"ok": True})), \
+         patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: {"ok": True})):
+        ok, msg = m_ok.check_authentication_gate()
+        assert ok is True
+        assert "verified without commanding motion" in msg
+
+
+def test_unexecuted_turn_measurements_reported_as_not_run_not_180_deg():
+    """
+    Verifies that when a forward-and-turn run aborts before executing rotation:
+    1. leg2_settled_reciprocal_heading is graded as 'NOT RUN' (not FAIL with 180° error).
+    2. settled_reciprocal_error_deg is None (not 180.0°).
+    3. starting_baseline_heading_deg and target_reciprocal_heading_deg are preserved from LEG2_ROTATION_START.
+    """
+    from tools.gold_standard_home_test.grader import MissionGrader
+    from tools.gold_standard_home_test.cli import print_grade_report
+    import io
+    from contextlib import redirect_stdout
+
+    aborted_turn_run = {
+        "metadata": {
+            "duration_s": 11.44,
+            "mission_type": "FORWARD_AND_TURN",
+            "stop_after_leg2": True,
+            "active_motion_rate_hz": 40.0,
+            "whole_run_coverage_hz": 40.0
+        },
+        "transitions": [
+            {
+                "stage": "LEG1_FORWARD_START",
+                "details": {"target": [1.8045, -0.1039, -0.0881]}
+            },
+            {
+                "stage": "LEG1_FORWARD_END",
+                "details": {"reconciliation": {"position_within_tolerance": True}}
+            },
+            {
+                "stage": "LEG2_ROTATION_START",
+                "details": {
+                    "starting_heading_deg": 0.09,
+                    "turn_start_heading_deg": 1.29,
+                    "target_reciprocal_yaw_deg": -179.91
+                }
+            },
+            {
+                "stage": "ABORT",
+                "details": {"reason": "Velocity command rejected by bridge (HTTP 401)"}
+            }
+        ],
+        "samples": [
+            {
+                "t_rel_s": 0.0,
+                "mission_stage": "BASELINE",
+                "amcl": {"x": 1.194, "y": -0.045, "yaw_deg": 0.09},
+                "drive": {"bootCount": 1, "armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0},
+                "final_cmd": {"vx": 0.0, "wz": 0.0}
+            },
+            {
+                "t_rel_s": 11.44,
+                "mission_stage": "FINAL_DISARMED",
+                "amcl": {"x": 1.770, "y": -0.114, "yaw_deg": -4.37},
+                "drive": {"bootCount": 1, "armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0},
+                "final_cmd": {"vx": 0.0, "wz": 0.0}
+            }
+        ]
+    }
+
+    grade = MissionGrader.grade_run(aborted_turn_run)
+    assert grade["overall_status"] == "FAIL"
+    
+    crit_l2 = grade["criteria"]["leg2_settled_reciprocal_heading"]
+    assert crit_l2["status"] == "NOT RUN"
+    assert crit_l2["passed"] is False
+    assert crit_l2["measured_err_deg"] is None, "Must not fabricate 180° error!"
+    assert "NOT RUN" in crit_l2["details"]
+
+    metrics = grade["metrics"]
+    assert metrics["starting_baseline_heading_deg"] == 0.09
+    assert metrics["turn_start_heading_deg"] == 1.29
+    assert metrics["target_reciprocal_heading_deg"] == -179.91
+    assert metrics["settled_reciprocal_error_deg"] is None, "Must be None, not 180.0°!"
+
+    # CLI report output check
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_grade_report(grade, "dummy_report.json")
+    out = buf.getvalue()
+    assert "180.00°" not in out
+    assert "Leg 2 Settled Reciprocal:  NOT RUN" in out
+    assert "Starting Baseline Heading: +0.09°" in out
+    assert "Target Reciprocal Heading: -179.91°" in out
+    assert "Settled Reciprocal Error:  NOT RUN" in out
