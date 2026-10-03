@@ -7,6 +7,7 @@ import math
 from typing import Dict, Any, List, Tuple
 from .constants import (
     FORWARD_DISTANCE_M,
+    PRODUCTION_CHECK_FORWARD_DISTANCE_M,
     ROTATION_TARGET_DEG,
     PRE_ARM_MAX_POS_ERR_M,
     PASS_FINAL_POS_ERR_M,
@@ -53,13 +54,15 @@ class MissionGrader:
             start_y = 0.0
 
         # Leg 1 Outbound Distance
+        is_prod_check = metadata.get("mission_type") == "PRODUCTION_CHECK"
+        expected_fwd_dist = PRODUCTION_CHECK_FORWARD_DISTANCE_M if is_prod_check else FORWARD_DISTANCE_M
         leg1_samples = stage_samples.get("LEG1_FORWARD", [])
         if leg1_samples:
             end_leg1 = leg1_samples[-1].get("amcl", {})
             actual_outbound_dist = math.hypot(end_leg1.get("x", 0.0) - start_x, end_leg1.get("y", 0.0) - start_y)
         else:
             actual_outbound_dist = 0.0
-        outbound_dist_err_m = abs(actual_outbound_dist - FORWARD_DISTANCE_M)
+        outbound_dist_err_m = abs(actual_outbound_dist - expected_fwd_dist)
 
         # Leg 2 180Â° CW Rotation
         leg2_samples = stage_samples.get("LEG2_ROTATION", [])
@@ -285,7 +288,8 @@ class MissionGrader:
             l2_status = "NOT RUN"
             l2_details_str = "NOT RUN (Turn maneuver was not executed or aborted before completion)"
 
-        # Check if mission was run as forward-and-turn only (Legs 1 and 2 only)
+        # Check mission type
+        is_production_check = (metadata.get("mission_type") == "PRODUCTION_CHECK")
         is_forward_and_turn = (
             metadata.get("mission_type") in ("FORWARD_AND_TURN", "SHORTENED_TEST") or
             metadata.get("stop_after_leg2") is True
@@ -293,7 +297,73 @@ class MissionGrader:
 
         crit_leg1_dist = outbound_dist_err_m <= PRE_ARM_MAX_POS_ERR_M
 
-        if is_forward_and_turn:
+        if is_production_check:
+            all_passed = (
+                crit_leg1_dist and
+                crit_final_pos and
+                crit_final_yaw and
+                crit_resets and
+                crit_reversals and
+                crit_crawling and
+                crit_safe_stop and
+                crit_rate
+            )
+            criteria_dict = {
+                "request1_forward_distance": {
+                    "measured_m": round(actual_outbound_dist, 4),
+                    "measured_cm": round(actual_outbound_dist * 100.0, 2),
+                    "error_cm": round(outbound_dist_err_m * 100.0, 2),
+                    "threshold_cm": round(PRE_ARM_MAX_POS_ERR_M * 100.0, 1),
+                    "passed": crit_leg1_dist
+                },
+                "final_home_position_error": {
+                    "measured_m": round(final_pos_err_m, 4),
+                    "measured_cm": round(final_pos_err_m * 100.0, 2),
+                    "threshold_m": PASS_FINAL_POS_ERR_M,
+                    "passed": crit_final_pos
+                },
+                "final_home_yaw_error": {
+                    "measured_deg": round(final_yaw_err_deg, 2),
+                    "threshold_deg": PASS_FINAL_YAW_ERR_DEG,
+                    "passed": crit_final_yaw
+                },
+                "no_reset_or_discontinuity": {
+                    "resets_detected": resets_detected,
+                    "safety_interventions": safety_interventions,
+                    "passed": crit_resets
+                },
+                "corrective_reversals": {
+                    "count": reversal_count,
+                    "linear_reversals": linear_reversals,
+                    "angular_settling_reversals": angular_settling_reversals,
+                    "max_allowed": PASS_MAX_CORRECTIVE_REVERSALS,
+                    "passed": crit_reversals
+                },
+                "low_speed_crawling": {
+                    "max_continuous_s": round(max_continuous_crawl_s, 2),
+                    "max_allowed_s": PASS_MAX_CRAWL_WINDOW_SEC,
+                    "passed": crit_crawling
+                },
+                "recorder_sample_rate": {
+                    "achieved_rate_hz": achieved_rate_hz,
+                    "active_motion_rate_hz": active_motion_rate_hz,
+                    "whole_run_coverage_hz": whole_run_coverage_hz,
+                    "threshold_hz": PASS_MIN_RECORDER_RATE_HZ,
+                    "passed": crit_rate
+                },
+                "final_safe_state": {
+                    "armed": final_armed,
+                    "mode": final_mode,
+                    "passed": crit_safe_stop
+                }
+            }
+            if final_scan_val and isinstance(final_scan_val, dict) and "overlap" in final_scan_val:
+                criteria_dict["final_home_scan_agreement"] = {
+                    "overlap_pct": round(final_scan_val.get("overlap", 0.0) * 100.0, 1),
+                    "threshold_pct": 75.0,
+                    "passed": crit_scan_agreement
+                }
+        elif is_forward_and_turn:
             all_passed = (
                 crit_leg1_dist and
                 turn_executed and
@@ -434,7 +504,7 @@ class MissionGrader:
                 }
 
         metrics = {
-            "mission_type": "FORWARD_AND_TURN" if is_forward_and_turn else "FULL_HOME_MISSION",
+            "mission_type": "PRODUCTION_CHECK" if is_production_check else ("FORWARD_AND_TURN" if is_forward_and_turn else "FULL_HOME_MISSION"),
             "outbound_distance_m": round(actual_outbound_dist, 4),
             "outbound_distance_error_m": round(outbound_dist_err_m, 4),
             "rotation_180_error_deg": round(rot_180_err_deg, 2),

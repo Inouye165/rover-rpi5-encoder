@@ -4655,3 +4655,82 @@ def test_unexecuted_turn_measurements_reported_as_not_run_not_180_deg():
     assert "Starting Baseline Heading: +0.09°" in out
     assert "Target Reciprocal Heading: -179.91°" in out
     assert "Settled Reciprocal Error:  NOT RUN" in out
+
+
+def test_production_check_target_computation():
+    """Verifies that compute_production_check_targets produces exactly 0.3048 m forward and exact saved HOME."""
+    mission = GoldStandardMission(dry_run=True)
+    start_pose = {"x": 1.1939, "y": -0.0452, "yaw_deg": -5.05, "yaw_rad": -0.0881}
+    targets = mission.compute_production_check_targets(start_pose=start_pose)
+    
+    r1 = targets["request1_forward"]
+    r2 = targets["request2_home"]
+    
+    assert r1["distance_m"] == 0.3048
+    assert math.isclose(r1["yaw_rad"], -0.0881, abs_tol=1e-4)
+    expected_x1 = 1.1939 + 0.3048 * math.cos(-0.0881)
+    expected_y1 = -0.0452 + 0.3048 * math.sin(-0.0881)
+    assert math.isclose(r1["x"], expected_x1, abs_tol=1e-3)
+    assert math.isclose(r1["y"], expected_y1, abs_tol=1e-3)
+    
+    assert math.isclose(r2["x"], mission.home_pose["x"], abs_tol=1e-4)
+    assert math.isclose(r2["y"], mission.home_pose["y"], abs_tol=1e-4)
+    assert math.isclose(r2["yaw_rad"], mission.home_pose["yaw_rad"], abs_tol=1e-4)
+
+
+def test_production_check_grading():
+    """Verifies that MissionGrader correctly grades a PRODUCTION_CHECK mission."""
+    samples = []
+    # 50 samples at 25 Hz (2.0s duration)
+    for i in range(50):
+        t = i * 0.04
+        if i < 10:
+            stage = "BASELINE"
+            x, y, yaw = 1.1939, -0.0452, -5.05
+            vx, wz = 0.0, 0.0
+            armed, mode = False, 0
+        elif i < 30:
+            stage = "LEG1_FORWARD"
+            progress = (i - 10) / 20.0
+            x = 1.1939 + progress * 0.3048 * math.cos(math.radians(-5.05))
+            y = -0.0452 + progress * 0.3048 * math.sin(math.radians(-5.05))
+            yaw = -5.05
+            vx, wz = 0.20, 0.0
+            armed, mode = True, 3
+        elif i < 45:
+            stage = "LEG3_RETURN"
+            progress = (i - 30) / 15.0
+            x = 1.4975 - progress * 0.3048 * math.cos(math.radians(-5.05))
+            y = -0.0720 - progress * 0.3048 * math.sin(math.radians(-5.05))
+            yaw = -5.05
+            vx, wz = 0.20, 0.0
+            armed, mode = True, 3
+        else:
+            stage = "FINAL_DISARMED"
+            x, y, yaw = 1.1939, -0.0452, -5.05
+            vx, wz = 0.0, 0.0
+            armed, mode = False, 0
+
+        samples.append({
+            "t_rel_s": t,
+            "mission_stage": stage,
+            "amcl": {"x": x, "y": y, "yaw_deg": yaw},
+            "to_home": {"pos_err_m": 0.005, "yaw_err_deg": 0.2},
+            "drive": {"armed": armed, "mode": mode, "reqLinear": vx, "reqAngular": wz},
+            "final_cmd": {"vx": vx, "wz": wz}
+        })
+
+    run_data = {
+        "metadata": {
+            "mission_type": "PRODUCTION_CHECK",
+            "duration_s": 2.0
+        },
+        "samples": samples
+    }
+    
+    grade = MissionGrader.grade_run(run_data)
+    assert grade["overall_status"] == "PASS"
+    assert "request1_forward_distance" in grade["criteria"]
+    assert grade["criteria"]["request1_forward_distance"]["passed"] is True
+    assert grade["criteria"]["final_home_position_error"]["passed"] is True
+    assert grade["criteria"]["final_home_yaw_error"]["passed"] is True

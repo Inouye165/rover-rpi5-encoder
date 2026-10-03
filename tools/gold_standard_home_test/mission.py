@@ -20,6 +20,7 @@ def _is_mocked(fn, orig):
 from .constants import (
     TELEMETRY_RATE_HZ,
     FORWARD_DISTANCE_M,
+    PRODUCTION_CHECK_FORWARD_DISTANCE_M,
     ROTATION_TARGET_DEG,
     NORMAL_LINEAR_SPEED,
     ROTATION_180_MAX_SPEED,
@@ -216,6 +217,45 @@ class GoldStandardMission:
         if _is_mocked(requests.post, _orig_requests_post):
             return requests.post(*args, **kwargs)
         return self.session.post(*args, **kwargs)
+
+    def compute_production_check_targets(self, start_pose: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Calculates exact target coordinates and headings for the minimal 2-request production check:
+        - Request 1: One standard goal 0.3048 m (1.000 ft) forward from fresh starting map pose along starting heading.
+        - Request 2: Authoritative saved HOME pose (exact coordinates and saved HOME yaw).
+        """
+        h = self.home_pose
+        base_x = float(start_pose["x"]) if start_pose and "x" in start_pose and start_pose["x"] is not None else float(h["x"])
+        base_y = float(start_pose["y"]) if start_pose and "y" in start_pose and start_pose["y"] is not None else float(h["y"])
+        base_yaw_rad = float(start_pose.get("yaw_rad", math.radians(start_pose.get("yaw_deg", 0.0)))) if start_pose and ("yaw_rad" in start_pose or "yaw_deg" in start_pose) else float(h["yaw_rad"])
+        base_yaw_deg = math.degrees(base_yaw_rad)
+
+        dist = PRODUCTION_CHECK_FORWARD_DISTANCE_M
+        x1 = base_x + dist * math.cos(base_yaw_rad)
+        y1 = base_y + dist * math.sin(base_yaw_rad)
+        yaw1 = base_yaw_rad
+
+        x2 = float(h["x"])
+        y2 = float(h["y"])
+        yaw2 = float(h["yaw_rad"])
+
+        return {
+            "home": h,
+            "start_pose": {"x": round(base_x, 4), "y": round(base_y, 4), "yaw_rad": round(base_yaw_rad, 4), "yaw_deg": round(base_yaw_deg, 2)},
+            "request1_forward": {
+                "distance_m": dist,
+                "x": round(x1, 4),
+                "y": round(y1, 4),
+                "yaw_rad": round(yaw1, 4),
+                "yaw_deg": round(base_yaw_deg, 2)
+            },
+            "request2_home": {
+                "x": round(x2, 4),
+                "y": round(y2, 4),
+                "yaw_rad": round(yaw2, 4),
+                "yaw_deg": round(math.degrees(yaw2), 2)
+            }
+        }
 
     def compute_mission_targets(self, start_pose: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -1436,6 +1476,65 @@ class GoldStandardMission:
         raise MissionAbortException(
             f"Timed out ({timeout_s}s) waiting for Cockpit stationary-at-rest confirmation before dispatch! (is_stationary={amcl.get('is_stationary')})"
         )
+
+    def execute_production_check(self, targets: Dict[str, Any]):
+        """
+        Executes minimal 2-request production navigation check using exact autonomous-page dispatch settings:
+        1. Request 1: Forward 0.3048 m (1.000 ft) via standard production Nav2 dispatch.
+           Waits for Nav2 SUCCEEDED, handshakes zero, confirms disarm, confirms stationary at rest.
+        2. Request 2: Return to authoritative saved HOME coordinates and saved HOME yaw
+           via exact autonomous-page dispatch settings (default BT, general_goal_checker).
+           Waits for Nav2 SUCCEEDED, handshakes zero, confirms disarm, confirms stationary at rest.
+        """
+        req1 = targets["request1_forward"]
+        req2 = targets["request2_home"]
+
+        self.recorder.metadata["mission_type"] = "PRODUCTION_CHECK"
+        self.start_continuous_recording(rate_hz=25.0)
+        self.verify_and_capture_baseline_imu_reference()
+        self.record_tick("BASELINE")
+
+        # --- REQUEST 1: Outbound 0.3048 m Forward via Production Nav2 ---
+        self.current_stage = "LEG1_FORWARD"
+        print(f"\n[REQUEST 1] Dispatching standard forward goal {req1['distance_m']:.4f} m -> ({req1['x']:.4f}, {req1['y']:.4f}, {req1['yaw_deg']:+.2f}°)...")
+        self.recorder.record_transition("REQ1_FORWARD_START", {"target": (req1["x"], req1["y"], req1["yaw_rad"])})
+
+        # Standard dispatch without overrides: uses default BT and general_goal_checker
+        goal1_id = self.dispatch_nav2_goal(req1["x"], req1["y"], req1["yaw_rad"], goal_checker=None)
+        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG1_FORWARD_S, "REQ1_FORWARD", goal1_id, 0.04)
+        print("[REQUEST 1 COMPLETE] Forward goal succeeded. Awaiting confirmed stationary stop & disarm...")
+        
+        # Confirmed stop and disarm to Mode 0
+        self.wait_for_stationary_at_rest(timeout_s=6.0)
+        self.recorder.record_transition("REQ1_FORWARD_END", {"reconciliation": self.success_reconciliations.get("REQ1_FORWARD")})
+        print("[REQUEST 1 SETTLED] Confirmed stopped at rest and disarmed. Localization fresh.")
+
+        # Pause briefly between requests to ensure clean stationary baseline
+        time.sleep(1.0)
+
+        # --- REQUEST 2: Exact Normal Autonomous-Page HOME Request ---
+        self.current_stage = "REQ2_RETURN_HOME"
+        print(f"\n[REQUEST 2] Dispatching exact autonomous-page HOME request -> ({req2['x']:.4f}, {req2['y']:.4f}, {req2['yaw_deg']:+.2f}°)...")
+        self.recorder.record_transition("REQ2_RETURN_HOME_START", {"target": (req2["x"], req2["y"], req2["yaw_rad"])})
+
+        # Standard dispatch without overrides: uses default BT and general_goal_checker
+        goal2_id = self.dispatch_nav2_goal(req2["x"], req2["y"], req2["yaw_rad"], goal_checker=None)
+        self.wait_for_nav2_completion_and_zero(TIMEOUT_LEG3_RETURN_S, "REQ2_RETURN_HOME", goal2_id, 0.04)
+        print("[REQUEST 2 COMPLETE] Return HOME succeeded. Awaiting confirmed stationary stop & disarm...")
+
+        # Confirmed stop and disarm to Mode 0
+        self.wait_for_stationary_at_rest(timeout_s=6.0)
+        self.recorder.record_transition("REQ2_RETURN_HOME_END", {"reconciliation": self.success_reconciliations.get("REQ2_RETURN_HOME")})
+        print("[REQUEST 2 SETTLED] Confirmed stopped at rest and disarmed at HOME.")
+
+        # Stationary LiDAR scan agreement check at HOME
+        if not self.dry_run:
+            try:
+                r_val = self._http_get(f"{self.cockpit_url}/api/navigation/validate_home", timeout=1.5)
+                if r_val.status_code == 200:
+                    self.recorder.metadata["final_home_scan_validation"] = r_val.json()
+            except Exception:
+                pass
 
     def execute_leg1_forward(self, target_x: float, target_y: float, target_yaw: float):
         """

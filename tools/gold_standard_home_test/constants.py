@@ -5,6 +5,7 @@ Deterministic parameters governing the Gold Standard HOME Acceptance Test.
 
 # Mission Kinematic Ceilings & Settings (Frozen)
 FORWARD_DISTANCE_M = 0.6096       # Exactly 2.000 ft
+PRODUCTION_CHECK_FORWARD_DISTANCE_M = 0.3048 # Exactly 1.000 ft (Minimal Production Check)
 ROTATION_TARGET_DEG = 180.0       # Explicit 180.0 deg CLOCKWISE
 
 # Velocity limits & distinctions:
