@@ -40,9 +40,10 @@ const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) ||
 
 function triggerNav2Cancel() {
   try {
+    const bridgeUrl = new URL(ROVER_NAV_BRIDGE_URL);
     const cancelReq = http.request({
-      hostname: '127.0.0.1',
-      port: 3005,
+      hostname: bridgeUrl.hostname || '127.0.0.1',
+      port: bridgeUrl.port || 3005,
       path: '/api/nav/cancel',
       method: 'POST',
       timeout: 500
@@ -281,6 +282,13 @@ let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
 
+const REQUIRED_NAV_LIFECYCLE_NODES = [
+  'controller_server',
+  'planner_server',
+  'bt_navigator',
+  'collision_monitor'
+];
+
 let navigationState = {
   ready: false,
   state: 'UNCONFIGURED',
@@ -291,10 +299,23 @@ let lastDispatchedNav = null;
 
 function updateNavigationState(nav) {
   if (!nav || typeof nav !== 'object') return;
-  navigationState.ready = Boolean(nav.ready);
-  navigationState.state = nav.state || 'UNKNOWN';
-  navigationState.details = nav.details || '';
-  navigationState.nodes = nav.nodes || {};
+  const nodes = (nav.nodes && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : (navigationState.nodes || {});
+  
+  // Consistency check: response fields cannot report ready=false/inactive while simultaneously listing all required nodes active and action-ready
+  const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+  const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+  const actionReady = (nav.action_server_ready !== false && nav.actionServerReady !== false);
+
+  if (allNodesActive && actionReady) {
+    navigationState.ready = true;
+    navigationState.state = 'ACTIVE';
+    navigationState.details = 'All required navigation and collision-protection nodes active';
+  } else {
+    navigationState.ready = false;
+    navigationState.state = (nav.state && nav.state !== 'ACTIVE') ? nav.state : (inactiveNodes.length > 0 ? 'INACTIVE' : 'UNKNOWN');
+    navigationState.details = (inactiveNodes.length > 0 ? `Required navigation lifecycle nodes inactive: ${inactiveNodes.join(', ')}` : (nav.details || 'Navigation not ready'));
+  }
+  navigationState.nodes = nodes;
 }
 
 let localizationState = {
@@ -4748,6 +4769,86 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   };
 }
 
+async function refreshNavigationReadiness(timeoutMs = 1500) {
+  try {
+    const bridgeUrl = (typeof ROVER_NAV_BRIDGE_URL !== 'undefined' ? ROVER_NAV_BRIDGE_URL : (process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005'));
+    const res = await fetch(`${bridgeUrl}/api/nav/status`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        ready: false,
+        error: `rover_nav_bridge returned HTTP ${res.status}`,
+        navigation: navigationState
+      };
+    }
+    const parsed = await res.json();
+    const nav = parsed.navigation || {};
+    const nodes = (nav && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : {};
+
+    // 1. required lifecycle nodes are active
+    const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+    const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+
+    // 2. bt_navigator is active
+    const btActive = (nodes['bt_navigator'] === 'active');
+
+    // 3. /navigate_to_pose is ready to accept goals
+    const actionReady = Boolean(parsed.action_server_ready);
+    const readyToGoals = Boolean(parsed.ready_to_accept_goals || (actionReady && btActive && allNodesActive));
+
+    const isReady = Boolean(allNodesActive && btActive && actionReady && readyToGoals);
+
+    // Atomically update cached navigationState when recovery succeeds
+    if (isReady) {
+      updateNavigationState({
+        ready: true,
+        state: 'ACTIVE',
+        details: 'All required navigation and collision-protection nodes active',
+        nodes: nodes,
+        action_server_ready: true
+      });
+    } else {
+      let detailMsg = '';
+      if (inactiveNodes.length > 0) {
+        detailMsg = `Required navigation lifecycle nodes inactive: ${inactiveNodes.map(n => `${n}=${nodes[n] || 'unknown'}`).join(', ')}`;
+      } else if (!actionReady) {
+        detailMsg = 'Action server endpoint /navigate_to_pose not ready';
+      } else {
+        detailMsg = nav.details || 'Navigation not ready to accept goals';
+      }
+
+      updateNavigationState({
+        ready: false,
+        state: (nav.state && nav.state !== 'ACTIVE') ? nav.state : 'INACTIVE',
+        details: detailMsg,
+        nodes: nodes,
+        action_server_ready: actionReady
+      });
+    }
+
+    return {
+      ok: isReady,
+      ready: isReady,
+      action_server_ready: actionReady,
+      ready_to_accept_goals: readyToGoals,
+      nodes: nodes,
+      inactive_nodes: inactiveNodes,
+      details: navigationState.details,
+      navigation: navigationState
+    };
+  } catch (err) {
+    const errorMsg = `Failed to refresh navigation readiness: ${err.message}`;
+    return {
+      ok: false,
+      ready: false,
+      error: errorMsg,
+      navigation: navigationState
+    };
+  }
+}
+
 app.post('/api/navigation/init_home', async (req, res) => {
   try {
     const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/init_home', {
@@ -4764,7 +4865,8 @@ app.post('/api/navigation/init_home', async (req, res) => {
 
 app.get('/api/navigation/validate_home', async (req, res) => {
   try {
-    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/validate_home');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const bridgeResp = await fetch(`http://127.0.0.1:3005/api/nav/validate_home${query}`);
     const data = await bridgeResp.json();
     return res.status(bridgeResp.ok ? 200 : 400).json(data);
   } catch (err) {
@@ -4828,6 +4930,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   };
 
   let dispatchMeta = null;
+  const dispatchGoalId = (req.body && req.body.goal_id) ? String(req.body.goal_id) : ('goal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+  if (!req.body) req.body = {};
+  req.body.goal_id = dispatchGoalId;
+
   if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null) {
     const d = Number(req.body.relative_distance);
     const tx = snapshotPose.x + d * Math.cos(snapshotPose.yaw);
@@ -4843,6 +4949,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     req.body.yaw = tyaw;
 
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: true,
       source_pose: snapshotPose,
       relative_distance: d,
@@ -4860,9 +4967,12 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     const ty = Number(req.body.target_y !== undefined ? req.body.target_y : req.body.y);
     const tyaw = Number(req.body.target_yaw !== undefined ? req.body.target_yaw : (req.body.yaw || 0));
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: false,
       source_pose: snapshotPose,
       relative_distance: null,
+      goal_checker: req.body.goal_checker || null,
+      behavior_tree: req.body.behavior_tree || null,
       resolved_target: {
         x: tx,
         y: ty,
@@ -4872,6 +4982,20 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       dispatched_at: Date.now()
     };
     lastDispatchedNav = dispatchMeta;
+  }
+
+  // Step 2.5: Synchronous, Authoritative Nav2 Readiness Gate Refresh BEFORE arming
+  const navReadiness = await refreshNavigationReadiness(1500);
+  if (!navReadiness.ok || !navReadiness.ready) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Navigation readiness check failed while armed: ${navReadiness.error || navReadiness.details}`);
+    }
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${navReadiness.error || navReadiness.details || 'Lifecycle inactive'}). Drivetrain remains safely disarmed.`,
+      navigation: navigationState
+    });
   }
 
   // Safety check 3: Drivetrain arming & autonomy handshake
@@ -4949,6 +5073,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       try {
         const parsed = JSON.parse(data);
         if (dispatchMeta) {
+          parsed.goal_id = dispatchMeta.goal_id;
           parsed.dispatch_meta = dispatchMeta;
           parsed.source_pose = dispatchMeta.source_pose;
           parsed.relative_distance = dispatchMeta.relative_distance;
@@ -5020,19 +5145,38 @@ app.get('/api/navigation/status', (req, res) => {
         const parsed = JSON.parse(data);
         if (lastDispatchedNav) {
           parsed.last_dispatch = lastDispatchedNav;
+          parsed.goal_id = parsed.goal_id || lastDispatchedNav.goal_id;
         }
-        if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
-          if (autonomyState && autonomyState.state === 'READY_ARMED') {
-            triggerNav2Cancel();
+        const isTerminal = parsed && (
+          parsed.status === 'SUCCEEDED' ||
+          parsed.status === 'CANCELLED' ||
+          parsed.status === 'ABORTED' ||
+          parsed.status === 'FAILED' ||
+          (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED'))
+        );
+        const matchesCurrentGoal = !lastDispatchedNav || !parsed.goal_id || (parsed.goal_id === lastDispatchedNav.goal_id);
+        if (isTerminal && matchesCurrentGoal) {
+          if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
+            if (parsed.status !== 'SUCCEEDED') {
+              triggerNav2Cancel();
+            }
             autonomyState.enabled = false;
+            autonomyState.active = false;
             autonomyState.state = 'READY_DISARMED';
             cmdSource = 'NONE';
             targetLinear = 0.0;
             targetAngular = 0.0;
+            limitedLinear = 0.0;
+            limitedAngular = 0.0;
+            sendMotorSpeeds(0, 0, 0, 0);
             if (serialPort && serialPort.isOpen) {
+              const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+              serialPort.write(motionPkt);
               const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
               serialPort.write(disarmPkt);
             }
+
+            broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
           }
         }
         res.status(bridgeRes.statusCode).json(parsed);
@@ -5512,6 +5656,19 @@ app.get('/api/encoders', (req, res) => {
       m4: currentTicks[3]
     }
   });
+});
+
+app.get('/api/odom', async (req, res) => {
+  try {
+    const odom = await fetchRosOdometry();
+    if (odom && (odom.ok || odom.valid)) {
+      res.json(odom);
+    } else {
+      res.status(503).json({ ok: false, error: 'Odometry unavailable or stale', odom });
+    }
+  } catch (err) {
+    res.status(502).json({ ok: false, error: "Failed to fetch odometry: " + (err ? err.message : "") });
+  }
 });
 
 app.get('/api/imu', (req, res) => {
@@ -6723,6 +6880,8 @@ module.exports = {
   updateLocalizationState,
   navigationState,
   updateNavigationState,
+  refreshNavigationReadiness,
+  REQUIRED_NAV_LIFECYCLE_NODES,
   abortAutonomyDueToLocalizationLost,
   setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
 };

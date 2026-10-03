@@ -26,6 +26,11 @@ def test_goal_checker_and_rotatetogoal_tolerances():
     assert ggc['xy_goal_tolerance'] <= 0.05, f"general_goal_checker xy_goal_tolerance too loose: {ggc['xy_goal_tolerance']}"
     assert ggc['yaw_goal_tolerance'] <= 0.088, f"general_goal_checker yaw_goal_tolerance too loose: {ggc['yaw_goal_tolerance']}"
 
+    assert 'position_goal_checker' in ctrl['goal_checker_plugins'], "position_goal_checker must be in goal_checker_plugins"
+    pgc = ctrl['position_goal_checker']
+    assert pgc['plugin'] == 'nav2_controller::PositionGoalChecker'
+    assert pgc['xy_goal_tolerance'] <= 0.05, f"position_goal_checker xy_goal_tolerance too loose: {pgc['xy_goal_tolerance']}"
+
     # 2. DWB parameters
     assert fp['xy_goal_tolerance'] <= 0.05, f"FollowPath xy_goal_tolerance too loose: {fp['xy_goal_tolerance']}"
     assert fp['yaw_goal_tolerance'] <= 0.088, f"FollowPath yaw_goal_tolerance too loose: {fp['yaw_goal_tolerance']}"
@@ -48,7 +53,8 @@ def test_controller_speed_sampling_and_progress_checker():
     fp = ctrl['FollowPath']
     pc = ctrl['progress_checker']
 
-    assert fp['max_vel_x'] <= 0.15, f"max_vel_x exceeds 0.15: {fp['max_vel_x']}"
+    assert fp['max_vel_x'] == 0.20, f"max_vel_x must be 0.20: {fp['max_vel_x']}"
+    assert fp['max_speed_xy'] == 0.20, f"max_speed_xy must be 0.20: {fp['max_speed_xy']}"
     assert fp['max_vel_theta'] <= 0.50, f"max_vel_theta exceeds 0.50: {fp['max_vel_theta']}"
     assert fp['rotate_to_heading_angular_vel'] <= 0.50, f"rotate_to_heading_angular_vel exceeds 0.50: {fp['rotate_to_heading_angular_vel']}"
 
@@ -72,7 +78,7 @@ def test_costmap_and_collision_monitor_invariants():
 
     # Velocity smoother clamp
     vs = cfg['velocity_smoother']['ros__parameters']
-    assert vs['max_velocity'][0] <= 0.15
+    assert vs['max_velocity'][0] == 0.20
     assert vs['max_velocity'][2] <= 0.50
 
     # Collision monitor polygons
@@ -87,3 +93,26 @@ def test_amcl_startup_pose_safety():
     amcl = cfg['amcl']['ros__parameters']
     assert amcl.get('set_initial_pose') is False, "AMCL set_initial_pose must be false"
     assert 'initial_pose' not in amcl, "AMCL must not have hardcoded initial_pose"
+
+def test_planner_endpoint_fidelity_config():
+    """Verify that planner server and behavior trees configure Navfn with zero tolerance for exact endpoint fidelity."""
+    import xml.etree.ElementTree as ET
+    path = find_nav2_params()
+    with open(path, 'r', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+
+    ps = cfg['planner_server']['ros__parameters']
+    assert 'Navfn' in ps['planner_plugins'], "Navfn must be in planner_plugins"
+    assert ps['planner_plugins'][0] == 'Navfn', "Navfn must be the primary planner plugin"
+    assert ps['Navfn']['tolerance'] <= 0.01, f"Navfn tolerance must be <= 0.01m for exact arrival: {ps['Navfn']['tolerance']}"
+
+    # Verify behavior trees
+    bt_dir = os.path.join(os.path.dirname(path), '..', 'behavior_trees')
+    for bt_name in ['navigate_to_pose_position_only.xml', 'navigate_to_pose_no_spin_recovery.xml']:
+        bt_path = os.path.join(bt_dir, bt_name)
+        tree = ET.parse(bt_path)
+        root = tree.getroot()
+        selectors = root.findall('.//PlannerSelector')
+        assert len(selectors) > 0, f"No PlannerSelector found in {bt_name}"
+        for s in selectors:
+            assert s.attrib.get('default_planner') == 'Navfn',                 f"{bt_name} PlannerSelector must default to Navfn, got {s.attrib.get('default_planner')}"

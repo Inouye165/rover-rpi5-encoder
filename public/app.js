@@ -7206,7 +7206,7 @@ function updateLocalizationUI(loc) {
       btn.style.opacity = '0.7';
     }
     const timingEl = document.getElementById('v2-nav-timing-val');
-    if (timingEl) timingEl.textContent = 'Planning Smac2D...';
+    if (timingEl) timingEl.textContent = 'Planning Nav2...';
 
     let tx, ty, tyawDeg, tyawRad, sx, sy, syawRad;
 
@@ -7659,7 +7659,7 @@ function updateLocalizationUI(loc) {
       return;
     }
 
-    if (btnEl) btnEl.textContent = '⏳ Computing Multi-Leg Smac2D Plan...';
+    if (btnEl) btnEl.textContent = '⏳ Computing Multi-Leg Nav2 Plan...';
     if (badgeEl) { badgeEl.textContent = 'PLANNING...'; badgeEl.className = 'badge badge-info'; }
 
     const pose = await getFreshestPose();

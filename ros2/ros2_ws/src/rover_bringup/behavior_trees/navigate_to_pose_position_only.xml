@@ -1,7 +1,8 @@
 <!--
-  Diagnostic Behavior Tree for Yahboom Rover Obstacle Avoidance:
+  Behavior Tree for Yahboom Rover Position-Only Navigation:
   - Defaults explicitly to Navfn (nav2_navfn_planner::NavfnPlanner) for exact endpoint fidelity.
-  - No behavior_server automatic Spin recovery on failure.
+  - Uses position_goal_checker to achieve precise XY position arrival without requiring terminal in-place yaw rotation.
+  - Preserves obstacle avoidance, clearance checking, and genuine Nav2 success reporting.
   - Fails cleanly on path/controller abort to allow test harness to safe and inspect.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
@@ -20,7 +21,7 @@
           </RecoveryNode>
         </RateController>
         <RecoveryNode number_of_retries="1" name="FollowPath">
-          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="general_goal_checker" error_code_id="{follow_path_error_code}"/>
+          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="position_goal_checker" error_code_id="{follow_path_error_code}"/>
           <Sequence>
             <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
             <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>

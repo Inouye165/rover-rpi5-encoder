@@ -1,0 +1,2242 @@
+{
+  "metadata": {
+    "run_id": "20260927_083310",
+    "start_epoch": 1790523189.714836,
+    "duration_s": 0.934,
+    "active_span_s": 0.9082,
+    "total_frames": 24,
+    "active_motion_rate_hz": 25.32,
+    "whole_run_coverage_hz": 25.7,
+    "sample_rate_hz": 25.32,
+    "open_measurement_discrepancies": [
+      "Leg 1 AMCL error of 4.96 cm at Nav2 success vs configured 4.0 cm PositionGoalChecker tolerance (preserved for reconciliation)"
+    ],
+    "home_pose": {
+      "x": 1.193853,
+      "y": -0.045221,
+      "z": 0.0,
+      "yaw_rad": -0.088087,
+      "yaw_deg": -5.047,
+      "qz": -0.044029,
+      "qw": 0.99903,
+      "frame_id": "map",
+      "source_file": "/home/ron/yahboom-encoder/ros2/volumes/maps/home_pose_slam_2026-08-23_final.json",
+      "description": "Permanent verified HOME pose settled on floor at x=1.193853, y=-0.045221, yaw=-5.047 deg"
+    }
+  },
+  "transitions": [
+    {
+      "t_rel_s": 0.0271,
+      "timestamp_epoch": 1790523189.742,
+      "stage": "LEG1_FORWARD_START",
+      "details": {
+        "target": [
+          1.8129,
+          -0.0679,
+          -0.0881
+        ]
+      }
+    },
+    {
+      "t_rel_s": 0.84,
+      "timestamp_epoch": 1790523190.5549,
+      "stage": "ABORT",
+      "details": {
+        "reason": "Nav2 goal aborted by navigation stack: ABORTED"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "t_rel_s": 0.0257,
+      "timestamp_epoch": 1790523189.74059,
+      "mission_stage": "BASELINE",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "NONE",
+      "amcl": {
+        "x": 1.2066757700127408,
+        "y": -0.001765869521457762,
+        "yaw_deg": -5.3143225133566965,
+        "yaw_rad": -0.09275242537093469,
+        "cov_x": 0.11479224082775699,
+        "cov_y": 0.10294018395483191,
+        "cov_yaw": 0.05293002628437667,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 14,
+        "ageMs": 2981
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 7,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34492,
+        "lastPacketAgeMs": 1
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18837666905551,
+        "rel_yaw_deg": 0.0,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 18,
+        "stale": false,
+        "sequence": 496183
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 18431,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17246,
+        "receivedAt": 1790523189685,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0453,
+        "pos_err_cm": 4.53,
+        "yaw_err_deg": -0.27
+      }
+    },
+    {
+      "t_rel_s": 0.0269,
+      "timestamp_epoch": 1790523189.741735,
+      "mission_stage": "BASELINE",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "NONE",
+      "amcl": {
+        "x": 1.2066757700127408,
+        "y": -0.001765869521457762,
+        "yaw_deg": -5.3143225133566965,
+        "yaw_rad": -0.09275242537093469,
+        "cov_x": 0.11479224082775699,
+        "cov_y": 0.10294018395483191,
+        "cov_yaw": 0.05293002628437667,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 14,
+        "ageMs": 2981
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 7,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34492,
+        "lastPacketAgeMs": 1
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18837666905551,
+        "rel_yaw_deg": 0.0,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 18,
+        "stale": false,
+        "sequence": 496183
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 18431,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17246,
+        "receivedAt": 1790523189685,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0453,
+        "pos_err_cm": 4.53,
+        "yaw_err_deg": -0.27
+      }
+    },
+    {
+      "t_rel_s": 0.0632,
+      "timestamp_epoch": 1790523189.778015,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "cmd_source": "CALIBRATION_TEST",
+      "amcl": {
+        "x": 1.2066757700127408,
+        "y": -0.001765869521457762,
+        "yaw_deg": -5.3143225133566965,
+        "yaw_rad": -0.09275242537093469,
+        "cov_x": 0.11479224082775699,
+        "cov_y": 0.10294018395483191,
+        "cov_yaw": 0.05293002628437667,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 14,
+        "ageMs": 3068
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 45,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34492,
+        "lastPacketAgeMs": 10
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18837666905551,
+        "rel_yaw_deg": 0.0,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 7,
+        "stale": false,
+        "sequence": 496185
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 18481,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17247,
+        "receivedAt": 1790523189728,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1357,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0453,
+        "pos_err_cm": 4.53,
+        "yaw_err_deg": -0.27
+      }
+    },
+    {
+      "t_rel_s": 0.198,
+      "timestamp_epoch": 1790523189.912821,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "cmd_source": "CALIBRATION_TEST",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 17
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 25,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34496,
+        "lastPacketAgeMs": 10
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 3,
+        "stale": false,
+        "sequence": 496190
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 18531,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17248,
+        "receivedAt": 1790523189785,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1357,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.2589,
+      "timestamp_epoch": 1790523189.9737196,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 148
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 22,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34500,
+        "lastPacketAgeMs": 10
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 24,
+        "stale": false,
+        "sequence": 496193
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 18631,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17250,
+        "receivedAt": 1790523189906,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1357,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.3125,
+      "timestamp_epoch": 1790523190.0273726,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 179
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 23,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34502,
+        "lastPacketAgeMs": 2
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18830549568034,
+        "rel_yaw_deg": 7.117337516619781e-05,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 24,
+        "stale": false,
+        "sequence": 496196
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 56,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17252,
+        "receivedAt": 1790523189988,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 581,
+        "minRevMm": 1358,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.3144,
+      "timestamp_epoch": 1790523190.0292265,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 179
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 23,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34502,
+        "lastPacketAgeMs": 2
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18830549568034,
+        "rel_yaw_deg": 7.117337516619781e-05,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 24,
+        "stale": false,
+        "sequence": 496196
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 56,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 2550,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17252,
+        "receivedAt": 1790523189988,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 581,
+        "minRevMm": 1358,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.3554,
+      "timestamp_epoch": 1790523190.0702586,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 239
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 30,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34504,
+        "lastPacketAgeMs": 4
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18830549568034,
+        "rel_yaw_deg": 7.117337516619781e-05,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 39,
+        "stale": false,
+        "sequence": 496198
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17253,
+        "receivedAt": 1790523190035,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.417,
+      "timestamp_epoch": 1790523190.131808,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 290
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 36,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34506,
+        "lastPacketAgeMs": 6
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 8,
+        "stale": false,
+        "sequence": 496202
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17254,
+        "receivedAt": 1790523190091,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.4245,
+      "timestamp_epoch": 1790523190.139589,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 290
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 46,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34506,
+        "lastPacketAgeMs": 6
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 8,
+        "stale": false,
+        "sequence": 496202
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17254,
+        "receivedAt": 1790523190091,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.4577,
+      "timestamp_epoch": 1790523190.1725411,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 356
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 32,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34508,
+        "lastPacketAgeMs": 4
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 0,
+        "stale": false,
+        "sequence": 496204
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17255,
+        "receivedAt": 1790523190134,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.5254,
+      "timestamp_epoch": 1790523190.2402809,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 388
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 40,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34510,
+        "lastPacketAgeMs": 2
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 42,
+        "stale": false,
+        "sequence": 496206
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17255,
+        "receivedAt": 1790523190134,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.5274,
+      "timestamp_epoch": 1790523190.242275,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 388
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 40,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34510,
+        "lastPacketAgeMs": 2
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 42,
+        "stale": false,
+        "sequence": 496206
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17255,
+        "receivedAt": 1790523190134,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 582,
+        "minRevMm": 1358,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.5775,
+      "timestamp_epoch": 1790523190.2923603,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 455
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 44,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34512,
+        "lastPacketAgeMs": 3
+      },
+      "imu": {
+        "raw_yaw_deg": -179.18809827416024,
+        "rel_yaw_deg": 0.0002783948952825755,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 6,
+        "stale": false,
+        "sequence": 496209
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 1,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 0,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17257,
+        "receivedAt": 1790523190241,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1357,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.6064,
+      "timestamp_epoch": 1790523190.3212173,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 507
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 28,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34514,
+        "lastPacketAgeMs": 4
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 5,
+        "stale": false,
+        "sequence": 496212
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 51,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 50,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17258,
+        "receivedAt": 1790523190284,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1357,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.6208,
+      "timestamp_epoch": 1790523190.3356352,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 507
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 41,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34514,
+        "lastPacketAgeMs": 4
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 5,
+        "stale": false,
+        "sequence": 496212
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 51,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 50,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17258,
+        "receivedAt": 1790523190284,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1357,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.6496,
+      "timestamp_epoch": 1790523190.3644478,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 553
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 29,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34516,
+        "lastPacketAgeMs": 7
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 2,
+        "stale": false,
+        "sequence": 496214
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 48,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 40,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17259,
+        "receivedAt": 1790523190334,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1357,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.6625,
+      "timestamp_epoch": 1790523190.377337,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 553
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 40,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34516,
+        "lastPacketAgeMs": 7
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 2,
+        "stale": false,
+        "sequence": 496214
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 48,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 40,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17259,
+        "receivedAt": 1790523190334,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.7131,
+      "timestamp_epoch": 1790523190.4279664,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 593
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 36,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34518,
+        "lastPacketAgeMs": 2
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 18,
+        "stale": false,
+        "sequence": 496216
+      },
+      "drive": {
+        "armed": true,
+        "mode": 3,
+        "source": 3,
+        "cmdAge": 48,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 3,
+        "espClearanceAgeMs": 40,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17259,
+        "receivedAt": 1790523190334,
+        "cmdSource": "ROS_AUTONOMY"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 3,
+        "fwdOk": true,
+        "revOk": true
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.7503,
+      "timestamp_epoch": 1790523190.4651835,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 637
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 20,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34520,
+        "lastPacketAgeMs": 7
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 15,
+        "stale": false,
+        "sequence": 496219
+      },
+      "drive": {
+        "armed": false,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.7781,
+      "timestamp_epoch": 1790523190.492993,
+      "mission_stage": "LEG1_FORWARD",
+      "raw_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "ROS_AUTONOMY",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 684
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 14,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34522,
+        "lastPacketAgeMs": 3
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 13,
+        "stale": false,
+        "sequence": 496221
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 4,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 10,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17261,
+        "receivedAt": 1790523190445,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.8066,
+      "timestamp_epoch": 1790523190.5214632,
+      "mission_stage": "FINAL_DISARMED",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "NONE",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 744
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 42,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34522,
+        "lastPacketAgeMs": 4
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 2,
+        "stale": false,
+        "sequence": 496223
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 13,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 60,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17262,
+        "receivedAt": 1790523190486,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.8171,
+      "timestamp_epoch": 1790523190.5319462,
+      "mission_stage": "FINAL_DISARMED",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "NONE",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 744
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 52,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34522,
+        "lastPacketAgeMs": 15
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 13,
+        "stale": false,
+        "sequence": 496223
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 13,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 60,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17262,
+        "receivedAt": 1790523190486,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1356,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    },
+    {
+      "t_rel_s": 0.9339,
+      "timestamp_epoch": 1790523190.648745,
+      "mission_stage": "FINAL_DISARMED",
+      "raw_cmd": {
+        "vx": 0.0,
+        "wz": 0.0
+      },
+      "smoothed_cmd": null,
+      "final_cmd": {
+        "vx": 0,
+        "wz": 0
+      },
+      "cmd_source": "NONE",
+      "amcl": {
+        "x": 1.2031759937597002,
+        "y": 0.007792713428154281,
+        "yaw_deg": -5.260097199207372,
+        "yaw_rad": -0.0918060151011007,
+        "cov_x": 0.11537743324183805,
+        "cov_y": 0.10274545496397157,
+        "cov_yaw": 0.051654446273346005,
+        "localized": true,
+        "state": "LOCALIZED",
+        "is_stationary": true,
+        "isStationary": true,
+        "seq": 15,
+        "ageMs": 816
+      },
+      "odom": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.1800788579455477,
+        "yaw_rad": 0.003142968984380959,
+        "vx": 0.0,
+        "wz": 0.0,
+        "raw_d_left_m": 0.0,
+        "raw_d_right_m": 0.0,
+        "odometry_age_ms": 16,
+        "node_health": "ok"
+      },
+      "encoders": {
+        "m1": 15457,
+        "m2": 12534,
+        "m3": 11973,
+        "m4": 8682,
+        "sequence": 34528,
+        "lastPacketAgeMs": 5
+      },
+      "imu": {
+        "raw_yaw_deg": -179.1878198793033,
+        "rel_yaw_deg": 0.0005567897522203838,
+        "gyro_z": 0,
+        "serialConnected": true,
+        "dataAgeMs": 11,
+        "stale": false,
+        "sequence": 496229
+      },
+      "drive": {
+        "armed": false,
+        "mode": 0,
+        "source": 3,
+        "cmdAge": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "lockStatus": false,
+        "espClearanceMask": 0,
+        "espClearanceAgeMs": 160,
+        "bootCount": 1,
+        "resetReasonId": 1,
+        "resetReason": "POWERON_RESET",
+        "rtcResetReasonId": 1,
+        "rtcResetReason": "POWERON_RESET (0x1)",
+        "seq": 17264,
+        "receivedAt": 1790523190586,
+        "cmdSource": "NONE"
+      },
+      "collision_monitor": {
+        "minFwdMm": 580,
+        "minRevMm": 1357,
+        "clearanceMask": 0,
+        "fwdOk": false,
+        "revOk": false
+      },
+      "to_home": {
+        "pos_err_m": 0.0538,
+        "pos_err_cm": 5.38,
+        "yaw_err_deg": -0.21
+      }
+    }
+  ]
+}
