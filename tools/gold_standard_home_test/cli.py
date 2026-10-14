@@ -40,7 +40,7 @@ def format_preview(targets: Dict[str, Any], initial_amcl: Dict[str, Any], pos_er
         r1 = targets["request1_forward"]
         r2 = targets["request2_home"]
         legs_str = f"""Planned Minimal Production Navigation Check (Standard Autonomous-Page Dispatch):
-  1. REQUEST 1 (Standard Forward Goal {r1['distance_m']:.4f} m / 1.000 ft via Production Nav2):
+  1. REQUEST 1 (Standard Forward Goal {r1['distance_m']:.4f} m / 18.0 in [1.500 ft] via Production Nav2):
      - Source:   Fresh localized starting pose ({initial_amcl.get('x', 0.0):.4f} m, {initial_amcl.get('y', 0.0):.4f} m, heading: {initial_amcl.get('yaw_deg', 0.0):+.2f}°)
      - Target:   ({r1['x']:.4f} m, {r1['y']:.4f} m, heading: {r1['yaw_deg']:+.2f}°)
      - Dispatch: Exact normal autonomous-page POST /api/navigation/dispatch (default BT, general_goal_checker)
@@ -188,7 +188,7 @@ def print_grade_report(grade: Dict[str, Any], report_path: str):
     
     print("\nMission Metrics:")
     if perf.get("mission_type") == "PRODUCTION_CHECK":
-        print(f"  • Mission Type:              Minimal Production Check (Forward 0.3048 m -> Return HOME)")
+        print(f"  • Mission Type:              Minimal Production Check (Forward 0.4572 m -> Return HOME)")
         r1_dist = perf.get('outbound_distance_m')
         r1_err = perf.get('outbound_distance_error_m')
         r1_str = f"{r1_dist:.4f} m" if r1_dist is not None else "N/A"
@@ -235,7 +235,7 @@ def run_cli():
     parser.add_argument("--execute", action="store_true", help="Execute the real physical acceptance test.")
     parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (no motor arming or physical movement).")
     parser.add_argument("--test-safety", action="store_true", help="Run automated verification of safety-abort paths.")
-    parser.add_argument("--production-check", action="store_true", help="Minimal recorded production navigation check: standard goal 0.3048 m forward -> confirmed stop -> exact normal autonomous-page HOME request -> confirmed stop.")
+    parser.add_argument("--production-check", action="store_true", help="Minimal recorded production navigation check: standard goal 0.4572 m forward -> confirmed stop -> exact normal autonomous-page HOME request -> confirmed stop.")
     parser.add_argument("--stop-after-leg2", action="store_true", help="Stop test after Leg 2 reciprocal turn (forward 2 ft -> stop -> clockwise reciprocal turn -> stop & disarm -> end).")
     parser.add_argument("--forward-turn-only", action="store_true", help="Alias for --stop-after-leg2.")
     parser.add_argument("--cockpit-url", default=COCKPIT_DEFAULT_URL, help="Cockpit HTTP endpoint URL.")
@@ -371,7 +371,7 @@ def run_cli():
     # Confirmation Gate
     if args.execute and not args.skip_confirm:
         if is_prod_check:
-            print("ATTENTION: This will physically arm and drive the rover through the minimal 2-request production navigation check (forward 0.3048 m -> stop -> return HOME with saved yaw -> stop).")
+            print("ATTENTION: This will physically arm and drive the rover through the minimal 2-request production navigation check (forward 0.4572 m -> stop -> return HOME with saved yaw -> stop).")
             confirm = input("Type 'CONFIRM' to arm drivetrain and execute production check: ").strip()
         else:
             print("ATTENTION: This will physically arm and drive the rover through the 4-leg acceptance mission.")
@@ -404,7 +404,7 @@ def run_cli():
                 mission.latest_telemetry["drive"] = {"armed": False, "mode": 0, "reqLinear": 0.0, "reqAngular": 0.0, "limLinear": 0.0, "limAngular": 0.0, "cmdSource": "NONE"}
                 mission.record_tick("BASELINE")
 
-                print("[DRY-RUN] Simulating Request 1 (Forward 0.3048 m via Production Nav2)...")
+                print("[DRY-RUN] Simulating Request 1 (Forward 0.4572 m via Production Nav2)...")
                 r1 = targets["request1_forward"]
                 mission.recorder.record_transition("REQ1_FORWARD_START", {"target": (r1["x"], r1["y"])})
                 mission.active_nav2_goal = True

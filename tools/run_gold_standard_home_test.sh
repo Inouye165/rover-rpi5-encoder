@@ -17,6 +17,20 @@ elif [ -f "/home/ron/yahboom-encoder/.env" ]; then
     set +a
 fi
 
+# Automatic ROS bag recording for /scan, /tf, /tf_static
+RUN_TS="$(date +%Y%m%d_%H%M%S)"
+BAG_NAME="bag_${RUN_TS}"
+echo "[LAUNCHER] Starting background ROS 2 bag recording: ${BAG_NAME} (/scan, /tf, /tf_static)..."
+sudo docker exec -d rover-ros2 bash -c "export ROS_DOMAIN_ID=42 && source /opt/ros/jazzy/setup.bash && exec ros2 bag record -o /ros2_ws/rosbag/${BAG_NAME} /scan /tf /tf_static /odom /amcl_pose /particle_cloud /plan /local_plan /cmd_vel_smoothed"
+
+cleanup() {
+    echo "[LAUNCHER] Stopping ROS 2 bag recording..."
+    sudo docker exec rover-ros2 pkill -INT -f "ros2 bag record" 2>/dev/null || true
+    echo "[LAUNCHER] Rosbag preserved at /home/ron/yahboom-encoder/ros2/volumes/rosbag/${BAG_NAME}"
+}
+trap cleanup EXIT
+
 echo "[LAUNCHER] Executing Gold Standard Acceptance Test on host Python..."
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 python3 -m tools.gold_standard_home_test.cli "$@"
+

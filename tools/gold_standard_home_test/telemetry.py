@@ -42,6 +42,9 @@ class TelemetryFrame:
     
     # Distance / Heading to HOME
     to_home: Dict[str, float]                 # pos_err_m, pos_err_cm, yaw_err_deg
+    
+    # Motor & Wheel Diagnostics (Delivered PWM, target/measured velocities, stiction state)
+    pid: Optional[Dict[str, Any]] = None
 
 
 class TelemetryRecorder:

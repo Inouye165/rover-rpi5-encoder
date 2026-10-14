@@ -36,7 +36,7 @@ try {
 const PORT = process.env.PORT || 3000;
 const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
 const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
-
+const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 
 function triggerNav2Cancel() {
   try {
@@ -139,6 +139,17 @@ let latestPidTelemetry = null;
 let pidPacketCount = 0;
 
 // ESP32 reset reason enumerations
+// Authoritative 7-state enum mapping exactly matching ChassisSupervisor.h SpinRecoveryState
+const SPIN_RECOVERY_STATES = [
+  'IDLE',                    // 0 = SPIN_RECOVERY_IDLE
+  'MONITORING_INITIAL',      // 1 = SPIN_RECOVERY_MONITORING_INITIAL
+  'SETTLE_1',                // 2 = SPIN_RECOVERY_SETTLE_1
+  'TWITCH_PULSE',            // 3 = SPIN_RECOVERY_TWITCH_PULSE
+  'SETTLE_2',                // 4 = SPIN_RECOVERY_SETTLE_2
+  'RETRY',                   // 5 = SPIN_RECOVERY_RETRY
+  'FAILED_LATCHED'           // 6 = SPIN_RECOVERY_FAILED_LATCHED
+];
+
 const ESP_RESET_REASONS = {
   0: 'UNKNOWN',
   1: 'POWERON_RESET',
@@ -230,6 +241,28 @@ const MAX_POSITION_SPEED = 60;
 // Phase 4 Coordinated Normal Drive State
 const EventEmitter = require('events');
 const normalDriveEvents = new EventEmitter();
+function handleDrivetrainRecoveryFault(status) {
+  if (status && status.spinFailedExhausted === true) {
+    const isNavigating = Boolean(status.armed ||
+      autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' ||
+      autonomyState.enabled || cmdSource === 'ROS_AUTONOMY');
+    if (isNavigating && autonomyState.state !== 'FAULT') {
+      console.error('[Autonomy Safety] CRITICAL: Drivetrain recovery exhausted! Cancelling Nav2 goal, locking FAULT state, and disarming.');
+      triggerNav2Cancel();
+      resetAutonomyToSafe('Drivetrain recovery exhausted (spin/motion stall)');
+      autonomyState.state = 'FAULT';
+      autonomyState.lastRejectionReason = 'Drivetrain recovery exhausted (spin/motion stall)';
+      if (serialPort && serialPort.isOpen) {
+        const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+        serialPort.write(disarmPkt);
+        broadcast({ type: 'raw_serial_out', data: `[Autonomy Safety] Recovery exhausted: disarm command sent` });
+      }
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+  }
+}
+normalDriveEvents.on('status', handleDrivetrainRecoveryFault);
+
 let normalDriveStatusSeq = 0;
 let latestNormalDriveStatus = null;
 let latestFaultFlags = 0;
@@ -1947,10 +1980,20 @@ function parseTelemetryPacket(extType, data) {
       const lockStatus = data[23] === 1;
       const espClearanceMask = data.length >= 26 ? data[24] : 0x00;
       const espClearanceAgeMs = data.length >= 26 ? (data[25] * 10) : 999999;
-      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : 0;
-      const resetReasonId = data.length >= 31 ? data[30] : 0;
-      const rtcResetReasonId = data.length >= 32 ? data[31] : 0;
+      // Represent unsupported fields from older packets as null / UNKNOWN rather than 0
+      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : null;
+      const resetReasonId = data.length >= 31 ? data[30] : null;
+      const rtcResetReasonId = data.length >= 32 ? data[31] : null;
       
+      const uptimeMs = data.length >= 36 ? data.readUInt32LE(32) : null;
+      const spinRecoveryCode = data.length >= 37 ? data[36] : null;
+      const spinRecoveryState = (spinRecoveryCode !== null) ? (SPIN_RECOVERY_STATES[spinRecoveryCode] || `STATE_${spinRecoveryCode}`) : 'UNKNOWN';
+      const noMotionBudgetMs = data.length >= 39 ? data.readUInt16LE(37) : null;
+      const recoveryFlags = data.length >= 40 ? data[39] : null;
+      const spinFailedExhausted = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x01) : null;
+      const chassisRebreakoutConsumed = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x02) : null;
+      const isPowerOnReset = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x04) : (resetReasonId !== null ? (resetReasonId === 1 || rtcResetReasonId === 1) : null);
+
       if (latestNormalDriveStatus && latestNormalDriveStatus.armed !== armed) {
         console.log(`[DEBUG] ESP32 Normal Drive armed state changed: ${latestNormalDriveStatus.armed} -> ${armed}. LockStatus: ${lockStatus}, Mode: ${mode}`);
       } else if (!armed && lockStatus) {
@@ -1972,9 +2015,16 @@ function parseTelemetryPacket(extType, data) {
         espClearanceAgeMs,
         bootCount,
         resetReasonId,
-        resetReason: ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`,
+        resetReason: resetReasonId !== null ? (ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`) : 'UNKNOWN',
         rtcResetReasonId,
-        rtcResetReason: RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`,
+        rtcResetReason: rtcResetReasonId !== null ? (RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`) : 'UNKNOWN',
+        uptimeMs,
+        spinRecoveryCode,
+        spinRecoveryState,
+        noMotionBudgetMs,
+        spinFailedExhausted,
+        chassisRebreakoutConsumed,
+        isPowerOnReset,
         seq: normalDriveStatusSeq,
         receivedAt: Date.now()
       };
@@ -1987,6 +2037,8 @@ function parseTelemetryPacket(extType, data) {
       });
       // Propagate ESP32-confirmed armed state changes to calibration-status WS consumers.
       broadcastAutoCalibStatus();
+
+// Shared fault handler invoked via normalDriveEvents 'status' listener
     }
 
     } else if (extType === TYPE_PID_DIAGNOSTIC) {
@@ -2036,8 +2088,10 @@ function parseTelemetryPacket(extType, data) {
         };
       }
       pidPacketCount++;
+      const rxNow = Date.now();
       latestPidTelemetry = {
-        timestamp: Date.now(),
+        receivedAt: rxNow,
+        timestamp: rxNow,
         sequence: pidPacketCount,
         actuationState,
         m1: wheels[0],
@@ -4535,7 +4589,6 @@ app.get('/api/localization/status', (req, res) => {
 // ────────────────────────────────────────────────────────────
 // ROS 2 Navigation Bridge Proxy Endpoints (port 3005)
 // ────────────────────────────────────────────────────────────
-const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 let cachedNavMap = null;
 let cachedNavMapTime = 0;
 
@@ -4771,7 +4824,7 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
 
 async function refreshNavigationReadiness(timeoutMs = 1500) {
   try {
-    const bridgeUrl = (typeof ROVER_NAV_BRIDGE_URL !== 'undefined' ? ROVER_NAV_BRIDGE_URL : (process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005'));
+    const bridgeUrl = ROVER_NAV_BRIDGE_URL;
     const res = await fetch(`${bridgeUrl}/api/nav/status`, {
       signal: AbortSignal.timeout(timeoutMs)
     });
@@ -5698,6 +5751,37 @@ app.get('/api/imu', (req, res) => {
 
 app.get('/api/drive/status', (req, res) => {
   const statusObj = latestNormalDriveStatus ? { ...latestNormalDriveStatus, cmdSource: cmdSource } : { armed: false, cmdSource: cmdSource };
+  const now = Date.now();
+  let pidTelemetry = null;
+  if (latestPidTelemetry) {
+    const ageMs = now - (latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp || now);
+    const isStale = ageMs > 250;
+    pidTelemetry = {
+      receivedAt: latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp,
+      ageMs: ageMs,
+      sequence: latestPidTelemetry.sequence || 0,
+      stale: isStale,
+      valid: !isStale,
+      telemetry: isStale ? null : {
+        actuationState: latestPidTelemetry.actuationState,
+        m1: latestPidTelemetry.m1,
+        m2: latestPidTelemetry.m2,
+        m3: latestPidTelemetry.m3,
+        m4: latestPidTelemetry.m4,
+        outerYaw: latestPidTelemetry.outerYaw
+      }
+    };
+  } else {
+    pidTelemetry = {
+      receivedAt: null,
+      ageMs: null,
+      sequence: 0,
+      stale: true,
+      valid: false,
+      telemetry: null
+    };
+  }
+
   res.json({
     ok: true,
     status: statusObj,
@@ -5708,7 +5792,8 @@ app.get('/api/drive/status', (req, res) => {
     backtracking,
     recording,
     pathLength: recordedPath.length,
-    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist }
+    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist },
+    pidTelemetry
   });
 });
 

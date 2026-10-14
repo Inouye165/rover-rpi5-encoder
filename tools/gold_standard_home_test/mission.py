@@ -112,6 +112,18 @@ class ContinuousYawTracker:
     def relative_yaw_deg(self) -> float:
         return math.degrees(self.accumulated_yaw_rad)
 
+
+def is_uint32_wrap(curr_uptime: int, last_uptime: int) -> bool:
+    """
+    Checks if a drop in uint32 uptime represents a normal forward rollover.
+    uint32 wraps from 4,294,967,295 to 0. A valid wrap occurs when last_uptime
+    is near 2^32-1 (e.g. > 0xF0000000) and forward delta modulo 2^32 is small (< 60000 ms).
+    """
+    if curr_uptime >= last_uptime:
+        return False
+    forward_delta = (curr_uptime - last_uptime) & 0xFFFFFFFF
+    return (last_uptime > 0xF0000000) and (forward_delta < 60000)
+
 class GoldStandardMission:
     def __init__(
         self,
@@ -153,6 +165,13 @@ class GoldStandardMission:
 
         # Watchdog baselines
         self.initial_boot_count: Optional[int] = None
+        self.last_uptime_ms: Optional[int] = None
+        self._last_pid_monotonic: Optional[float] = None
+        self._drive_status_lock = threading.Lock()
+        self._drive_req_counter: int = 0
+        self._last_accepted_req_id: int = 0
+        self._last_accepted_drive_seq: Optional[int] = None
+        self._last_accepted_drive_rx_time: Optional[float] = None
         self.last_imu_yaw: Optional[float] = None
         self.last_imu_seq: Optional[int] = None
         self.last_imu_seq_adv_time: float = time.monotonic()
@@ -221,7 +240,7 @@ class GoldStandardMission:
     def compute_production_check_targets(self, start_pose: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Calculates exact target coordinates and headings for the minimal 2-request production check:
-        - Request 1: One standard goal 0.3048 m (1.000 ft) forward from fresh starting map pose along starting heading.
+        - Request 1: One standard goal 0.4572 m (18.0 in / 1.500 ft) forward from fresh starting map pose along starting heading.
         - Request 2: Authoritative saved HOME pose (exact coordinates and saved HOME yaw).
         """
         h = self.home_pose
@@ -802,36 +821,132 @@ class GoldStandardMission:
         finally:
             self._in_disarm_and_stop = False
 
+    def _handle_drive_status_failure(self, now_mono=None):
+        """On drive-status request failure, invalidate cached PID diagnostics or age them using elapsed local time."""
+        if self.latest_telemetry.get("pid"):
+            now = now_mono if now_mono is not None else time.monotonic()
+            if self._last_pid_monotonic is not None:
+                elapsed_ms = int((now - self._last_pid_monotonic) * 1000)
+                base_age = self.latest_telemetry["pid"].get("ageMs", 0) or 0
+                current_age = base_age + elapsed_ms
+                self._last_pid_monotonic = now
+            else:
+                current_age = 999999
+            
+            if current_age > 250:
+                self.latest_telemetry["pid"] = {
+                    "valid": False,
+                    "stale": True,
+                    "receivedAt": self.latest_telemetry["pid"].get("receivedAt"),
+                    "ageMs": current_age,
+                    "sequence": self.latest_telemetry["pid"].get("sequence"),
+                    "telemetry": None
+                }
+            else:
+                self.latest_telemetry["pid"]["ageMs"] = current_age
+
     def update_drive_status(self) -> Dict[str, Any]:
-        """Queries /api/drive/status to monitor hardware health and command echoes."""
+        """Queries /api/drive/status to monitor hardware health, command echoes, and bundled PID diagnostics."""
         if self.dry_run:
             return {
                 "armed": False,
                 "mode": 0,
                 "bootCount": 1,
+                "uptimeMs": 1000,
+                "spinRecoveryCode": 0,
+                "spinRecoveryState": "IDLE",
                 "reqLinear": 0.0,
                 "reqAngular": 0.0,
                 "limLinear": 0.0,
                 "limAngular": 0.0,
                 "cmdSource": self.current_cmd_source
             }
-        r = self._http_get(f"{self.cockpit_url}/api/drive/status", timeout=0.5)
-        if r.status_code != 200:
-            raise MissionAbortException(f"Drive status request failed with HTTP {r.status_code}")
-        res = r.json()
-        status = res.get("status", {})
-        self.latest_telemetry["drive"] = status
-        self.latest_telemetry["last_packet_monotonic"] = time.monotonic()
-        return status
+
+        with self._drive_status_lock:
+            self._drive_req_counter += 1
+            current_req_id = self._drive_req_counter
+
+            try:
+                r = self._http_get(f"{self.cockpit_url}/api/drive/status", timeout=0.5)
+                if r.status_code != 200:
+                    self._handle_drive_status_failure()
+                    raise MissionAbortException(f"Drive status request failed with HTTP {r.status_code}")
+                res = r.json()
+                status = res.get("status", {})
+                t_mono = time.monotonic()
+
+                # Enforce response ordering before accepting sample into cache
+                is_delayed = False
+                curr_seq = status.get("seq")
+                curr_rx_time = status.get("receivedAt")
+                curr_uptime = status.get("uptimeMs")
+
+                if current_req_id < self._last_accepted_req_id:
+                    is_delayed = True
+                elif curr_seq is not None and self._last_accepted_drive_seq is not None and curr_seq < self._last_accepted_drive_seq:
+                    is_delayed = True
+                elif curr_rx_time is not None and self._last_accepted_drive_rx_time is not None and curr_rx_time < self._last_accepted_drive_rx_time:
+                    is_delayed = True
+                elif curr_uptime is not None and self.last_uptime_ms is not None and curr_uptime < self.last_uptime_ms:
+                    # Check if this is a legitimate uint32 wrap
+                    if is_uint32_wrap(curr_uptime, self.last_uptime_ms):
+                        is_delayed = False
+                    else:
+                        # Distinguish delayed sample from genuine reboot:
+                        # If server sequence or timestamp is advancing, it is a new packet from server -> not delayed.
+                        # If uptime is only slightly lower without advancing server sequence, it's a delayed older sample.
+                        if curr_seq is not None and self._last_accepted_drive_seq is not None and curr_seq > self._last_accepted_drive_seq:
+                            is_delayed = False
+                        elif curr_rx_time is not None and self._last_accepted_drive_rx_time is not None and curr_rx_time > self._last_accepted_drive_rx_time and curr_uptime < 3000:
+                            is_delayed = False
+                        elif self.last_uptime_ms - curr_uptime < 10000 and curr_uptime > 2000:
+                            is_delayed = True
+
+                if is_delayed:
+                    # Drop delayed out-of-order response; preserve currently accepted cache
+                    return self.latest_telemetry.get("drive") or status
+
+                # Accept fresh sample into cache
+                self.latest_telemetry["drive"] = status
+                self.latest_telemetry["last_packet_monotonic"] = t_mono
+                self._last_accepted_req_id = current_req_id
+                if curr_seq is not None:
+                    self._last_accepted_drive_seq = curr_seq
+                if curr_rx_time is not None:
+                    self._last_accepted_drive_rx_time = curr_rx_time
+
+                # Process bundled PID diagnostic telemetry from /api/drive/status (0 ms added HTTP overhead)
+                pid_data = res.get("pidTelemetry")
+                if pid_data:
+                    if pid_data.get("valid") and not pid_data.get("stale"):
+                        self.latest_telemetry["pid"] = pid_data
+                        self._last_pid_monotonic = t_mono
+                    else:
+                        self.latest_telemetry["pid"] = {
+                            "valid": False,
+                            "stale": True,
+                            "receivedAt": pid_data.get("receivedAt"),
+                            "ageMs": pid_data.get("ageMs"),
+                            "sequence": pid_data.get("sequence"),
+                            "telemetry": None
+                        }
+                        self._last_pid_monotonic = t_mono
+                else:
+                    self._handle_drive_status_failure(t_mono)
+
+                return status
+            except Exception:
+                self._handle_drive_status_failure()
+                raise
 
     def poll_all_telemetry(self):
         """Polls Cockpit endpoints to populate synchronized telemetry channels."""
         now = time.monotonic()
-        # 1. Drive & Odom
+        # 1. Drive & Odom (includes bundled PID telemetry)
         try:
             self.update_drive_status()
         except Exception:
-            pass
+            self._handle_drive_status_failure()
 
         # 2. Localization
         try:
@@ -1054,6 +1169,21 @@ class GoldStandardMission:
                 raise MissionAbortException(f"ESP32 hardware reboot detected! (BootCount: {self.initial_boot_count} -> {curr_bc})")
 
         if not self.dry_run:
+            uptime_ms = drive_stat.get("uptimeMs")
+            if uptime_ms is not None:
+                if self.last_uptime_ms is not None:
+                    if is_uint32_wrap(uptime_ms, self.last_uptime_ms):
+                        # Legitimate uint32 rollover, advance watchdog baseline without error
+                        self.last_uptime_ms = uptime_ms
+                    elif uptime_ms < self.last_uptime_ms:
+                        self.disarm_and_stop()
+                        raise MissionAbortException(f"ESP32 hardware reboot detected! (Uptime regressed: {self.last_uptime_ms}ms -> {uptime_ms}ms)")
+                    else:
+                        self.last_uptime_ms = uptime_ms
+                else:
+                    self.last_uptime_ms = uptime_ms
+
+        if not self.dry_run:
             if imu_stat.get("serialConnected") is False:
                 self.disarm_and_stop()
                 raise MissionAbortException("Serial communication to ESP32 disconnected!")
@@ -1129,7 +1259,8 @@ class GoldStandardMission:
                 "pos_err_m": round(pos_err_m, 4),
                 "pos_err_cm": round(pos_err_m * 100.0, 2),
                 "yaw_err_deg": round(yaw_err_deg, 2)
-            }
+            },
+            pid=self.latest_telemetry.get("pid")
         )
         self.recorder.record_frame(frame)
 
@@ -1480,7 +1611,7 @@ class GoldStandardMission:
     def execute_production_check(self, targets: Dict[str, Any]):
         """
         Executes minimal 2-request production navigation check using exact autonomous-page dispatch settings:
-        1. Request 1: Forward 0.3048 m (1.000 ft) via standard production Nav2 dispatch.
+        1. Request 1: Forward 0.4572 m (18.0 in / 1.500 ft) via standard production Nav2 dispatch.
            Waits for Nav2 SUCCEEDED, handshakes zero, confirms disarm, confirms stationary at rest.
         2. Request 2: Return to authoritative saved HOME coordinates and saved HOME yaw
            via exact autonomous-page dispatch settings (default BT, general_goal_checker).
@@ -1490,11 +1621,12 @@ class GoldStandardMission:
         req2 = targets["request2_home"]
 
         self.recorder.metadata["mission_type"] = "PRODUCTION_CHECK"
+        self.recorder.metadata["forward_distance_m"] = float(req1["distance_m"])
         self.start_continuous_recording(rate_hz=25.0)
         self.verify_and_capture_baseline_imu_reference()
         self.record_tick("BASELINE")
 
-        # --- REQUEST 1: Outbound 0.3048 m Forward via Production Nav2 ---
+        # --- REQUEST 1: Outbound 0.4572 m Forward via Production Nav2 ---
         self.current_stage = "LEG1_FORWARD"
         print(f"\n[REQUEST 1] Dispatching standard forward goal {req1['distance_m']:.4f} m -> ({req1['x']:.4f}, {req1['y']:.4f}, {req1['yaw_deg']:+.2f}°)...")
         self.recorder.record_transition("REQ1_FORWARD_START", {"target": (req1["x"], req1["y"], req1["yaw_rad"])})

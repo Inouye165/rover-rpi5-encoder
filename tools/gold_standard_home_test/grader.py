@@ -55,7 +55,25 @@ class MissionGrader:
 
         # Leg 1 Outbound Distance
         is_prod_check = metadata.get("mission_type") == "PRODUCTION_CHECK"
-        expected_fwd_dist = PRODUCTION_CHECK_FORWARD_DISTANCE_M if is_prod_check else FORWARD_DISTANCE_M
+        recorded_fwd_dist = metadata.get("forward_distance_m")
+        if recorded_fwd_dist is not None:
+            expected_fwd_dist = float(recorded_fwd_dist)
+        elif is_prod_check:
+            inferred_dist = None
+            for tr in run_data.get("transitions", []):
+                details = tr.get("details") or {}
+                if "target" in details and isinstance(details["target"], (list, tuple)) and len(details["target"]) >= 2:
+                    tx, ty = details["target"][0], details["target"][1]
+                    d_infer = math.hypot(tx - start_x, ty - start_y)
+                    if abs(d_infer - 0.3048) < 0.05:
+                        inferred_dist = 0.3048
+                        break
+                    elif abs(d_infer - 0.4572) < 0.05:
+                        inferred_dist = 0.4572
+                        break
+            expected_fwd_dist = inferred_dist if inferred_dist is not None else PRODUCTION_CHECK_FORWARD_DISTANCE_M
+        else:
+            expected_fwd_dist = FORWARD_DISTANCE_M
         leg1_samples = stage_samples.get("LEG1_FORWARD", [])
         if leg1_samples:
             end_leg1 = leg1_samples[-1].get("amcl", {})
@@ -209,10 +227,20 @@ class MissionGrader:
             if bc != initial_boot_count:
                 resets_detected += 1
                 break
+        # Check for drivetrain recovery exhaustion across all telemetry samples.
+        # Count recovery exhaustion once as a drivetrain fault / safety intervention.
+        # Do not count its resulting ABORT stage again or classify every cancellation/timeout as a drivetrain fault.
+        recovery_exhausted = any(
+            s.get("drive", {}).get("spinFailedExhausted") is True or
+            s.get("drive", {}).get("spinRecoveryState") == "FAILED_LATCHED" or
+            (bool(s.get("pid")) and s.get("pid", {}).get("spin_failed_exhausted") is True)
+            for s in samples
+        )
+        drivetrain_faults = 1 if recovery_exhausted else 0
 
         watchdog_trips = metadata.get("watchdog_trips", 0)
         rejections = metadata.get("rejections", 0)
-        safety_interventions = resets_detected + watchdog_trips + rejections
+        safety_interventions = resets_detected + watchdog_trips + rejections + drivetrain_faults
 
         # 6. Sample Rate Verification
         total_time_s = metadata.get("duration_s", 0.0)

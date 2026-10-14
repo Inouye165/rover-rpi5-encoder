@@ -4666,10 +4666,10 @@ def test_production_check_target_computation():
     r1 = targets["request1_forward"]
     r2 = targets["request2_home"]
     
-    assert r1["distance_m"] == 0.3048
+    assert r1["distance_m"] == 0.4572
     assert math.isclose(r1["yaw_rad"], -0.0881, abs_tol=1e-4)
-    expected_x1 = 1.1939 + 0.3048 * math.cos(-0.0881)
-    expected_y1 = -0.0452 + 0.3048 * math.sin(-0.0881)
+    expected_x1 = 1.1939 + 0.4572 * math.cos(-0.0881)
+    expected_y1 = -0.0452 + 0.4572 * math.sin(-0.0881)
     assert math.isclose(r1["x"], expected_x1, abs_tol=1e-3)
     assert math.isclose(r1["y"], expected_y1, abs_tol=1e-3)
     
@@ -4723,6 +4723,7 @@ def test_production_check_grading():
     run_data = {
         "metadata": {
             "mission_type": "PRODUCTION_CHECK",
+            "forward_distance_m": 0.3048,
             "duration_s": 2.0
         },
         "samples": samples
@@ -4734,3 +4735,167 @@ def test_production_check_grading():
     assert grade["criteria"]["request1_forward_distance"]["passed"] is True
     assert grade["criteria"]["final_home_position_error"]["passed"] is True
     assert grade["criteria"]["final_home_yaw_error"]["passed"] is True
+
+
+
+
+
+
+class TestDriveStatusWatchdog:
+    """Focused regression suite for drive-status serialization, delayed response filtering, and uptime watchdog."""
+
+    def test_delayed_response_does_not_cause_false_reboot(self):
+        """Proves a delayed older response (5000 ms after 5100 ms) cannot cause a false reboot detection."""
+        import threading
+        import time
+        from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+        mission = GoldStandardMission.__new__(GoldStandardMission)
+        mission.dry_run = False
+        mission.cockpit_url = "http://localhost:3000"
+        mission.latest_telemetry = {"drive": None, "imu": {"dataAgeMs": 10, "stale": False}, "amcl": {"state": "LOCALIZED"}}
+        mission.last_uptime_ms = None
+        mission._last_pid_monotonic = None
+        mission._drive_status_lock = threading.Lock()
+        mission._drive_req_counter = 0
+        mission._last_accepted_req_id = 0
+        mission._last_accepted_drive_seq = None
+        mission._last_accepted_drive_rx_time = None
+        mission.initial_boot_count = 1
+        mission.last_imu_seq_adv_time = time.monotonic()
+        mission._in_disarm_and_stop = False
+        mission.disarm_and_stop = lambda: None
+        mission._handle_drive_status_failure = lambda *args: None
+
+        class MockResp:
+            def __init__(self, data):
+                self._data = data
+                self.status_code = 200
+            def json(self):
+                return self._data
+
+        # 1. First sample: uptime 5100 ms (seq 105, rx_time 1005100)
+        mission._http_get = lambda url, timeout=0.5: MockResp({
+            "status": {"uptimeMs": 5100, "seq": 105, "receivedAt": 1005100, "armed": True, "mode": 3, "bootCount": 1}
+        })
+        s1 = mission.update_drive_status()
+        assert s1["uptimeMs"] == 5100
+        mission.verify_safety_invariants("STAGE")
+        assert mission.last_uptime_ms == 5100
+
+        # 2. Delayed older response: uptime 5000 ms (seq 104, rx_time 1005000)
+        mission._http_get = lambda url, timeout=0.5: MockResp({
+            "status": {"uptimeMs": 5000, "seq": 104, "receivedAt": 1005000, "armed": True, "mode": 3, "bootCount": 1}
+        })
+        s2 = mission.update_drive_status()
+        # Older sample must be dropped; accepted sample retained in cache
+        assert s2["uptimeMs"] == 5100
+        assert mission.latest_telemetry["drive"]["uptimeMs"] == 5100
+        
+        # Watchdog comparison remains consistent with accepted sample; must NOT raise reboot exception
+        mission.verify_safety_invariants("STAGE")
+        assert mission.last_uptime_ms == 5100
+
+    def test_uint32_uptime_wrap_handled_without_reboot_abort(self):
+        """Proves rollover across 2^32-1 is accepted as forward time and not labeled a reboot."""
+        import time
+        from tools.gold_standard_home_test.mission import GoldStandardMission, is_uint32_wrap
+        mission = GoldStandardMission.__new__(GoldStandardMission)
+        mission.dry_run = False
+        mission.latest_telemetry = {"drive": None, "imu": {"dataAgeMs": 10, "stale": False}, "amcl": {"state": "LOCALIZED"}}
+        mission.last_uptime_ms = 4294967200  # Near UINT32_MAX (~49.7 days)
+        mission.initial_boot_count = 1
+        mission.last_imu_seq_adv_time = time.monotonic()
+        mission._in_disarm_and_stop = False
+        mission.disarm_and_stop = lambda: None
+
+        assert is_uint32_wrap(150, 4294967200) is True
+
+        # Simulate sample after rollover to 150 ms
+        mission.latest_telemetry["drive"] = {"uptimeMs": 150, "bootCount": 1}
+        mission.verify_safety_invariants("STAGE")
+        # Watchdog must accept the rollover without aborting and advance baseline to 150 ms
+        assert mission.last_uptime_ms == 150
+
+    def test_genuine_reboot_triggers_watchdog(self):
+        """Proves genuine reboot with advancing server packets still triggers the watchdog."""
+        import threading
+        import time
+        from tools.gold_standard_home_test.mission import GoldStandardMission, MissionAbortException
+        import pytest
+        mission = GoldStandardMission.__new__(GoldStandardMission)
+        mission.dry_run = False
+        mission.cockpit_url = "http://localhost:3000"
+        mission.latest_telemetry = {"drive": None, "imu": {"dataAgeMs": 10, "stale": False}, "amcl": {"state": "LOCALIZED"}}
+        mission.last_uptime_ms = 50000
+        mission._last_pid_monotonic = None
+        mission._drive_status_lock = threading.Lock()
+        mission._drive_req_counter = 0
+        mission._last_accepted_req_id = 0
+        mission._last_accepted_drive_seq = 200
+        mission._last_accepted_drive_rx_time = 1006000
+        mission.initial_boot_count = 1
+        mission.last_imu_seq_adv_time = time.monotonic()
+        mission._in_disarm_and_stop = False
+        disarmed_calls = []
+        mission.disarm_and_stop = lambda: disarmed_calls.append(True)
+        mission._handle_drive_status_failure = lambda *args: None
+
+        class MockResp:
+            def __init__(self, data):
+                self._data = data
+                self.status_code = 200
+            def json(self):
+                return self._data
+
+        # Fresh reboot packet from newly booted MCU: seq advances to 250, uptime resets to 120 ms
+        mission._http_get = lambda url, timeout=0.5: MockResp({
+            "status": {"uptimeMs": 120, "seq": 250, "receivedAt": 1007000, "armed": False, "mode": 0, "bootCount": 1}
+        })
+        s = mission.update_drive_status()
+        assert s["uptimeMs"] == 120
+        assert mission.latest_telemetry["drive"]["uptimeMs"] == 120
+
+        with pytest.raises(MissionAbortException, match="ESP32 hardware reboot detected!.*50000ms -> 120ms"):
+            mission.verify_safety_invariants("STAGE")
+
+        assert len(disarmed_calls) > 0
+
+    def test_concurrent_drive_status_updates_serialized(self):
+        """Proves concurrent calls from multiple threads are serialized under lock without race conditions."""
+        import threading
+        import time
+        from tools.gold_standard_home_test.mission import GoldStandardMission
+        mission = GoldStandardMission.__new__(GoldStandardMission)
+        mission.dry_run = False
+        mission.latest_telemetry = {"drive": None}
+        mission.last_uptime_ms = None
+        mission._last_pid_monotonic = None
+        mission._drive_status_lock = threading.Lock()
+        mission._drive_req_counter = 0
+        mission._last_accepted_req_id = 0
+        mission._last_accepted_drive_seq = None
+        mission._last_accepted_drive_rx_time = None
+        mission.cockpit_url = "http://localhost:3000"
+
+        call_log = []
+        def mock_http_get(url, timeout=0.5):
+            call_log.append("start")
+            time.sleep(0.01) # Hold inside lock
+            call_log.append("end")
+            class R:
+                status_code = 200
+                def json(self):
+                    return {"status": {"uptimeMs": 1000, "seq": 1}}
+            return R()
+
+        mission._http_get = mock_http_get
+        mission._handle_drive_status_failure = lambda *args: None
+
+        threads = [threading.Thread(target=mission.update_drive_status) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Serialization guarantee: every "start" is immediately followed by "end"
+        assert call_log == ["start", "end", "start", "end", "start", "end", "start", "end", "start", "end"]
