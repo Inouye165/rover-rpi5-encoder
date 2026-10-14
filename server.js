@@ -411,7 +411,7 @@ function updateLocalizationState(loc) {
 
   // Fail-Safe: If rover was actively navigating and localization becomes lost:
   if (wasLocalized && !localizationState.localized) {
-    if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
+    if (cmdSource !== 'CALIBRATION_TEST' && (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY')) {
       console.error('[Localization Safety] CRITICAL: Localization lost during autonomous navigation! Triggering fail-safe disarm.');
       abortAutonomyDueToLocalizationLost('Localization lost during autonomous navigation');
     }
@@ -4283,6 +4283,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
     // 4. Only then set autonomyState.state = READY_ARMED and return HTTP 200
     if (autonomyState.state === 'READY_DISARMED') {
       autonomyState.state = 'READY_ARMED';
+      autonomyState.lastCmdTime = performance.now();
       console.log('[Autonomy] Rover armed and confirmed by ESP32 (mode 3). State set to READY_ARMED.');
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
@@ -5630,16 +5631,16 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
   const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
 
-  if (cmdReqSource === 'ROS_AUTONOMY') {
+  if (cmdReqSource === 'ROS_AUTONOMY' || cmdReqSource === 'CALIBRATION_TEST') {
     if (autonomyState.state === 'READY_ARMED') {
       autonomyState.state = 'ACTIVE';
       autonomyState.active = true;
       watchdogFired = false;
-      if (cmdSource !== 'ROS_AUTONOMY') {
+      if (cmdSource !== cmdReqSource) {
         sendZeroMotionPacket();
-        cmdSource = 'ROS_AUTONOMY';
+        cmdSource = cmdReqSource;
       }
-      console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+      console.log(`[Autonomy] First non-zero command accepted (${cmdReqSource}). Transitioned to ACTIVE.`);
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
   }
