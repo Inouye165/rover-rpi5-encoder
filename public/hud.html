@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="description" content="Rover 1 ground-control HUD: live LiDAR radar, UPS health, IMU, FPV camera, tactical Nav2 map and safe manual drive.">
+  <title>Rover 1 - HUD Cockpit &amp; Ground Control</title>
+  <link rel="stylesheet" href="hud.css">
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'desktop') return;
+      const isPhoneUA = /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(navigator.userAgent || '');
+      const isSmallTouch = (navigator.maxTouchPoints > 1) && (Math.min(window.innerWidth, window.innerHeight) < 600);
+      if (isPhoneUA || isSmallTouch) window.location.replace('hud-mobile.html');
+    })();
+  </script>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="top-bar">
+    <div style="display:flex; align-items:center; gap:10px; flex-shrink:0;">
+      <h1 class="hud-title" style="font-size:14px;">ROVER 1 GROUND CONTROL</h1>
+      <div class="view-switcher" role="tablist" aria-label="Cockpit View Mode">
+        <button class="view-tab active" id="tab-view-drive" data-view="drive" title="Full FPV Camera + Mini-Map PiP (1)">🎮 FPV Drive</button>
+        <button class="view-tab" id="tab-view-map" data-view="map" title="Interactive 2D Map &amp; Point-and-Click Nav2 (2)">🗺️ Tactical Map</button>
+        <button class="view-tab" id="tab-view-split" data-view="split" title="Split FPV Camera + 2D Map (3)">🔀 Split View</button>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:5px; flex-shrink:1; min-width:0; overflow-x:auto;">
+      <button class="btn-estop" id="btn-top-estop" title="Instant Emergency Stop &amp; Disarm (Spacebar / Esc / Controller B or X)">🛑 E-STOP (SPACE / B)</button>
+      <button class="top-quick-btn home-btn" id="btn-top-home" title="Nav2: autonomously drive back to the saved HOME pose (asks for confirmation)">🏠 Return Home</button>
+      <button class="top-quick-btn" id="btn-top-init-home" title="Tell AMCL the rover is sitting on the HOME pad (no motion)">📍 Localize @ Home</button>
+      <div class="badge" id="conn-badge" style="min-width: 148px; justify-content: space-between;">
+        <span style="display:inline-flex; align-items:center; gap:5px;">
+          <span class="status-dot" id="conn-dot"></span>
+          <span id="conn-text" style="display:inline-block; min-width:64px;">Connecting...</span>
+        </span>
+        <span id="rpi-temp" style="margin-left: 4px; padding-left: 5px; border-left: 1px solid #203146; font-size: 11px; font-weight: 700; color: #888888; display: inline-block; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums;">🌡️ --°C</span>
+      </div>
+      <div class="badge" id="ups-plug-badge" style="min-width: 102px; justify-content: center; color: #8ba2b5;" title="Power source inferred from the X1206 state-of-charge trend (no AC-detect line available)">🔌 AC: CHECKING</div>
+      <div class="badge badge-battery" id="battery-badge" style="min-width: 138px; justify-content: center;">🔋 RPi UPS: --% (--V)</div>
+      <div class="badge badge-battery" id="motor-battery-badge" style="color:#5f7a91; min-width: 106px; justify-content: center;" title="Rover 1 has no motor-pack voltage sensor wired to the ESP32">⚙ Motor: N/A</div>
+      <div class="badge" id="auth-badge" style="min-width: 92px; justify-content: center; cursor:pointer;" title="Operator token status — click to edit">🔑 NO TOKEN</div>
+      <div class="badge" id="gamepad-badge" style="color: #5f7a91; border-color: #203146; min-width: 98px; justify-content: center;">
+        <span id="gamepad-icon">🎮</span>
+        <span id="gamepad-status-text">NO GAMEPAD</span>
+      </div>
+      <a href="hud-mobile.html?mode=mobile" class="badge badge-link" title="Switch to Phone Touch Cockpit">📱 Touch UI</a>
+      <a href="index.html" class="badge badge-link" title="Legacy engineering cockpit (calibration, tests, diagnostics)">🛠 Engineering</a>
+    </div>
+  </header>
+
+  <main class="cockpit-grid">
+    <!-- Left Pane: Sensors -->
+    <section class="side-pane" aria-label="Sensors">
+      <div class="card">
+        <div class="card-title">
+          <span>360° LiDAR Radar</span>
+          <span id="stat-radar-badge" style="color:#5f7a91; font-size:10px; font-weight:bold;">SCANNING...</span>
+        </div>
+        <div style="position:relative; width:260px; height:260px; margin:0 auto;">
+          <canvas id="lidar-canvas" width="260" height="260" style="display:block; border-radius:4px;"></canvas>
+          <div style="position:absolute; top:4px; left:0; width:260px; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
+            <span id="hud-scan-age" style="color:rgba(0,255,204,0.75);">AGE: --</span>
+            <span id="hud-nearest-stat" style="color:#00ffcc; font-weight:bold;">NEAREST: --</span>
+          </div>
+          <div style="position:absolute; bottom:4px; left:0; width:260px; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
+            <span id="hud-lidar-stat" style="color:#00ff66; font-weight:bold;">360° LIDAR: WAITING</span>
+            <span id="hud-lidar-min" style="color:#00ff66;">MIN: --</span>
+          </div>
+        </div>
+
+        <div style="margin-top:5px; background:#070b10; border:1px solid #142332; border-radius:4px; padding:6px; font-size:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; color:#8ba2b5;">
+            <span>Color:
+              <select id="sel-radar-color" style="background:#101a24; color:#00ffcc; border:1px solid #1c3347; border-radius:3px; font-size:9px; padding:1px 2px;">
+                <option value="range" selected>Range (Dist)</option>
+                <option value="solid">Solid Green</option>
+              </select>
+            </span>
+            <span>Size:
+              <select id="sel-radar-ptsize" style="background:#101a24; color:#00ffcc; border:1px solid #1c3347; border-radius:3px; font-size:9px; padding:1px 2px;">
+                <option value="1.6">Small</option>
+                <option value="2.4" selected>Medium</option>
+                <option value="3.4">Large</option>
+              </select>
+            </span>
+            <span>Range:
+              <select id="sel-radar-range" style="background:#101a24; color:#00ffcc; border:1px solid #1c3347; border-radius:3px; font-size:9px; padding:1px 2px;">
+                <option value="2.0">2.0 m</option>
+                <option value="3.0" selected>3.0 m</option>
+                <option value="5.0">5.0 m</option>
+                <option value="8.0">8.0 m</option>
+              </select>
+            </span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; font-size:9px; color:#5f7a91; border-top:1px solid #142332; padding-top:4px; margin-top:4px;">
+            <div>360° Scan Pts: <b id="disp-lidar-pts" style="color:#00ff88;">0 pts</b></div>
+            <div>LiDAR Rate: <b id="disp-lidar-hz" style="color:#00ff88;">-- Hz</b></div>
+            <div>Device: <b id="disp-lidar-dev" style="color:#8ba2b5;">RPLiDAR C1</b></div>
+            <div>Reconnects: <b id="disp-lidar-reconn" style="color:#8ba2b5;">--</b></div>
+          </div>
+          <div id="disp-lidar-error" style="display:none; margin-top:4px; font-size:9px; color:#ffaa00; line-height:1.3; word-break:break-word;"></div>
+        </div>
+      </div>
+
+      <div class="card" id="ups-card">
+        <div class="card-title">
+          <span>Geekworm X1206 UPS Health</span>
+          <span id="ups-health-badge" style="color:#00ffcc; font-size:9px; font-weight:700;">MONITORING</span>
+        </div>
+        <div id="ups-plug-banner" class="plug-state-bat" style="text-align:center; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:800; letter-spacing:0.6px; margin-bottom:2px; font-variant-numeric:tabular-nums;">
+          🔌 CHECKING POWER SOURCE...
+        </div>
+        <div class="stat-row"><span>State of Charge</span><span class="stat-val" id="ups-soc">-- %</span></div>
+        <div class="stat-row"><span>Terminal Voltage</span><span class="stat-val" id="ups-voltage">-- V</span></div>
+        <div class="stat-row"><span>Power Source</span><span class="stat-val" id="ups-state">Standby</span></div>
+        <div class="stat-row"><span>Net Rate</span><span class="stat-val" id="ups-rate">-- %/hr</span></div>
+        <div class="stat-row"><span>Estimated Time</span><span class="stat-val" id="ups-time-left">Calibrating</span></div>
+        <div class="stat-row"><span>Trend Window</span><span class="stat-val" id="ups-window" style="font-size:11px; color:#8ba2b5;">--</span></div>
+        <div id="ups-health-diag" style="font-size:10px; color:#00ffcc; background:#070b10; border:1px solid #142332; border-radius:4px; padding:4px 6px; margin-top:2px;">
+          Checking cell voltage &amp; charge trend...
+        </div>
+        <div class="bar-wrap"><div class="bar-fill" id="ups-bar"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>Attitude &amp; Heading (IMU)</span><span id="imu-badge" style="color:#5f7a91; font-size:9px; font-weight:700;">--</span></div>
+        <div class="stat-row"><span>Heading (Yaw)</span><span class="stat-val" id="imu-yaw" style="color:#00ffcc;">--°</span></div>
+        <div class="stat-row"><span>Pitch</span><span class="stat-val" id="imu-pitch">--°</span></div>
+        <div class="stat-row"><span>Roll</span><span class="stat-val" id="imu-roll">--°</span></div>
+        <div style="font-size: 10px; color: #5f7a91; margin-top: 3px;">Source: BNO08x on ESP32 (game rotation vector, non-magnetic)</div>
+      </div>
+    </section>
+
+    <!-- Center Stage -->
+    <section class="center-stage mode-drive" id="center-stage" aria-label="Camera and map">
+      <div class="viewport" id="viewport-container">
+        <button class="btn-flip-hud btn-cam-hud" id="btn-camera-toggle" title="Start / stop the USB camera MJPEG stream">⏸ CAMERA</button>
+        <button class="btn-flip-hud" id="btn-flip" title="Rotate the camera image 180°">🔄 FLIP 180°</button>
+        <button class="pip-expand-btn" data-view="drive" style="position:absolute; bottom:8px; left:8px; z-index:28; background:rgba(8,14,23,0.88); border:1px solid #00ffcc; color:#00ffcc; border-radius:4px; padding:4px 8px; font-size:10px; font-weight:700; cursor:pointer;" title="Expand FPV Camera to Full Center Stage">⛶ EXPAND FPV</button>
+        <div class="feed-standby" id="feed-standby">
+          <div style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">ROVER 1 FPV</div>
+          <div style="font-size: 12px;" id="feed-subtext">USB CAMERA · /api/camera (MJPEG)</div>
+        </div>
+        <img id="camera-feed" src="" alt="Rover 1 FPV camera" style="opacity: 0;">
+        <div class="crosshair"></div>
+      </div>
+
+      <div id="autonomy-map-panel">
+        <div class="pip-minimap-bar" style="position:absolute; top:0; left:0; right:0; z-index:25; display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:linear-gradient(180deg, rgba(6,11,18,0.92), rgba(6,11,18,0.4)); border-bottom:1px solid rgba(0,255,204,0.2); font-size:10px;">
+          <span style="color:#00ffcc; font-weight:700; letter-spacing:0.6px;">🗺️ NAV MINI-MAP</span>
+          <div style="display:flex; gap:4px;">
+            <button class="js-estop" style="background:#ff2a4b; border:1px solid #ff5c77; color:#fff; border-radius:3px; padding:2px 6px; font-size:9.5px; font-weight:800; cursor:pointer;" title="Instant Emergency Stop &amp; Disarm">🛑 STOP</button>
+            <button class="js-return-home" style="background:#0d261c; border:1px solid #00ff88; color:#00ff88; border-radius:3px; padding:2px 6px; font-size:9.5px; font-weight:700; cursor:pointer;" title="Return Home">🏠 Home</button>
+            <button data-view="map" style="background:#102235; border:1px solid #00ffcc; color:#00ffcc; border-radius:3px; padding:2px 6px; font-size:9.5px; font-weight:700; cursor:pointer;" title="Open Full Tactical Map">⛶ Expand</button>
+          </div>
+        </div>
+
+        <div class="map-top-hud map-full-only">
+          <div class="map-hud-pill">
+            <span id="nav-state-dot" class="status-dot"></span>
+            <span id="nav-hud-banner" style="font-weight:700; color:#00ffcc;">TACTICAL MAP — Click to Preview Path, Drag to Set Arrival Heading</span>
+          </div>
+          <div class="map-hud-pill" style="gap:5px; flex-wrap:wrap;">
+            <button class="map-tool-btn js-estop" title="Instant Emergency Stop &amp; Disarm (Spacebar / Esc / Controller B or X)" style="background:#ff2a4b; border-color:#ff5c77; color:#ffffff; font-weight:800; box-shadow:0 0 10px rgba(255,42,75,0.45);">🛑 E-STOP</button>
+            <button class="map-tool-btn active" id="btn-map-follow" title="Lock view onto live Rover position">🎯 Follow Rover</button>
+            <button class="map-tool-btn" id="btn-map-zoom-in" title="Zoom In">➕</button>
+            <button class="map-tool-btn" id="btn-map-zoom-out" title="Zoom Out">➖</button>
+            <button class="map-tool-btn" id="btn-map-center" title="Center &amp; Reset Zoom">🔄 Center</button>
+            <button class="map-tool-btn" id="btn-map-clear" title="Clear goal pin and previewed path">✖ Clear Pin</button>
+          </div>
+        </div>
+
+        <canvas id="nav-map-canvas" width="900" height="650" aria-label="Tactical navigation map"></canvas>
+
+        <div class="map-bottom-dock map-full-only">
+          <div style="display:flex; flex-direction:column; margin-right:6px; font-size:10px; line-height:1.3;">
+            <span style="color:#8ba2b5;">Target: <b id="map-dock-target" style="color:#00ffcc;">Click map to set goal</b></span>
+            <span style="color:#8ba2b5;">Route: <b id="map-dock-metrics" style="color:#00ff88;">-- m</b></span>
+          </div>
+          <button class="btn-nav-action btn-nav-dispatch js-go" title="Nav2: arm and autonomously drive to the goal (asks for confirmation)">🚀 Go Here (Arm &amp; Drive)</button>
+          <button class="btn-nav-action btn-nav-preview js-preview" title="Compute a Nav2 path without moving the rover">🔍 Preview Path</button>
+          <button class="btn-nav-action btn-nav-home js-return-home" title="Autonomously return to the saved HOME pose">🏠 Return Home</button>
+          <button class="btn-nav-action btn-nav-sethome js-init-home" title="Tell AMCL the rover is on the HOME pad (no motion)">📍 Localize @ Home</button>
+          <button class="btn-nav-action btn-nav-cancel js-estop" title="Immediately stop all motion, cancel Nav2, and disarm">🛑 E-STOP / Disarm</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Pane -->
+    <section class="side-pane right" aria-label="Autonomy and drive">
+      <div class="card" style="border-color:#1e3a52; background:linear-gradient(180deg, #0d1826 0%, #0d1522 100%);">
+        <div class="card-title">
+          <span style="color:#00ffcc;">🧭 Autonomy &amp; Mission Control</span>
+          <span id="nav-card-badge" style="color:#00ffcc; font-size:9.5px; font-weight:800;">IDLE (DISARMED)</span>
+        </div>
+        <div id="nav-card-status" style="font-size:10px; color:#b8cde0; background:#070d15; border:1px solid #16283a; border-radius:4px; padding:5px 7px; line-height:1.35;">
+          Click anywhere on the 2D Map to preview a Nav2 path or dispatch a goal.
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px 8px; font-size:10.5px; margin-top:2px;">
+          <div>Pose X/Y: <b id="nav-pose-xy" style="color:#fff;">--</b></div>
+          <div>Pose Yaw: <b id="nav-pose-yaw" style="color:#00ffcc;">--</b></div>
+          <div>Home Pose: <b id="nav-home-xy" style="color:#00ff88;">--</b></div>
+          <div>Goal Dist: <b id="nav-rem-dist" style="color:#00d4ff;">-- m</b></div>
+        </div>
+
+        <div style="font-size:9.5px; color:#8ba2b5; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; margin-top:3px;">Quick Route Presets (Preview)</div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:4px;">
+          <button class="preset-chip" data-dist="0.70" data-ang="0">+0.70m Fwd</button>
+          <button class="preset-chip" data-dist="0.50" data-ang="0">+0.50m Fwd</button>
+          <button class="preset-chip" data-dist="-0.40" data-ang="0">-0.40m Rev</button>
+          <button class="preset-chip" data-dist="0" data-ang="90">↺ Left 90°</button>
+          <button class="preset-chip" data-dist="0" data-ang="-90">↻ Right 90°</button>
+          <button class="preset-chip" data-dist="0" data-ang="180">🔄 Turn 180°</button>
+        </div>
+
+        <div style="display:flex; gap:4px; margin-top:3px;">
+          <button class="js-go" style="flex:1.2; padding:6px 4px; font-size:10px; font-weight:800; background:linear-gradient(135deg,#00ffcc,#00b8ff); color:#041016; border:none; border-radius:4px; cursor:pointer;">🚀 GO</button>
+          <button class="js-return-home" style="flex:1; padding:6px 4px; font-size:10px; font-weight:700; background:#0d261c; border:1px solid #00ff88; color:#00ff88; border-radius:4px; cursor:pointer;">🏠 HOME</button>
+          <button class="js-estop" style="padding:6px 8px; font-size:10px; font-weight:800; background:#ff2a4b; border:1px solid #ff7788; color:#fff; border-radius:4px; cursor:pointer; box-shadow:0 0 8px rgba(255,42,75,0.4);" title="Instant Emergency Stop &amp; Disarm">🛑 STOP</button>
+        </div>
+
+        <details style="margin-top:4px; background:#070c14; border:1px solid #162638; border-radius:4px; padding:5px 7px;">
+          <summary style="font-size:10px; font-weight:700; color:#00d4ff; cursor:pointer; outline:none;">📜 Multi-Step Mission Script (Preview)</summary>
+          <div style="margin-top:5px; display:flex; flex-direction:column; gap:5px;">
+            <textarea id="mission-script-input" rows="2" style="width:100%; background:#0b131e; color:#d1d9e6; border:1px solid #1e344b; border-radius:3px; padding:4px 6px; font-size:10px; font-family:monospace; resize:vertical; user-select:text;">forward 2 feet, turn left 90 degrees, move 1 foot, return home</textarea>
+            <button id="btn-mission-preview" style="padding:4px 6px; font-size:10px; font-weight:700; background:#102133; border:1px solid #00d4ff; color:#00d4ff; border-radius:3px; cursor:pointer;">🔍 Preview Mission</button>
+            <div class="preview-only-note">Rover 1 server has no multi-leg mission executor, so scripts are plan-only. Dispatch single goals with 🚀 GO.</div>
+          </div>
+        </details>
+      </div>
+
+      <div class="card" id="drivetrain-card">
+        <div class="card-title">
+          <span>Maker ESP32 4WD Drivetrain</span>
+          <span id="drivetrain-badge" style="color:#5f7a91; font-size:9px; font-weight:700;">--</span>
+        </div>
+        <div class="stat-row"><span>Firmware</span><span class="stat-val" id="disp-fw" style="font-size:11px;">--</span></div>
+        <div class="stat-row"><span>Linear Vel (odom)</span><span class="stat-val" id="disp-lin">0.00 m/s</span></div>
+        <div class="stat-row"><span>Angular Vel (odom)</span><span class="stat-val" id="disp-ang">0.00 rad/s</span></div>
+        <div class="stat-row"><span>Limited Cmd</span><span class="stat-val" id="disp-cmd" style="font-size:11px;">0.00 / 0.00</span></div>
+        <div class="stat-row"><span>Speed Throttle</span><span class="stat-val" id="disp-throttle">50%</span></div>
+        <input type="range" id="throttle-slider" min="10" max="100" value="50" style="width: 100%; margin-top: 6px;" aria-label="Manual drive speed throttle">
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Drive Controls</span>
+          <span id="gp-conn-dot" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#5f7a91;"></span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button id="btn-card-estop" class="js-estop" style="flex:1.25; padding:8px 8px; background:#ff2a4b; color:#ffffff; border:1px solid #ff7788; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:0.4px; cursor:pointer; box-shadow:0 0 12px rgba(255,42,75,0.45); transition:all 0.15s ease;">🛑 E-STOP (B / SPACE)</button>
+          <button id="btn-arm-toggle" class="btn-arm" title="Arm / disarm the ESP32 drivetrain (requires operator token)">🔒 ARM</button>
+        </div>
+        <div style="font-size:11px; color:#00ffcc; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="gp-name">No gamepad detected</div>
+        <div id="gp-wake-hint" style="font-size:10px; color:#ffaa00; line-height:1.3; margin-top:2px;">🎮 Press any button on your controller to connect.</div>
+        <div id="gp-security-alert" style="display:none; background:#241607; border:1px solid #ffaa00; border-radius:4px; padding:6px; margin-top:4px; font-size:10px; color:#ffdd99; line-height:1.4;">
+          <b>⚠️ Browser HTTP Block:</b> Chrome/Edge block gamepads on plain HTTP IPs. Add <code id="gp-origin">this origin</code> under <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, or tunnel with <code>ssh -L 3000:localhost:3000 ron@10.0.0.246</code>.
+        </div>
+        <div style="display:flex; gap:6px; margin-top:4px;">
+          <div id="gp-deadman-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #ff2a4b; color:#ff4765;">LB/LT: RELEASED</div>
+          <div id="gp-turbo-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #203146; color:#5f7a91;">RB: TURBO OFF</div>
+        </div>
+        <div id="gp-deadman-alert" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:4px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;">⚠️ HOLD LB OR LT TO DRIVE (Deadman Safety Active)</div>
+        <div id="drive-hint" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:4px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;"></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px; font-size:10px; color:#8ba2b5;">
+          <div>
+            <span>Linear (Stick Y):</span>
+            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-lin-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
+          </div>
+          <div>
+            <span>Angular (Stick X):</span>
+            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-ang-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
+          </div>
+        </div>
+        <div class="token-row">
+          <input type="password" id="token-input" placeholder="Operator token" autocomplete="off" aria-label="Operator token">
+          <button id="btn-token-save">Save</button>
+          <button id="btn-token-clear" title="Forget token on this browser">✕</button>
+        </div>
+        <div id="token-status" style="font-size:10px; color:#8ba2b5;">Token: not set</div>
+        <div style="font-size: 11px; line-height: 1.5; color: #8ba2b5; margin-top: 6px;">
+          • <b>Controller E-Stop:</b> <b>B</b>, <b>X</b>, <b>Y</b>, <b>Back</b>, or <b>Stick Click</b><br>
+          • <b>Keyboard:</b> <b>Spacebar / Esc</b> = E-Stop | <b>WASD / Arrows</b> = Drive<br>
+          • <b>Deadman:</b> hold <b>LB / LT</b> to drive with a controller<br>
+          • Drive commands stream at 10 Hz; the server stops the rover if they stop arriving.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Hardware Bus Checklist</div>
+        <div class="stat-row"><span>Geekworm X1206 UPS</span><span class="stat-val dim" id="stat-ups">CHECKING...</span></div>
+        <div class="stat-row"><span>ESP32 Serial Link</span><span class="stat-val dim" id="stat-serial">CHECKING...</span></div>
+        <div class="stat-row"><span>RPLiDAR C1 (360°)</span><span class="stat-val dim" id="stat-rplidar">CHECKING...</span></div>
+        <div class="stat-row"><span>BNO08x IMU</span><span class="stat-val dim" id="stat-imu">CHECKING...</span></div>
+        <div class="stat-row"><span>USB Camera</span><span class="stat-val dim" id="stat-camera">CHECKING...</span></div>
+        <div class="stat-row"><span>Nav2 Bridge</span><span class="stat-val dim" id="stat-nav">CHECKING...</span></div>
+        <div class="stat-row"><span>AMCL Localization</span><span class="stat-val dim" id="stat-loc">CHECKING...</span></div>
+        <div class="stat-row"><span>SLAM Toolbox</span><span class="stat-val dim" id="stat-slam">CHECKING...</span></div>
+        <div class="stat-row"><span>RPi 5 Power</span><span class="stat-val dim" id="stat-rpi">CHECKING...</span></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="hud-toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script src="hud-core.js"></script>
+  <script src="hud-desktop.js"></script>
+</body>
+</html>

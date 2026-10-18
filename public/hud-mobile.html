@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#05080c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Rover 1">
+<meta name="description" content="Rover 1 touch cockpit: dual-stick drive, E-STOP, FPV camera, LiDAR radar and Nav2 map.">
+<title>Rover 1 Touch Cockpit &amp; Autonomy</title>
+<style>
+  :root {
+    --bg:#05080c; --panel:#0b1119; --line:#1c3347; --txt:#c7d6e2; --dim:#5f7a91;
+    --ok:#00ffcc; --green:#00ff88; --blue:#00d4ff; --warn:#ffaa00; --bad:#ff3344;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none;
+      -webkit-touch-callout:none; touch-action:none; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--txt); overflow:hidden;
+              font-family:-apple-system,system-ui,Roboto,sans-serif; overscroll-behavior:none; }
+  #app { position:fixed; inset:0; display:flex; flex-direction:column;
+         padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  /* Top status bar + Segmented View Switcher */
+  #top { flex:0 0 clamp(36px,6.5vh,44px); display:flex; align-items:center; gap:5px; padding:0 6px;
+         background:var(--panel); border-bottom:1px solid var(--line); font-size:clamp(10px,1.5vh + .35vw,13px);
+         font-weight:600; white-space:nowrap; overflow-x:auto; font-variant-numeric:tabular-nums; }
+  #top .chip { padding:2px 6px; border-radius:10px; background:#101a24; border:1px solid var(--line); flex-shrink:0;
+               white-space:nowrap; font-variant-numeric:tabular-nums; text-align:center; }
+  .chip.plug-ac { background:rgba(0,255,136,.18) !important; border-color:#00ff88 !important; color:#00ff88 !important; }
+  .chip.warn-yellow { background:rgba(255,204,0,.22) !important; border-color:#ffcc00 !important; color:#ffee55 !important; font-weight:800; }
+  @keyframes mob-crit-flash {
+    0%, 100% { background:#d90429; border-color:#ff4d6d; color:#fff; box-shadow:0 0 10px rgba(255,42,75,.9); }
+    50% { background:#2b050c; border-color:#ff2a4b; color:#ffccd5; box-shadow:none; }
+  }
+  .chip.crit-flash { animation:mob-crit-flash .65s infinite ease-in-out !important; font-weight:800; }
+  #dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:0 0 auto; }
+  #dot.on { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  #spacer { flex:1; }
+
+  .mode-tabs { display:inline-flex; background:#060a10; border:1px solid var(--line); border-radius:999px; padding:2px; gap:2px; flex-shrink:0; }
+  .mtab { border:0; background:transparent; color:var(--dim); font-size:11px; font-weight:700; padding:3px 8px;
+          border-radius:999px; transition:all .24s cubic-bezier(.22,1,.36,1); }
+  .mtab.active { background:rgba(0,255,204,.2); color:var(--ok); border:1px solid rgba(0,255,204,.45); }
+
+  .top-act { padding:4px 8px; border-radius:6px; border:1px solid rgba(0,255,136,.45); background:#092018;
+             color:var(--green); font-weight:800; font-size:11px; flex-shrink:0; }
+  #estop { height:78%; padding:0 10px; border:0; border-radius:6px; background:var(--bad); color:#fff;
+           font-weight:800; font-size:inherit; flex-shrink:0; }
+
+  /* Main Stage: Seamless transitions between Drive, Tactical Map, and Split */
+  #main { flex:1; min-height:0; display:flex; flex-direction:column; position:relative; }
+  #stage { flex:1; min-height:0; position:relative; background:#03060a; overflow:hidden;
+           display:grid; grid-template-columns:1fr; grid-template-rows:1fr; gap:6px;
+           transition:all .35s cubic-bezier(.22,1,.36,1); }
+  #stage.mode-split { grid-template-rows:1fr 1fr; }
+
+  #view, #mapPane { position:relative; overflow:hidden; transition:all .35s cubic-bezier(.22,1,.36,1); }
+
+  /* Mode: Drive (FPV Full + Mini-Map bottom-left) */
+  #stage.mode-drive #view { width:100%; height:100%; z-index:5; }
+  #stage.mode-drive #mapPane {
+    position:absolute; bottom:44px; left:6px; width:clamp(118px,30vmin,175px); height:clamp(95px,24vmin,140px);
+    z-index:15; border-radius:8px; border:1px solid rgba(0,255,204,.45); background:rgba(6,10,16,.9);
+    box-shadow:0 6px 18px rgba(0,0,0,.75);
+  }
+  #stage.mode-drive #mapPane .map-ui-full { display:none !important; }
+  #stage.mode-drive #view .pip-cam-btn { display:none !important; }
+
+  /* Mode: Map (2D SLAM Map Full + Camera PiP top-right) */
+  #stage.mode-map #mapPane { width:100%; height:100%; z-index:5; background:#050911; }
+  #stage.mode-map #view {
+    position:absolute; top:42px; right:6px; width:clamp(135px,34vmin,210px); height:clamp(84px,21vmin,130px);
+    z-index:18; border-radius:8px; border:1px solid rgba(0,255,204,.5); background:#000;
+    box-shadow:0 6px 20px rgba(0,0,0,.8);
+  }
+  #stage.mode-map #view #radar,
+  #stage.mode-map #view #hud,
+  #stage.mode-map #view #viewBtns { display:none !important; }
+
+  /* Mode: Split (50/50 Camera & Map) */
+  #stage.mode-split #view { width:100%; height:100%; z-index:5; }
+  #stage.mode-split #mapPane { width:100%; height:100%; z-index:5; border-top:1px solid var(--line); background:#050911; }
+  #stage.mode-split #view .pip-cam-btn { display:none !important; }
+
+  #cam { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #camMsg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim);
+            font-size:13px; pointer-events:none; text-align:center; padding:12px; }
+  #radar { position:absolute; top:6px; right:6px; width:clamp(100px,25vmin,170px); height:clamp(100px,25vmin,170px);
+           background:rgba(5,8,12,.68); border:1px solid var(--line); border-radius:8px; pointer-events:none; }
+  #hud { position:absolute; top:6px; left:6px; display:flex; flex-direction:column; gap:3px; font-size:11px;
+         font-weight:600; pointer-events:none; z-index:6; }
+  #hud span { background:rgba(5,8,12,.72); border:1px solid var(--line); border-radius:6px; padding:2px 6px; width:max-content; }
+  #viewBtns { position:absolute; bottom:6px; left:50%; transform:translateX(-50%); display:flex; gap:5px; z-index:8; }
+  .sbtn { background:rgba(16,26,36,.88); border:1px solid var(--line); color:var(--txt); border-radius:7px;
+          padding:5px 8px; font-size:11px; font-weight:700; }
+
+  /* Map Canvas & Touch Autonomy Dock */
+  #mobMapCanvas { width:100%; height:100%; display:block; }
+  .map-top-bar {
+    position:absolute; top:6px; left:6px; right:6px; z-index:12; display:flex; justify-content:space-between;
+    align-items:center; gap:5px; pointer-events:none;
+  }
+  .map-pill {
+    pointer-events:auto; background:rgba(7,12,20,.88); border:1px solid var(--line); border-radius:6px;
+    padding:4px 8px; font-size:11px; font-weight:700; color:var(--ok); display:flex; align-items:center; gap:5px;
+    max-width:70%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .map-zoom-btns { pointer-events:auto; display:flex; gap:4px; }
+  .mzbtn { background:rgba(14,24,36,.9); border:1px solid var(--line); color:var(--txt); border-radius:6px;
+           padding:4px 8px; font-size:11px; font-weight:700; }
+  .mzbtn.active { border-color:var(--ok); color:var(--ok); }
+
+  .map-bot-bar {
+    position:absolute; bottom:6px; left:50%; transform:translateX(-50%); z-index:14;
+    background:rgba(7,12,20,.92); border:1px solid rgba(0,255,204,.4); border-radius:9px;
+    padding:5px 7px; display:flex; align-items:center; gap:5px; max-width:98%; overflow-x:auto;
+  }
+  .mact { border-radius:6px; padding:6px 9px; font-size:11px; font-weight:800; border:1px solid transparent; white-space:nowrap; }
+  .mact.go { background:linear-gradient(135deg,#00ffcc,#00b8ff); color:#041016; }
+  .mact.plan { background:#102133; border-color:var(--blue); color:var(--blue); }
+  .mact.home { background:#0d261c; border-color:var(--green); color:var(--green); }
+  .mact.sethome { background:#14202e; border-color:var(--dim); color:var(--txt); }
+  .mact.stop { background:#2a0f16; border-color:var(--bad); color:#ff6b81; }
+
+  /* Mission & Presets Drawer Modal */
+  #missionDrawer {
+    position:absolute; inset:auto 8px 50px 8px; z-index:25; background:rgba(9,15,24,.96);
+    border:1px solid var(--ok); border-radius:10px; padding:10px; display:none; flex-direction:column; gap:7px;
+    box-shadow:0 10px 30px rgba(0,0,0,.85);
+  }
+  #missionDrawer.open { display:flex; }
+  .pgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
+  .pbtn { background:#101c2a; border:1px solid var(--line); color:var(--txt); border-radius:5px; padding:6px 4px;
+          font-size:11px; font-weight:700; text-align:center; }
+
+  /* Dual Touch Sticks Dock */
+  #ctl { flex:0 0 clamp(140px,33vh,260px); display:flex; align-items:center; justify-content:space-around;
+         background:var(--panel); border-top:1px solid var(--line); position:relative; }
+  .stickWrap { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px; color:var(--dim); font-weight:700; }
+  .stick { position:relative; width:clamp(112px,min(26vh,38vw),195px); height:clamp(112px,min(26vh,38vw),195px);
+           border-radius:50%; background:radial-gradient(circle,#13202d 0%,#0a121a 70%); border:2px solid var(--line); }
+  .stick.v { border-radius:60px; width:clamp(66px,min(13vh,19vw),105px); }
+  .knob { position:absolute; left:50%; top:50%; width:44%; height:44%; margin:-22% 0 0 -22%; border-radius:50%;
+          background:#2a4d68; border:2px solid var(--ok); pointer-events:none; }
+  .stick.v .knob { width:80%; height:auto; aspect-ratio:1; margin:0; left:10%; top:50%; transform:translateY(-50%); }
+  #midCol { display:flex; flex-direction:column; gap:5px; align-items:stretch; width:clamp(96px,25vw,154px); }
+  #ctlEstop { padding:9px 5px; border-radius:8px; border:2px solid #ff7788; background:#ff2a4b; color:#fff;
+              font-weight:900; font-size:12px; letter-spacing:0.3px; box-shadow:0 0 12px rgba(255,42,75,0.5); }
+  #ctlEstop:active { background:#fff; color:#ff1738; }
+  #ctlResume { padding:8px 5px; border-radius:8px; border:2px solid var(--ok); background:#08261e; color:var(--ok);
+               font-weight:800; font-size:11.5px; letter-spacing:0.3px; }
+  #ctlResume:active { background:var(--ok); color:#041016; }
+  #arm { padding:8px 6px; border-radius:8px; border:2px solid var(--bad); background:#1a0d10; color:var(--bad);
+         font-weight:800; font-size:12px; }
+  #arm.on { border-color:var(--ok); background:#06231e; color:var(--ok); }
+  #spdLbl { font-size:11px; color:var(--dim); text-align:center; }
+  #spd { width:100%; touch-action:pan-x; }
+  #readout { font-size:10px; color:var(--dim); text-align:center; font-variant-numeric:tabular-nums; }
+
+  /* Landscape adjustments */
+  @media (orientation:landscape) {
+    #stage.mode-split { grid-template-rows:1fr; grid-template-columns:1fr 1fr; }
+    #stage.mode-split #mapPane { border-top:0; border-left:1px solid var(--line); }
+    #main { flex-direction:row; }
+    #ctl { position:absolute; inset:0; background:transparent; border:0; pointer-events:none; flex:none;
+           justify-content:space-between; padding:0 10px; align-items:flex-end; padding-bottom:8px; z-index:20; }
+    #ctl > * { pointer-events:auto; }
+    .stick { opacity:.78; background:radial-gradient(circle,rgba(19,32,45,.8) 0%,rgba(10,18,26,.55) 70%); }
+    #midCol { position:absolute; left:50%; bottom:44px; transform:translateX(-50%); width:clamp(96px,15vw,140px); }
+    #stage.mode-map #ctl .stickWrap { opacity:.55; }
+    #stage.mode-map #midCol { display:none; }
+    #viewBtns { bottom:auto; top:6px; left:50%; }
+    #hud { top:42px; }
+  }
+  /* Rover 1 additions */
+  #tokenBar { position:absolute; inset:auto 8px 50px 8px; z-index:26; background:rgba(9,15,24,.96); border:1px solid var(--warn);
+              border-radius:10px; padding:10px; display:none; flex-direction:column; gap:7px; }
+  #tokenBar.open { display:flex; }
+  #tokenBar input { width:100%; background:#060b12; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:7px 8px;
+                    font-size:12px; user-select:text; -webkit-user-select:text; touch-action:auto; }
+  .chip.auth-ok { color:var(--green); border-color:rgba(0,255,136,.55); }
+  .chip.auth-bad { color:var(--warn); border-color:rgba(255,170,0,.55); }
+  #mobToast { position:absolute; top:50px; left:50%; transform:translateX(-50%); z-index:40; background:rgba(8,14,23,.95);
+              border:1px solid var(--ok); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:700; display:none;
+              max-width:90vw; text-align:center; }
+  #mobToast.error { border-color:var(--bad); color:#ffccd2; }
+  #mobToast.warn { border-color:var(--warn); color:#ffe0a3; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <span id="dot"></span>
+    <div class="mode-tabs">
+      <button class="mtab active" id="tabDrive" data-mode="drive">🎥 FPV</button>
+      <button class="mtab" id="tabMap" data-mode="map">🗺️ Map</button>
+      <button class="mtab" id="tabSplit" data-mode="split">🔀 Split</button>
+    </div>
+    <button class="top-act" id="btnTopHome">🏠 Home</button>
+    <span class="chip" id="cBat" style="min-width:108px;">🔋 --%</span>
+    <span class="chip" id="cAuth" style="min-width:64px;">🔑 --</span>
+    <span class="chip" id="cTmp" style="min-width:52px;">-- °C</span>
+    <span class="chip" id="cLat" style="min-width:62px;">-- ms</span>
+    <span id="spacer"></span>
+    <button id="estop">🛑 E-STOP</button>
+  </div>
+
+  <div id="main">
+    <div id="stage" class="mode-drive">
+      <div id="view">
+        <img id="cam" alt="">
+        <div id="camMsg">Connecting…</div>
+        <canvas id="radar"></canvas>
+        <button class="sbtn pip-cam-btn" data-mode="drive" style="position:absolute;bottom:4px;left:4px;z-index:10;padding:3px 6px;font-size:10px;border-color:var(--ok);color:var(--ok);">⛶ FPV</button>
+        <div id="hud">
+          <span id="hSpd">0.00 m/s · 0.00 r/s</span>
+          <span id="hMin">LIDAR --</span>
+          <span id="hYaw">YAW --°</span>
+          <span id="hState">DISARMED</span>
+        </div>
+        <div id="viewBtns">
+          <button class="sbtn" id="bCam">⏸ Cam</button>
+          <button class="sbtn" id="bFlip">⟲ Flip</button>
+          <button class="sbtn" id="bFs">⛶ Full</button>
+          <a class="sbtn" href="hud.html?mode=desktop" style="text-decoration:none;">🖥 Desktop</a>
+        </div>
+      </div>
+
+      <div id="mapPane">
+        <div class="map-top-bar map-ui-full">
+          <div class="map-pill" id="mobNavBanner">🗺️ Tap Map to Set Goal, Drag to Aim</div>
+          <div class="map-zoom-btns">
+            <button class="mzbtn" id="btnMobTopEstop" style="background:#ff2a4b;border-color:#ff7788;color:#fff;">🛑 STOP</button>
+            <button class="mzbtn active" id="btnMobFollow">🎯</button>
+            <button class="mzbtn" id="btnMobZoomIn">➕</button>
+            <button class="mzbtn" id="btnMobZoomOut">➖</button>
+            <button class="mzbtn" id="btnMobDrawer">📜 Presets</button>
+          </div>
+        </div>
+
+        <canvas id="mobMapCanvas"></canvas>
+
+        <div id="missionDrawer" class="map-ui-full">
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;color:var(--ok);">
+            <span>🧭 Route Presets &amp; Mission (Preview)</span>
+            <button class="mzbtn" id="btnCloseDrawer">✕</button>
+          </div>
+          <div class="pgrid">
+            <button class="pbtn" data-dist="0.70" data-ang="0">+0.70m Fwd</button>
+            <button class="pbtn" data-dist="0.50" data-ang="0">+0.50m Fwd</button>
+            <button class="pbtn" data-dist="-0.40" data-ang="0">-0.40m Rev</button>
+            <button class="pbtn" data-dist="0" data-ang="90">↺ Left 90°</button>
+            <button class="pbtn" data-dist="0" data-ang="-90">↻ Right 90°</button>
+            <button class="pbtn" data-dist="0" data-ang="180">🔄 Turn 180°</button>
+          </div>
+          <input id="mobMissionInput" type="text" value="forward 2 feet, turn left 90 degrees, move 1 foot, return home"
+                 style="width:100%;background:#060b12;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:11px;user-select:text;-webkit-user-select:text;touch-action:auto;">
+          <button class="mact plan" id="btnMobMissionPlan" style="justify-content:center;">🔍 Preview Script (plan only)</button>
+        </div>
+
+        <div id="tokenBar">
+          <div style="font-size:12px;font-weight:800;color:var(--warn);">🔑 Operator token (stored on this phone)</div>
+          <input id="mobTokenInput" type="password" placeholder="Paste operator token" autocomplete="off">
+          <div style="display:flex;gap:6px;">
+            <button class="mact go" id="btnMobTokenSave" style="flex:1;">Save</button>
+            <button class="mact stop" id="btnMobTokenClear">Forget</button>
+            <button class="mact sethome" id="btnMobTokenClose">Close</button>
+          </div>
+        </div>
+
+        <div class="map-bot-bar map-ui-full">
+          <button class="mact go" id="btnMobGo">🚀 GO HERE</button>
+          <button class="mact plan" id="btnMobPreview">🔍 Plan</button>
+          <button class="mact home" id="btnMobHome">🏠 Home</button>
+          <button class="mact sethome" id="btnMobSetHome">📍 Localize</button>
+          <button class="mact stop" id="btnMobCancel">🛑 E-STOP</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="ctl">
+      <div class="stickWrap"><div class="stick v" id="stkL"><div class="knob"></div></div>FWD / REV</div>
+      <div id="midCol">
+        <button id="ctlEstop">🛑 E-STOP</button>
+        <button id="arm">ARM</button>
+        <div id="spdLbl">Speed <b id="spdV">60</b>%</div>
+        <input type="range" id="spd" min="10" max="100" value="60" aria-label="Drive speed">
+        <div id="readout">—</div>
+      </div>
+      <div class="stickWrap"><div class="stick" id="stkR"><div class="knob"></div></div>TURN</div>
+    </div>
+  </div>
+  <div id="mobToast"></div>
+</div>
+<script src="hud-core.js"></script>
+<script src="hud-mobile.js"></script>
+</body>
+</html>

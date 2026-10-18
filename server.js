@@ -5,6 +5,9 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const os = require('os');
+const { BatteryTrend } = require('./battery_trend');
+const { ManualDriveWatchdog } = require('./manual_drive_watchdog');
 const slamManager = require('./slam_manager');
 
 
@@ -202,6 +205,20 @@ const internalCmdApp    = express();
 const internalCmdServer = http.createServer(internalCmdApp);
 
 app.use(express.json());
+
+// Default UI: Rover 2-style HUD cockpit (public/hud.html). The legacy engineering cockpit
+// stays reachable at /index.html. Set COCKPIT_DEFAULT_UI=legacy to serve it at "/" instead.
+const COCKPIT_DEFAULT_UI = (process.env.COCKPIT_DEFAULT_UI || 'hud').toLowerCase();
+app.get('/', (req, res, next) => {
+  if (COCKPIT_DEFAULT_UI === 'legacy') return next();
+  const hudPath = path.join(__dirname, 'public', 'hud.html');
+  if (!fs.existsSync(hudPath)) return next();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(hudPath);
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
   maxAge: 0,
@@ -304,6 +321,25 @@ let trackWidthSource = 'CALIBRATION_DB';
 let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
+
+// Manual-drive watchdog: zero BROWSER/GAMEPAD targets when the commanding socket closes, or
+// when a client that opted in with `keepalive: true` stops streaming joystick frames.
+const manualDriveWatchdog = new ManualDriveWatchdog({
+  timeoutMs: parseInt(process.env.MANUAL_DRIVE_KEEPALIVE_TIMEOUT_MS, 10) || 600
+});
+function zeroManualDriveTarget(reason) {
+  if (cmdSource !== 'GAMEPAD' && cmdSource !== 'BROWSER') return false;
+  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4;
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  deadmanPressed = false;
+  if (wasMoving) {
+    console.warn(`[Manual Drive Watchdog] ${reason} - manual target zeroed.`);
+    broadcast({ type: 'manual_drive_watchdog', reason });
+  }
+  return wasMoving;
+}
 
 // ROS 2 Autonomy Command State & Safety Machine
 let autonomyGeneration = 1;
@@ -992,6 +1028,10 @@ function startDriveKeepaliveLoop() {
   setInterval(() => {
     const now = Date.now();
     const hrNow = process.hrtime.bigint();
+
+    if (manualDriveWatchdog.checkExpired()) {
+      zeroManualDriveTarget(`Joystick keepalive stream stale (> ${manualDriveWatchdog.timeoutMs} ms)`);
+    }
     let dt = Number(hrNow - lastLimiterTime) / 1e9;
     lastLimiterTime = hrNow;
     if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
@@ -1294,6 +1334,16 @@ let latestBatteryVoltage = null;
 let latestBatteryPercentage = null;
 let lastGeekwormBatteryTime = 0;
 let geekwormBatteryProcess = null;
+const batteryTrend = new BatteryTrend();
+
+function batteryPayload() {
+  const hasSoc = latestBatteryPercentage !== null;
+  return Object.assign({
+    voltage: latestBatteryVoltage,
+    percentage: latestBatteryPercentage,
+    source: hasSoc ? 'geekworm_x1206' : 'esp32'
+  }, hasSoc ? batteryTrend.snapshot() : {});
+}
 
 // ────────────────────────────────────────────────────────────
 // Geekworm X1206 UPS Battery Telemetry Subprocess
@@ -1328,13 +1378,11 @@ function startGeekwormBatteryMonitor() {
             latestBatteryVoltage = telem.voltage;
             latestBatteryPercentage = (typeof telem.percentage === 'number') ? telem.percentage : null;
             lastGeekwormBatteryTime = Date.now();
+            if (latestBatteryPercentage !== null) {
+              batteryTrend.add(latestBatteryPercentage, lastGeekwormBatteryTime);
+            }
 
-            broadcast({
-              type: 'battery',
-              voltage: latestBatteryVoltage,
-              percentage: latestBatteryPercentage,
-              source: 'geekworm_x1206'
-            });
+            broadcast({ type: 'battery', ...batteryPayload() });
           }
         } catch (_) {}
       }
@@ -2401,12 +2449,7 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
   ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
   if (latestBatteryVoltage !== null) {
-    ws.send(JSON.stringify({
-      type: 'battery',
-      voltage: latestBatteryVoltage,
-      percentage: latestBatteryPercentage,
-      source: latestBatteryPercentage !== null ? 'geekworm_x1206' : 'esp32'
-    }));
+    ws.send(JSON.stringify({ type: 'battery', ...batteryPayload() }));
   }
 
   // Push dynamic parameters from database immediately on client connection
@@ -2608,6 +2651,7 @@ wss.on('connection', (ws, req) => {
                 targetLinear = throttle * MAX_LINEAR;
                 targetAngular = -turnScaled * MAX_ANGULAR;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
+                manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4));
                 startDriveKeepaliveLoop();
               }
             } else {
@@ -2928,6 +2972,9 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     console.log('Web client disconnected.');
+    if (manualDriveWatchdog.socketClosed(ws)) {
+      zeroManualDriveTarget('Commanding WebSocket closed');
+    }
   });
 });
 
@@ -4534,12 +4581,65 @@ app.post('/api/open-loop-pwm', (req, res) => {
 });
 
 app.get('/api/battery', (req, res) => {
-  res.json({
-    ok: true,
-    voltage: latestBatteryVoltage,
-    percentage: latestBatteryPercentage,
-    source: latestBatteryPercentage !== null ? 'geekworm_x1206' : 'esp32'
+  res.json({ ok: true, ...batteryPayload() });
+});
+
+// RPi 5 health for the HUD cockpit: CPU temperature, throttle flags, EXT5V rail. Cached 2 s.
+let cachedSystemHealth = null;
+let cachedSystemHealthAt = 0;
+let systemHealthInFlight = null;
+function execFileText(cmd, args, timeoutMs) {
+  return new Promise((resolve) => {
+    try {
+      require('child_process').execFile(cmd, args, { timeout: timeoutMs || 1500 }, (err, stdout) => {
+        resolve(err ? null : String(stdout || '').trim());
+      });
+    } catch (_) {
+      resolve(null);
+    }
   });
+}
+async function collectSystemHealth() {
+  const out = {
+    ok: true,
+    platform: process.platform,
+    cpuTempC: null,
+    throttled: null,
+    ext5vV: null,
+    loadAvg: os.loadavg().map(v => Math.round(v * 100) / 100),
+    uptimeS: Math.round(os.uptime()),
+    serialConnected: (serialPort && serialPort.isOpen) === true,
+    lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
+    manualDriveWatchdog: manualDriveWatchdog.status(),
+    timestamp: Date.now()
+  };
+  if (process.platform !== 'linux') return out;
+  try {
+    const milli = parseInt(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8'), 10);
+    if (isFinite(milli)) out.cpuTempC = Math.round(milli / 100) / 10;
+  } catch (_) {}
+  const thr = await execFileText('vcgencmd', ['get_throttled'], 1500);
+  const thrMatch = thr && thr.match(/throttled=(0x[0-9a-fA-F]+)/);
+  if (thrMatch) out.throttled = thrMatch[1].toLowerCase();
+  const adc = await execFileText('vcgencmd', ['pmic_read_adc', 'EXT5V_V'], 1500);
+  const adcMatch = adc && adc.match(/EXT5V_V\s+volt\(\d+\)=([0-9.]+)V/);
+  if (adcMatch) out.ext5vV = Math.round(parseFloat(adcMatch[1]) * 1000) / 1000;
+  return out;
+}
+app.get('/api/system', async (req, res) => {
+  if (cachedSystemHealth && Date.now() - cachedSystemHealthAt < 2000) {
+    return res.json(cachedSystemHealth);
+  }
+  if (!systemHealthInFlight) {
+    systemHealthInFlight = collectSystemHealth()
+      .then((r) => { cachedSystemHealth = r; cachedSystemHealthAt = Date.now(); return r; })
+      .finally(() => { systemHealthInFlight = null; });
+  }
+  try {
+    res.json(await systemHealthInFlight);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get('/api/pid-telemetry', (req, res) => {
@@ -7052,5 +7152,10 @@ module.exports = {
   refreshNavigationReadiness,
   REQUIRED_NAV_LIFECYCLE_NODES,
   abortAutonomyDueToLocalizationLost,
-  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
+  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); },
+  manualDriveWatchdog,
+  batteryTrend,
+  batteryPayload,
+  collectSystemHealth,
+  getManualDriveTarget: () => ({ targetLinear, targetAngular, cmdSource })
 };
