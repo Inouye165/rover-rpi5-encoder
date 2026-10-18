@@ -587,26 +587,52 @@ function handleServerMessage(msg) {
       break;
 
     case 'battery': {
-      if (msg.voltage <= 2.0) {
-        if (batteryFill) batteryFill.style.width = '0%';
-        if (batteryValue) batteryValue.textContent = 'Unknown';
-        if (batteryFill) batteryFill.style.background = '#64748b'; // gray
-      } else {
-        // Map 6.0V - 8.4V battery pack (2S LiPo usually) to percentage
-        const minV = 6.0;
-        const maxV = 8.4;
-        const pct = Math.min(100, Math.max(0, ((msg.voltage - minV) / (maxV - minV)) * 100));
-        if (batteryFill) batteryFill.style.width = `${pct}%`;
-        if (batteryValue) batteryValue.textContent = `${msg.voltage.toFixed(2)} V`;
-        
-        // Update battery colors based on voltage levels
-        if (msg.voltage > 7.4) {
-          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
-        } else if (msg.voltage > 6.8) {
-          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
+      let pct = null;
+      if (typeof msg.percentage === 'number' && !isNaN(msg.percentage)) {
+        pct = Math.min(100, Math.max(0, msg.percentage));
+      } else if (typeof msg.voltage === 'number' && msg.voltage > 2.0) {
+        if (msg.voltage <= 4.35) {
+          // 1S Li-ion (e.g. Geekworm X1206 with 21700 cells: 3.2V - 4.2V)
+          pct = Math.min(100, Math.max(0, ((msg.voltage - 3.2) / (4.2 - 3.2)) * 100));
+        } else if (msg.voltage <= 8.5) {
+          // 2S LiPo (6.0V - 8.4V)
+          pct = Math.min(100, Math.max(0, ((msg.voltage - 6.0) / (8.4 - 6.0)) * 100));
         } else {
-          if (batteryFill) batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
+          // 3S LiPo (9.0V - 12.6V)
+          pct = Math.min(100, Math.max(0, ((msg.voltage - 9.0) / (12.6 - 9.0)) * 100));
         }
+      }
+
+      if (pct === null || (typeof msg.voltage === 'number' && msg.voltage <= 2.0)) {
+        if (batteryFill) {
+          batteryFill.style.width = '0%';
+          batteryFill.style.background = '#64748b'; // gray
+        }
+        if (batteryValue) batteryValue.textContent = 'Unknown';
+        if (batteryContainer) batteryContainer.title = 'Battery status unknown';
+      } else {
+        const vText = (typeof msg.voltage === 'number') ? `${msg.voltage.toFixed(2)}V` : '';
+        const pctText = `${pct.toFixed(0)}%`;
+        const displayText = vText ? `${pctText} (${vText})` : pctText;
+
+        if (batteryFill) {
+          batteryFill.style.width = `${pct}%`;
+          if (pct >= 50) {
+            batteryFill.style.background = 'linear-gradient(90deg, #39ff14, #00f2fe)';
+          } else if (pct >= 20) {
+            batteryFill.style.background = 'linear-gradient(90deg, #ffb700, #ffea00)';
+          } else {
+            batteryFill.style.background = 'linear-gradient(90deg, #ff0055, #ff0000)';
+          }
+        }
+        if (batteryValue) batteryValue.textContent = displayText;
+        if (batteryContainer) {
+          const srcLabel = msg.source === 'geekworm_x1206' ? 'Geekworm X1206 UPS' : 'Battery';
+          batteryContainer.title = `${srcLabel}: ${pct.toFixed(1)}% | ${typeof msg.voltage === 'number' ? msg.voltage.toFixed(3) + ' V' : ''}`;
+        }
+
+        const elBat = document.getElementById('v2-drive-val-battery');
+        if (elBat) elBat.textContent = displayText;
       }
       break;
     }

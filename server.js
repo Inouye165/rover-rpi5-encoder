@@ -1291,6 +1291,72 @@ function processRxBuffer() {
 let lastBatteryLogTime = 0;
 let lastLoggedVoltage = null;
 let latestBatteryVoltage = null;
+let latestBatteryPercentage = null;
+let lastGeekwormBatteryTime = 0;
+let geekwormBatteryProcess = null;
+
+// ────────────────────────────────────────────────────────────
+// Geekworm X1206 UPS Battery Telemetry Subprocess
+// ────────────────────────────────────────────────────────────
+function startGeekwormBatteryMonitor() {
+  if (process.env.GEEKWORM_BATTERY_ENABLED === 'false') {
+    return;
+  }
+  const scriptPath = path.join(__dirname, 'geekworm_battery.py');
+  if (!fs.existsSync(scriptPath)) {
+    return;
+  }
+
+  const pythonCmd = process.platform === 'linux' ? 'python3' : 'python';
+  try {
+    geekwormBatteryProcess = spawn(pythonCmd, [scriptPath, '--stream', '3'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let buffer = '';
+    geekwormBatteryProcess.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const telem = JSON.parse(trimmed);
+          if (telem.ok && typeof telem.voltage === 'number') {
+            latestBatteryVoltage = telem.voltage;
+            latestBatteryPercentage = (typeof telem.percentage === 'number') ? telem.percentage : null;
+            lastGeekwormBatteryTime = Date.now();
+
+            broadcast({
+              type: 'battery',
+              voltage: latestBatteryVoltage,
+              percentage: latestBatteryPercentage,
+              source: 'geekworm_x1206'
+            });
+          }
+        } catch (_) {}
+      }
+    });
+
+    geekwormBatteryProcess.stderr.on('data', () => {});
+
+    geekwormBatteryProcess.on('close', (code) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 10000);
+    });
+
+    geekwormBatteryProcess.on('error', (err) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 15000);
+    });
+  } catch (err) {
+    geekwormBatteryProcess = null;
+    setTimeout(startGeekwormBatteryMonitor, 15000);
+  }
+}
+startGeekwormBatteryMonitor();
 
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
@@ -1300,8 +1366,12 @@ function parseTelemetryPacket(extType, data) {
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
-      latestBatteryVoltage = voltage;
       const now = Date.now();
+      const isGeekwormActive = (now - lastGeekwormBatteryTime < 15000) && (latestBatteryPercentage !== null);
+      if (voltage <= 0.1 || isGeekwormActive) {
+        return;
+      }
+      latestBatteryVoltage = voltage;
       // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
       if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
         lastBatteryLogTime = now;
@@ -2330,6 +2400,14 @@ wss.on('connection', (ws, req) => {
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
   ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
+  if (latestBatteryVoltage !== null) {
+    ws.send(JSON.stringify({
+      type: 'battery',
+      voltage: latestBatteryVoltage,
+      percentage: latestBatteryPercentage,
+      source: latestBatteryPercentage !== null ? 'geekworm_x1206' : 'esp32'
+    }));
+  }
 
   // Push dynamic parameters from database immediately on client connection
   if (serialPort && serialPort.isOpen) {
@@ -4456,7 +4534,12 @@ app.post('/api/open-loop-pwm', (req, res) => {
 });
 
 app.get('/api/battery', (req, res) => {
-  res.json({ ok: true, voltage: latestBatteryVoltage });
+  res.json({
+    ok: true,
+    voltage: latestBatteryVoltage,
+    percentage: latestBatteryPercentage,
+    source: latestBatteryPercentage !== null ? 'geekworm_x1206' : 'esp32'
+  });
 });
 
 app.get('/api/pid-telemetry', (req, res) => {
