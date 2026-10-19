@@ -350,7 +350,7 @@ def main():
 
     print("\n=== 4. Rebuilding ROS 2 Workspace inside Container ===")
     if not args.skip_ros_build:
-        colcon_cmd = "sudo docker exec rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && cd /ros2_ws && colcon build --packages-select rover_bringup'"
+        colcon_cmd = "sudo docker exec -u 0 rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && cd /ros2_ws && colcon build --packages-select rover_bringup'"
         exit_code, out, err = exec_remote(client, colcon_cmd, password)
         if exit_code != 0:
             print(f"ERROR: colcon build failed inside container:\n{err}", file=sys.stderr)

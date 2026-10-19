@@ -5,6 +5,9 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const os = require('os');
+const { BatteryTrend } = require('./battery_trend');
+const { ManualDriveWatchdog } = require('./manual_drive_watchdog');
 const slamManager = require('./slam_manager');
 
 
@@ -36,13 +39,14 @@ try {
 const PORT = process.env.PORT || 3000;
 const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
 const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
-
+const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 
 function triggerNav2Cancel() {
   try {
+    const bridgeUrl = new URL(ROVER_NAV_BRIDGE_URL);
     const cancelReq = http.request({
-      hostname: '127.0.0.1',
-      port: 3005,
+      hostname: bridgeUrl.hostname || '127.0.0.1',
+      port: bridgeUrl.port || 3005,
       path: '/api/nav/cancel',
       method: 'POST',
       timeout: 500
@@ -138,6 +142,17 @@ let latestPidTelemetry = null;
 let pidPacketCount = 0;
 
 // ESP32 reset reason enumerations
+// Authoritative 7-state enum mapping exactly matching ChassisSupervisor.h SpinRecoveryState
+const SPIN_RECOVERY_STATES = [
+  'IDLE',                    // 0 = SPIN_RECOVERY_IDLE
+  'MONITORING_INITIAL',      // 1 = SPIN_RECOVERY_MONITORING_INITIAL
+  'SETTLE_1',                // 2 = SPIN_RECOVERY_SETTLE_1
+  'TWITCH_PULSE',            // 3 = SPIN_RECOVERY_TWITCH_PULSE
+  'SETTLE_2',                // 4 = SPIN_RECOVERY_SETTLE_2
+  'RETRY',                   // 5 = SPIN_RECOVERY_RETRY
+  'FAILED_LATCHED'           // 6 = SPIN_RECOVERY_FAILED_LATCHED
+];
+
 const ESP_RESET_REASONS = {
   0: 'UNKNOWN',
   1: 'POWERON_RESET',
@@ -190,6 +205,20 @@ const internalCmdApp    = express();
 const internalCmdServer = http.createServer(internalCmdApp);
 
 app.use(express.json());
+
+// Default UI: Rover 2-style HUD cockpit (public/hud.html). The legacy engineering cockpit
+// stays reachable at /index.html. Set COCKPIT_DEFAULT_UI=legacy to serve it at "/" instead.
+const COCKPIT_DEFAULT_UI = (process.env.COCKPIT_DEFAULT_UI || 'hud').toLowerCase();
+app.get('/', (req, res, next) => {
+  if (COCKPIT_DEFAULT_UI === 'legacy') return next();
+  const hudPath = path.join(__dirname, 'public', 'hud.html');
+  if (!fs.existsSync(hudPath)) return next();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(hudPath);
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
   maxAge: 0,
@@ -229,6 +258,28 @@ const MAX_POSITION_SPEED = 60;
 // Phase 4 Coordinated Normal Drive State
 const EventEmitter = require('events');
 const normalDriveEvents = new EventEmitter();
+function handleDrivetrainRecoveryFault(status) {
+  if (status && status.spinFailedExhausted === true) {
+    const isNavigating = Boolean(status.armed ||
+      autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' ||
+      autonomyState.enabled || cmdSource === 'ROS_AUTONOMY');
+    if (isNavigating && autonomyState.state !== 'FAULT') {
+      console.error('[Autonomy Safety] CRITICAL: Drivetrain recovery exhausted! Cancelling Nav2 goal, locking FAULT state, and disarming.');
+      triggerNav2Cancel();
+      resetAutonomyToSafe('Drivetrain recovery exhausted (spin/motion stall)');
+      autonomyState.state = 'FAULT';
+      autonomyState.lastRejectionReason = 'Drivetrain recovery exhausted (spin/motion stall)';
+      if (serialPort && serialPort.isOpen) {
+        const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+        serialPort.write(disarmPkt);
+        broadcast({ type: 'raw_serial_out', data: `[Autonomy Safety] Recovery exhausted: disarm command sent` });
+      }
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+  }
+}
+normalDriveEvents.on('status', handleDrivetrainRecoveryFault);
+
 let normalDriveStatusSeq = 0;
 let latestNormalDriveStatus = null;
 let latestFaultFlags = 0;
@@ -271,6 +322,25 @@ let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
 
+// Manual-drive watchdog: zero BROWSER/GAMEPAD targets when the commanding socket closes, or
+// when a client that opted in with `keepalive: true` stops streaming joystick frames.
+const manualDriveWatchdog = new ManualDriveWatchdog({
+  timeoutMs: parseInt(process.env.MANUAL_DRIVE_KEEPALIVE_TIMEOUT_MS, 10) || 600
+});
+function zeroManualDriveTarget(reason) {
+  if (cmdSource !== 'GAMEPAD' && cmdSource !== 'BROWSER') return false;
+  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4;
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  cmdSource = 'NONE';
+  deadmanPressed = false;
+  if (wasMoving) {
+    console.warn(`[Manual Drive Watchdog] ${reason} - manual target zeroed.`);
+    broadcast({ type: 'manual_drive_watchdog', reason });
+  }
+  return wasMoving;
+}
+
 // ROS 2 Autonomy Command State & Safety Machine
 let autonomyGeneration = 1;
 let zeroHandshakeCount = 0;
@@ -280,6 +350,13 @@ let limitedAngular = 0.0;
 let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
+
+const REQUIRED_NAV_LIFECYCLE_NODES = [
+  'controller_server',
+  'planner_server',
+  'bt_navigator',
+  'collision_monitor'
+];
 
 let navigationState = {
   ready: false,
@@ -291,10 +368,23 @@ let lastDispatchedNav = null;
 
 function updateNavigationState(nav) {
   if (!nav || typeof nav !== 'object') return;
-  navigationState.ready = Boolean(nav.ready);
-  navigationState.state = nav.state || 'UNKNOWN';
-  navigationState.details = nav.details || '';
-  navigationState.nodes = nav.nodes || {};
+  const nodes = (nav.nodes && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : (navigationState.nodes || {});
+  
+  // Consistency check: response fields cannot report ready=false/inactive while simultaneously listing all required nodes active and action-ready
+  const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+  const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+  const actionReady = (nav.action_server_ready !== false && nav.actionServerReady !== false);
+
+  if (allNodesActive && actionReady) {
+    navigationState.ready = true;
+    navigationState.state = 'ACTIVE';
+    navigationState.details = 'All required navigation and collision-protection nodes active';
+  } else {
+    navigationState.ready = false;
+    navigationState.state = (nav.state && nav.state !== 'ACTIVE') ? nav.state : (inactiveNodes.length > 0 ? 'INACTIVE' : 'UNKNOWN');
+    navigationState.details = (inactiveNodes.length > 0 ? `Required navigation lifecycle nodes inactive: ${inactiveNodes.join(', ')}` : (nav.details || 'Navigation not ready'));
+  }
+  navigationState.nodes = nodes;
 }
 
 let localizationState = {
@@ -357,7 +447,7 @@ function updateLocalizationState(loc) {
 
   // Fail-Safe: If rover was actively navigating and localization becomes lost:
   if (wasLocalized && !localizationState.localized) {
-    if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
+    if (cmdSource !== 'CALIBRATION_TEST' && (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY')) {
       console.error('[Localization Safety] CRITICAL: Localization lost during autonomous navigation! Triggering fail-safe disarm.');
       abortAutonomyDueToLocalizationLost('Localization lost during autonomous navigation');
     }
@@ -938,6 +1028,10 @@ function startDriveKeepaliveLoop() {
   setInterval(() => {
     const now = Date.now();
     const hrNow = process.hrtime.bigint();
+
+    if (manualDriveWatchdog.checkExpired()) {
+      zeroManualDriveTarget(`Joystick keepalive stream stale (> ${manualDriveWatchdog.timeoutMs} ms)`);
+    }
     let dt = Number(hrNow - lastLimiterTime) / 1e9;
     lastLimiterTime = hrNow;
     if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
@@ -1237,6 +1331,80 @@ function processRxBuffer() {
 let lastBatteryLogTime = 0;
 let lastLoggedVoltage = null;
 let latestBatteryVoltage = null;
+let latestBatteryPercentage = null;
+let lastGeekwormBatteryTime = 0;
+let geekwormBatteryProcess = null;
+const batteryTrend = new BatteryTrend();
+
+function batteryPayload() {
+  const hasSoc = latestBatteryPercentage !== null;
+  return Object.assign({
+    voltage: latestBatteryVoltage,
+    percentage: latestBatteryPercentage,
+    source: hasSoc ? 'geekworm_x1206' : 'esp32'
+  }, hasSoc ? batteryTrend.snapshot() : {});
+}
+
+// ────────────────────────────────────────────────────────────
+// Geekworm X1206 UPS Battery Telemetry Subprocess
+// ────────────────────────────────────────────────────────────
+function startGeekwormBatteryMonitor() {
+  if (process.env.GEEKWORM_BATTERY_ENABLED === 'false') {
+    return;
+  }
+  const scriptPath = path.join(__dirname, 'geekworm_battery.py');
+  if (!fs.existsSync(scriptPath)) {
+    return;
+  }
+
+  const pythonCmd = process.platform === 'linux' ? 'python3' : 'python';
+  try {
+    geekwormBatteryProcess = spawn(pythonCmd, [scriptPath, '--stream', '3'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let buffer = '';
+    geekwormBatteryProcess.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const telem = JSON.parse(trimmed);
+          if (telem.ok && typeof telem.voltage === 'number') {
+            latestBatteryVoltage = telem.voltage;
+            latestBatteryPercentage = (typeof telem.percentage === 'number') ? telem.percentage : null;
+            lastGeekwormBatteryTime = Date.now();
+            if (latestBatteryPercentage !== null) {
+              batteryTrend.add(latestBatteryPercentage, lastGeekwormBatteryTime);
+            }
+
+            broadcast({ type: 'battery', ...batteryPayload() });
+          }
+        } catch (_) {}
+      }
+    });
+
+    geekwormBatteryProcess.stderr.on('data', () => {});
+
+    geekwormBatteryProcess.on('close', (code) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 10000);
+    });
+
+    geekwormBatteryProcess.on('error', (err) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 15000);
+    });
+  } catch (err) {
+    geekwormBatteryProcess = null;
+    setTimeout(startGeekwormBatteryMonitor, 15000);
+  }
+}
+startGeekwormBatteryMonitor();
 
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
@@ -1246,8 +1414,12 @@ function parseTelemetryPacket(extType, data) {
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
-      latestBatteryVoltage = voltage;
       const now = Date.now();
+      const isGeekwormActive = (now - lastGeekwormBatteryTime < 15000) && (latestBatteryPercentage !== null);
+      if (voltage <= 0.1 || isGeekwormActive) {
+        return;
+      }
+      latestBatteryVoltage = voltage;
       // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
       if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
         lastBatteryLogTime = now;
@@ -1926,10 +2098,20 @@ function parseTelemetryPacket(extType, data) {
       const lockStatus = data[23] === 1;
       const espClearanceMask = data.length >= 26 ? data[24] : 0x00;
       const espClearanceAgeMs = data.length >= 26 ? (data[25] * 10) : 999999;
-      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : 0;
-      const resetReasonId = data.length >= 31 ? data[30] : 0;
-      const rtcResetReasonId = data.length >= 32 ? data[31] : 0;
+      // Represent unsupported fields from older packets as null / UNKNOWN rather than 0
+      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : null;
+      const resetReasonId = data.length >= 31 ? data[30] : null;
+      const rtcResetReasonId = data.length >= 32 ? data[31] : null;
       
+      const uptimeMs = data.length >= 36 ? data.readUInt32LE(32) : null;
+      const spinRecoveryCode = data.length >= 37 ? data[36] : null;
+      const spinRecoveryState = (spinRecoveryCode !== null) ? (SPIN_RECOVERY_STATES[spinRecoveryCode] || `STATE_${spinRecoveryCode}`) : 'UNKNOWN';
+      const noMotionBudgetMs = data.length >= 39 ? data.readUInt16LE(37) : null;
+      const recoveryFlags = data.length >= 40 ? data[39] : null;
+      const spinFailedExhausted = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x01) : null;
+      const chassisRebreakoutConsumed = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x02) : null;
+      const isPowerOnReset = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x04) : (resetReasonId !== null ? (resetReasonId === 1 || rtcResetReasonId === 1) : null);
+
       if (latestNormalDriveStatus && latestNormalDriveStatus.armed !== armed) {
         console.log(`[DEBUG] ESP32 Normal Drive armed state changed: ${latestNormalDriveStatus.armed} -> ${armed}. LockStatus: ${lockStatus}, Mode: ${mode}`);
       } else if (!armed && lockStatus) {
@@ -1951,9 +2133,16 @@ function parseTelemetryPacket(extType, data) {
         espClearanceAgeMs,
         bootCount,
         resetReasonId,
-        resetReason: ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`,
+        resetReason: resetReasonId !== null ? (ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`) : 'UNKNOWN',
         rtcResetReasonId,
-        rtcResetReason: RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`,
+        rtcResetReason: rtcResetReasonId !== null ? (RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`) : 'UNKNOWN',
+        uptimeMs,
+        spinRecoveryCode,
+        spinRecoveryState,
+        noMotionBudgetMs,
+        spinFailedExhausted,
+        chassisRebreakoutConsumed,
+        isPowerOnReset,
         seq: normalDriveStatusSeq,
         receivedAt: Date.now()
       };
@@ -1966,6 +2155,8 @@ function parseTelemetryPacket(extType, data) {
       });
       // Propagate ESP32-confirmed armed state changes to calibration-status WS consumers.
       broadcastAutoCalibStatus();
+
+// Shared fault handler invoked via normalDriveEvents 'status' listener
     }
 
     } else if (extType === TYPE_PID_DIAGNOSTIC) {
@@ -2015,8 +2206,10 @@ function parseTelemetryPacket(extType, data) {
         };
       }
       pidPacketCount++;
+      const rxNow = Date.now();
       latestPidTelemetry = {
-        timestamp: Date.now(),
+        receivedAt: rxNow,
+        timestamp: rxNow,
         sequence: pidPacketCount,
         actuationState,
         m1: wheels[0],
@@ -2255,6 +2448,9 @@ wss.on('connection', (ws, req) => {
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
   ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
+  if (latestBatteryVoltage !== null) {
+    ws.send(JSON.stringify({ type: 'battery', ...batteryPayload() }));
+  }
 
   // Push dynamic parameters from database immediately on client connection
   if (serialPort && serialPort.isOpen) {
@@ -2455,6 +2651,7 @@ wss.on('connection', (ws, req) => {
                 targetLinear = throttle * MAX_LINEAR;
                 targetAngular = -turnScaled * MAX_ANGULAR;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
+                manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4));
                 startDriveKeepaliveLoop();
               }
             } else {
@@ -2775,6 +2972,9 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     console.log('Web client disconnected.');
+    if (manualDriveWatchdog.socketClosed(ws)) {
+      zeroManualDriveTarget('Commanding WebSocket closed');
+    }
   });
 });
 
@@ -4208,6 +4408,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
     // 4. Only then set autonomyState.state = READY_ARMED and return HTTP 200
     if (autonomyState.state === 'READY_DISARMED') {
       autonomyState.state = 'READY_ARMED';
+      autonomyState.lastCmdTime = performance.now();
       console.log('[Autonomy] Rover armed and confirmed by ESP32 (mode 3). State set to READY_ARMED.');
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
@@ -4380,7 +4581,85 @@ app.post('/api/open-loop-pwm', (req, res) => {
 });
 
 app.get('/api/battery', (req, res) => {
-  res.json({ ok: true, voltage: latestBatteryVoltage });
+  res.json({ ok: true, ...batteryPayload() });
+});
+
+// RPi 5 health for the HUD cockpit: CPU temperature, throttle flags, EXT5V rail. Cached 2 s.
+let cachedSystemHealth = null;
+let cachedSystemHealthAt = 0;
+let systemHealthInFlight = null;
+function execFileText(cmd, args, timeoutMs) {
+  return new Promise((resolve) => {
+    try {
+      require('child_process').execFile(cmd, args, { timeout: timeoutMs || 1500 }, (err, stdout) => {
+        resolve(err ? null : String(stdout || '').trim());
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+async function collectSystemHealth() {
+  const out = {
+    ok: true,
+    platform: process.platform,
+    cpuTempC: null,
+    throttled: null,
+    ext5vV: null,
+    loadAvg: os.loadavg().map(v => Math.round(v * 100) / 100),
+    uptimeS: Math.round(os.uptime()),
+    serialConnected: (serialPort && serialPort.isOpen) === true,
+    lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
+    manualDriveWatchdog: manualDriveWatchdog.status(),
+    timestamp: Date.now()
+  };
+  if (process.platform !== 'linux') return out;
+  try {
+    const milli = parseInt(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8'), 10);
+    if (isFinite(milli)) out.cpuTempC = Math.round(milli / 100) / 10;
+  } catch (_) {}
+  const thr = await execFileText('vcgencmd', ['get_throttled'], 1500);
+  const thrMatch = thr && thr.match(/throttled=(0x[0-9a-fA-F]+)/);
+  if (thrMatch) out.throttled = thrMatch[1].toLowerCase();
+  const adc = await execFileText('vcgencmd', ['pmic_read_adc', 'EXT5V_V'], 1500);
+  const adcMatch = adc && adc.match(/EXT5V_V\s+volt\(\d+\)=([0-9.]+)V/);
+  if (adcMatch) out.ext5vV = Math.round(parseFloat(adcMatch[1]) * 1000) / 1000;
+  try {
+    const pciDir = '/sys/bus/pci/devices';
+    if (fs.existsSync(pciDir)) {
+      for (const bdf of fs.readdirSync(pciDir)) {
+        const devPath = path.join(pciDir, bdf);
+        const v = fs.existsSync(path.join(devPath, 'vendor')) ? fs.readFileSync(path.join(devPath, 'vendor'), 'utf8').trim().toLowerCase() : '';
+        const d = fs.existsSync(path.join(devPath, 'device')) ? fs.readFileSync(path.join(devPath, 'device'), 'utf8').trim().toLowerCase() : '';
+        if (v === '0x1e60' && d === '0x2864') {
+          const rt = fs.existsSync(path.join(devPath, 'power', 'runtime_status')) ? fs.readFileSync(path.join(devPath, 'power', 'runtime_status'), 'utf8').trim() : 'unknown';
+          const ctrl = fs.existsSync(path.join(devPath, 'power', 'control')) ? fs.readFileSync(path.join(devPath, 'power', 'control'), 'utf8').trim() : 'unknown';
+          const devPstate = fs.existsSync(path.join(devPath, 'power_state')) ? fs.readFileSync(path.join(devPath, 'power_state'), 'utf8').trim() : 'unknown';
+          const parentPath = fs.realpathSync(path.join(devPath, '..'));
+          let brState = fs.existsSync(path.join(parentPath, 'power_state')) ? fs.readFileSync(path.join(parentPath, 'power_state'), 'utf8').trim() : 'unknown';
+          if (brState !== 'D3hot' && rt === 'suspended' && devPstate === 'D3hot') brState = 'D3hot';
+          out.hailo = { present: true, bdf, runtimeStatus: rt, powerControl: ctrl, bridgePowerState: brState };
+          break;
+        }
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+app.get('/api/system', async (req, res) => {
+  if (cachedSystemHealth && Date.now() - cachedSystemHealthAt < 2000) {
+    return res.json(cachedSystemHealth);
+  }
+  if (!systemHealthInFlight) {
+    systemHealthInFlight = collectSystemHealth()
+      .then((r) => { cachedSystemHealth = r; cachedSystemHealthAt = Date.now(); return r; })
+      .finally(() => { systemHealthInFlight = null; });
+  }
+  try {
+    res.json(await systemHealthInFlight);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get('/api/pid-telemetry', (req, res) => {
@@ -4514,7 +4793,6 @@ app.get('/api/localization/status', (req, res) => {
 // ────────────────────────────────────────────────────────────
 // ROS 2 Navigation Bridge Proxy Endpoints (port 3005)
 // ────────────────────────────────────────────────────────────
-const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 let cachedNavMap = null;
 let cachedNavMapTime = 0;
 
@@ -4748,6 +5026,86 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   };
 }
 
+async function refreshNavigationReadiness(timeoutMs = 1500) {
+  try {
+    const bridgeUrl = ROVER_NAV_BRIDGE_URL;
+    const res = await fetch(`${bridgeUrl}/api/nav/status`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        ready: false,
+        error: `rover_nav_bridge returned HTTP ${res.status}`,
+        navigation: navigationState
+      };
+    }
+    const parsed = await res.json();
+    const nav = parsed.navigation || {};
+    const nodes = (nav && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : {};
+
+    // 1. required lifecycle nodes are active
+    const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+    const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+
+    // 2. bt_navigator is active
+    const btActive = (nodes['bt_navigator'] === 'active');
+
+    // 3. /navigate_to_pose is ready to accept goals
+    const actionReady = Boolean(parsed.action_server_ready);
+    const readyToGoals = Boolean(parsed.ready_to_accept_goals || (actionReady && btActive && allNodesActive));
+
+    const isReady = Boolean(allNodesActive && btActive && actionReady && readyToGoals);
+
+    // Atomically update cached navigationState when recovery succeeds
+    if (isReady) {
+      updateNavigationState({
+        ready: true,
+        state: 'ACTIVE',
+        details: 'All required navigation and collision-protection nodes active',
+        nodes: nodes,
+        action_server_ready: true
+      });
+    } else {
+      let detailMsg = '';
+      if (inactiveNodes.length > 0) {
+        detailMsg = `Required navigation lifecycle nodes inactive: ${inactiveNodes.map(n => `${n}=${nodes[n] || 'unknown'}`).join(', ')}`;
+      } else if (!actionReady) {
+        detailMsg = 'Action server endpoint /navigate_to_pose not ready';
+      } else {
+        detailMsg = nav.details || 'Navigation not ready to accept goals';
+      }
+
+      updateNavigationState({
+        ready: false,
+        state: (nav.state && nav.state !== 'ACTIVE') ? nav.state : 'INACTIVE',
+        details: detailMsg,
+        nodes: nodes,
+        action_server_ready: actionReady
+      });
+    }
+
+    return {
+      ok: isReady,
+      ready: isReady,
+      action_server_ready: actionReady,
+      ready_to_accept_goals: readyToGoals,
+      nodes: nodes,
+      inactive_nodes: inactiveNodes,
+      details: navigationState.details,
+      navigation: navigationState
+    };
+  } catch (err) {
+    const errorMsg = `Failed to refresh navigation readiness: ${err.message}`;
+    return {
+      ok: false,
+      ready: false,
+      error: errorMsg,
+      navigation: navigationState
+    };
+  }
+}
+
 app.post('/api/navigation/init_home', async (req, res) => {
   try {
     const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/init_home', {
@@ -4764,7 +5122,8 @@ app.post('/api/navigation/init_home', async (req, res) => {
 
 app.get('/api/navigation/validate_home', async (req, res) => {
   try {
-    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/validate_home');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const bridgeResp = await fetch(`http://127.0.0.1:3005/api/nav/validate_home${query}`);
     const data = await bridgeResp.json();
     return res.status(bridgeResp.ok ? 200 : 400).json(data);
   } catch (err) {
@@ -4828,6 +5187,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   };
 
   let dispatchMeta = null;
+  const dispatchGoalId = (req.body && req.body.goal_id) ? String(req.body.goal_id) : ('goal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+  if (!req.body) req.body = {};
+  req.body.goal_id = dispatchGoalId;
+
   if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null) {
     const d = Number(req.body.relative_distance);
     const tx = snapshotPose.x + d * Math.cos(snapshotPose.yaw);
@@ -4843,6 +5206,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     req.body.yaw = tyaw;
 
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: true,
       source_pose: snapshotPose,
       relative_distance: d,
@@ -4860,9 +5224,12 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     const ty = Number(req.body.target_y !== undefined ? req.body.target_y : req.body.y);
     const tyaw = Number(req.body.target_yaw !== undefined ? req.body.target_yaw : (req.body.yaw || 0));
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: false,
       source_pose: snapshotPose,
       relative_distance: null,
+      goal_checker: req.body.goal_checker || null,
+      behavior_tree: req.body.behavior_tree || null,
       resolved_target: {
         x: tx,
         y: ty,
@@ -4872,6 +5239,20 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       dispatched_at: Date.now()
     };
     lastDispatchedNav = dispatchMeta;
+  }
+
+  // Step 2.5: Synchronous, Authoritative Nav2 Readiness Gate Refresh BEFORE arming
+  const navReadiness = await refreshNavigationReadiness(1500);
+  if (!navReadiness.ok || !navReadiness.ready) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Navigation readiness check failed while armed: ${navReadiness.error || navReadiness.details}`);
+    }
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${navReadiness.error || navReadiness.details || 'Lifecycle inactive'}). Drivetrain remains safely disarmed.`,
+      navigation: navigationState
+    });
   }
 
   // Safety check 3: Drivetrain arming & autonomy handshake
@@ -4949,6 +5330,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       try {
         const parsed = JSON.parse(data);
         if (dispatchMeta) {
+          parsed.goal_id = dispatchMeta.goal_id;
           parsed.dispatch_meta = dispatchMeta;
           parsed.source_pose = dispatchMeta.source_pose;
           parsed.relative_distance = dispatchMeta.relative_distance;
@@ -5020,19 +5402,38 @@ app.get('/api/navigation/status', (req, res) => {
         const parsed = JSON.parse(data);
         if (lastDispatchedNav) {
           parsed.last_dispatch = lastDispatchedNav;
+          parsed.goal_id = parsed.goal_id || lastDispatchedNav.goal_id;
         }
-        if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
-          if (autonomyState && autonomyState.state === 'READY_ARMED') {
-            triggerNav2Cancel();
+        const isTerminal = parsed && (
+          parsed.status === 'SUCCEEDED' ||
+          parsed.status === 'CANCELLED' ||
+          parsed.status === 'ABORTED' ||
+          parsed.status === 'FAILED' ||
+          (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED'))
+        );
+        const matchesCurrentGoal = Boolean(lastDispatchedNav && (!parsed.goal_id || (parsed.goal_id === lastDispatchedNav.goal_id)));
+        if (isTerminal && matchesCurrentGoal && cmdSource !== 'CALIBRATION_TEST') {
+          if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
+            if (parsed.status !== 'SUCCEEDED') {
+              triggerNav2Cancel();
+            }
             autonomyState.enabled = false;
+            autonomyState.active = false;
             autonomyState.state = 'READY_DISARMED';
             cmdSource = 'NONE';
             targetLinear = 0.0;
             targetAngular = 0.0;
+            limitedLinear = 0.0;
+            limitedAngular = 0.0;
+            sendMotorSpeeds(0, 0, 0, 0);
             if (serialPort && serialPort.isOpen) {
+              const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+              serialPort.write(motionPkt);
               const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
               serialPort.write(disarmPkt);
             }
+
+            broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
           }
         }
         res.status(bridgeRes.statusCode).json(parsed);
@@ -5433,16 +5834,16 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
   const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
 
-  if (cmdReqSource === 'ROS_AUTONOMY') {
+  if (cmdReqSource === 'ROS_AUTONOMY' || cmdReqSource === 'CALIBRATION_TEST') {
     if (autonomyState.state === 'READY_ARMED') {
       autonomyState.state = 'ACTIVE';
       autonomyState.active = true;
       watchdogFired = false;
-      if (cmdSource !== 'ROS_AUTONOMY') {
+      if (cmdSource !== cmdReqSource) {
         sendZeroMotionPacket();
-        cmdSource = 'ROS_AUTONOMY';
+        cmdSource = cmdReqSource;
       }
-      console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+      console.log(`[Autonomy] First non-zero command accepted (${cmdReqSource}). Transitioned to ACTIVE.`);
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
   }
@@ -5514,6 +5915,19 @@ app.get('/api/encoders', (req, res) => {
   });
 });
 
+app.get('/api/odom', async (req, res) => {
+  try {
+    const odom = await fetchRosOdometry();
+    if (odom && (odom.ok || odom.valid)) {
+      res.json(odom);
+    } else {
+      res.status(503).json({ ok: false, error: 'Odometry unavailable or stale', odom });
+    }
+  } catch (err) {
+    res.status(502).json({ ok: false, error: "Failed to fetch odometry: " + (err ? err.message : "") });
+  }
+});
+
 app.get('/api/imu', (req, res) => {
   const serialConnected = (serialPort && serialPort.isOpen) === true;
   const now = Date.now();
@@ -5541,6 +5955,37 @@ app.get('/api/imu', (req, res) => {
 
 app.get('/api/drive/status', (req, res) => {
   const statusObj = latestNormalDriveStatus ? { ...latestNormalDriveStatus, cmdSource: cmdSource } : { armed: false, cmdSource: cmdSource };
+  const now = Date.now();
+  let pidTelemetry = null;
+  if (latestPidTelemetry) {
+    const ageMs = now - (latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp || now);
+    const isStale = ageMs > 250;
+    pidTelemetry = {
+      receivedAt: latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp,
+      ageMs: ageMs,
+      sequence: latestPidTelemetry.sequence || 0,
+      stale: isStale,
+      valid: !isStale,
+      telemetry: isStale ? null : {
+        actuationState: latestPidTelemetry.actuationState,
+        m1: latestPidTelemetry.m1,
+        m2: latestPidTelemetry.m2,
+        m3: latestPidTelemetry.m3,
+        m4: latestPidTelemetry.m4,
+        outerYaw: latestPidTelemetry.outerYaw
+      }
+    };
+  } else {
+    pidTelemetry = {
+      receivedAt: null,
+      ageMs: null,
+      sequence: 0,
+      stale: true,
+      valid: false,
+      telemetry: null
+    };
+  }
+
   res.json({
     ok: true,
     status: statusObj,
@@ -5551,7 +5996,8 @@ app.get('/api/drive/status', (req, res) => {
     backtracking,
     recording,
     pathLength: recordedPath.length,
-    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist }
+    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist },
+    pidTelemetry
   });
 });
 
@@ -6723,6 +7169,13 @@ module.exports = {
   updateLocalizationState,
   navigationState,
   updateNavigationState,
+  refreshNavigationReadiness,
+  REQUIRED_NAV_LIFECYCLE_NODES,
   abortAutonomyDueToLocalizationLost,
-  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
+  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); },
+  manualDriveWatchdog,
+  batteryTrend,
+  batteryPayload,
+  collectSystemHealth,
+  getManualDriveTarget: () => ({ targetLinear, targetAngular, cmdSource })
 };

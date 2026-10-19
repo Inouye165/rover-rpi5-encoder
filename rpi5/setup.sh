@@ -75,7 +75,7 @@ echo "Updating apt package list..."
 apt-get update -y
 
 echo "Installing required system packages..."
-apt-get install -y python3-pip python3-venv i2c-tools curl build-essential
+apt-get install -y python3-pip python3-venv python3-smbus i2c-tools curl build-essential
 
 # Install Node.js if not present
 if ! command -v node &> /dev/null; then

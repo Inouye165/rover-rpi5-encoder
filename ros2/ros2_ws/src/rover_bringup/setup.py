@@ -6,6 +6,7 @@ package_name = 'rover_bringup'
 
 launch_files = [f for f in glob('launch/*.launch.py') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
 config_files = [f for f in glob('config/*') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
+bt_files = [f for f in glob('behavior_trees/*') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
 
 setup(
     name=package_name,
@@ -17,6 +18,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), launch_files),
         (os.path.join('share', package_name, 'config'), config_files),
+        (os.path.join('share', package_name, 'behavior_trees'), bt_files),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

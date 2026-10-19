@@ -1,0 +1,399 @@
+/* Rover 1 HUD cockpit stylesheet.
+ * Section 1 is copied verbatim from the Rover 2 'ROVER GROUND CONTROL' cockpit
+ * (ubuntu@10.0.0.245:~/rover2 index.html) so both rovers share the same look. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; user-select: none; }
+body { background-color: #080c12; color: #d1d9e6; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+/* Top Navigation / Status Header */
+.top-bar {
+  height: 48px; background: #0c141f; border-bottom: 1px solid #1a2636;
+  display: flex; align-items: center; justify-content: space-between; padding: 0 12px;
+  gap: 8px; overflow: hidden; white-space: nowrap;
+}
+.hud-title {
+  font-weight: 800; font-size: 14px; letter-spacing: 1.5px; color: #00ffcc;
+  text-shadow: 0 0 10px rgba(0,255,204,0.3); white-space: nowrap; flex-shrink: 0;
+}
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+  padding: 4px 8px; border-radius: 4px; background: #15202e; border: 1px solid #203146;
+  white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums;
+}
+.badge-battery { color: #00ffcc; font-variant-numeric: tabular-nums; }
+.plug-state-ac {
+  background: rgba(0, 255, 136, 0.18) !important;
+  border-color: #00ff88 !important;
+  color: #00ff88 !important;
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.25);
+  font-weight: 800 !important;
+}
+.plug-state-bat {
+  background: rgba(255, 170, 0, 0.16) !important;
+  border-color: #ffaa00 !important;
+  color: #ffbb33 !important;
+  font-weight: 800 !important;
+}
+.batt-warn-yellow {
+  background: rgba(255, 196, 0, 0.20) !important;
+  border-color: #ffcc00 !important;
+  color: #ffe066 !important;
+  box-shadow: 0 0 10px rgba(255, 204, 0, 0.35);
+}
+@keyframes batt-critical-flash {
+  0%, 100% {
+    background: rgba(255, 34, 68, 0.48);
+    border-color: #ff2244;
+    color: #ffffff;
+    box-shadow: 0 0 16px rgba(255, 34, 68, 0.9);
+  }
+  50% {
+    background: rgba(95, 8, 24, 0.30);
+    border-color: #ff8899;
+    color: #ffccd2;
+    box-shadow: 0 0 4px rgba(255, 34, 68, 0.2);
+  }
+}
+.batt-crit-flash {
+  animation: batt-critical-flash 0.75s infinite ease-in-out !important;
+  font-weight: 800 !important;
+}
+.btn-estop {
+  background: #ff2a4b; color: white; border: none; padding: 6px 12px;
+  font-weight: 700; border-radius: 4px; cursor: pointer; letter-spacing: 0.8px;
+  box-shadow: 0 0 12px rgba(255,42,75,0.4); transition: 0.2s all;
+  white-space: nowrap; flex-shrink: 0;
+}
+.btn-estop:hover { background: #ff4765; }
+
+/* Main Grid Layout */
+.cockpit-grid {
+  display: grid; grid-template-columns: 280px 1fr 280px; grid-template-rows: minmax(0, 1fr);
+  flex: 1; height: calc(100vh - 48px); max-height: calc(100vh - 48px); min-height: 0;
+  gap: 10px; padding: 10px; overflow: hidden;
+}
+
+/* Left & Right Sidebars */
+.side-pane {
+  display: flex; flex-direction: column; gap: 8px;
+  min-height: 0; max-height: 100%; overflow-y: auto; padding-right: 2px;
+}
+.side-pane::-webkit-scrollbar { width: 4px; }
+.side-pane::-webkit-scrollbar-thumb { background: #1c3347; border-radius: 2px; }
+.card {
+  background: #0d1522; border: 1px solid #1a283b; border-radius: 6px;
+  padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+}
+.card-title {
+  font-size: 11px; font-weight: 700; color: #5f7a91; text-transform: uppercase;
+  letter-spacing: 1.5px; display: flex; justify-content: space-between;
+}
+
+/* Center Viewport (FPV Video + Overlays) */
+.viewport {
+  position: relative; background: #04060a; border-radius: 6px;
+  border: 1px solid #1a283b; overflow: hidden; display: flex;
+  align-items: center; justify-content: center;
+  height: 100%; max-height: 100%; min-height: 0;
+}
+#camera-feed {
+  width: 100%; height: 100%; max-height: 100%; object-fit: contain;
+  transform: none; /* Right side up default */
+  transition: opacity 0.3s ease;
+}
+.btn-flip-hud {
+  position: absolute; top: 12px; right: 12px; z-index: 25;
+  background: rgba(8, 12, 18, 0.7); border: 1px solid #00ffcc;
+  color: #00ffcc; border-radius: 4px; padding: 6px 12px; cursor: pointer;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  backdrop-filter: blur(4px); transition: all 0.2s ease;
+}
+.btn-flip-hud:hover {
+  background: rgba(0, 255, 204, 0.15); box-shadow: 0 0 10px rgba(0, 255, 204, 0.3);
+}
+.btn-night-vision-hud {
+  position: absolute; top: 12px; right: 118px; z-index: 25;
+  background: rgba(8, 12, 18, 0.75); border: 1px solid #a855f7;
+  color: #d8b4fe; border-radius: 4px; padding: 6px 12px; cursor: pointer;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
+  backdrop-filter: blur(4px); transition: all 0.2s ease;
+}
+.btn-night-vision-hud:hover {
+  background: rgba(168, 85, 247, 0.18); box-shadow: 0 0 10px rgba(168, 85, 247, 0.35);
+}
+.btn-night-vision-hud.active {
+  background: rgba(16, 185, 129, 0.24); border-color: #00ff88;
+  color: #00ff88; box-shadow: 0 0 12px rgba(0, 255, 136, 0.45);
+}
+.feed-standby {
+  position: absolute; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; color: #40566b; gap: 10px;
+}
+
+/* Crosshair Overlay */
+.crosshair {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 60px; height: 60px; border: 1px dashed rgba(0, 255, 204, 0.35);
+  border-radius: 50%; pointer-events: none; z-index: 10;
+}
+.crosshair::before, .crosshair::after { content: ''; position: absolute; background: rgba(0, 255, 204, 0.7); }
+.crosshair::before { top: 29px; left: -15px; width: 90px; height: 2px; }
+.crosshair::after { top: -15px; left: 29px; width: 2px; height: 90px; }
+
+/* Lidar Canvas */
+canvas#lidar-canvas {
+  display: block; width: 100%; border-radius: 4px; background: #030508;
+  border: 1px solid rgba(0, 255, 204, 0.15);
+}
+
+/* AI Overlay Canvas */
+#ai-canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 15;
+}
+
+/* Telemetry & Controls */
+.stat-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
+.stat-val { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bar-wrap { width: 100%; height: 8px; background: #151d2a; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.bar-fill { height: 100%; width: 0%; background: #00ffcc; transition: width 0.3s ease; }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #ff3344; flex-shrink: 0; }
+.status-dot.active { background: #00ffcc; box-shadow: 0 0 8px #00ffcc; }
+
+.obj-item {
+  padding: 6px 8px; background: rgba(0, 255, 204, 0.05); border: 1px solid rgba(0, 255, 204, 0.15);
+  border-radius: 4px; margin-bottom: 6px; font-size: 11px;
+}
+
+/* Google-Grade View Switcher & Center Stage Transitions */
+.view-switcher {
+  display: inline-flex; align-items: center; background: #070d15;
+  border: 1px solid #1c3347; border-radius: 999px; padding: 3px; gap: 2px;
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.6); flex-shrink: 0;
+}
+.view-tab {
+  border: none; background: transparent; color: #8ba2b5;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  transition: all 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0;
+}
+.view-tab:hover { color: #d1d9e6; background: rgba(0, 255, 204, 0.07); }
+.view-tab.active {
+  background: linear-gradient(135deg, rgba(0,255,204,0.22), rgba(0,180,255,0.18));
+  color: #00ffcc; border: 1px solid rgba(0,255,204,0.45);
+  box-shadow: 0 0 12px rgba(0,255,204,0.22);
+}
+.top-quick-btn {
+  background: #101d2b; border: 1px solid #1e3a52; color: #00ffcc;
+  font-size: 11px; font-weight: 700; padding: 5px 8px; border-radius: 5px;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+  transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0;
+}
+.top-quick-btn:hover {
+  background: rgba(0,255,204,0.15); border-color: #00ffcc;
+  box-shadow: 0 0 10px rgba(0,255,204,0.25);
+}
+.top-quick-btn.home-btn { color: #00ff88; border-color: rgba(0,255,136,0.45); }
+.top-quick-btn.home-btn:hover { background: rgba(0,255,136,0.16); border-color: #00ff88; }
+
+/* Center Stage Container (Seamless FPV <-> Tactical Map <-> Split View) */
+.center-stage {
+  position: relative; width: 100%; height: 100%; min-height: 0; max-height: 100%;
+  overflow: hidden; border-radius: 6px;
+  display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; gap: 10px;
+  transition: all 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.center-stage.mode-split {
+  grid-template-columns: 1fr 1fr;
+}
+
+#viewport-container, #autonomy-map-panel {
+  transition: all 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Mode 1: FPV Drive (Camera full, Map docked as interactive PiP mini-map) */
+.center-stage.mode-drive #viewport-container {
+  grid-column: 1; grid-row: 1; width: 100%; height: 100%; z-index: 10;
+}
+.center-stage.mode-drive #autonomy-map-panel {
+  position: absolute; bottom: 14px; right: 14px; width: 255px; height: 205px;
+  z-index: 30; border-radius: 8px; border: 1px solid rgba(0, 255, 204, 0.45);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.78), 0 0 16px rgba(0, 255, 204, 0.15);
+  background: rgba(6, 11, 18, 0.92); backdrop-filter: blur(8px);
+}
+.center-stage.mode-drive #autonomy-map-panel .map-full-only { display: none !important; }
+.center-stage.mode-drive #viewport-container .pip-expand-btn { display: none !important; }
+
+/* Mode 2: Tactical Map & Autonomy (Map full, Camera docked as live PiP window) */
+.center-stage.mode-map #autonomy-map-panel {
+  grid-column: 1; grid-row: 1; width: 100%; height: 100%; z-index: 10;
+  position: relative; border-radius: 6px; border: 1px solid #1a283b;
+  background: #050911;
+}
+.center-stage.mode-map #viewport-container {
+  position: absolute; top: 54px; right: 14px; width: 270px; height: 162px;
+  z-index: 30; border-radius: 8px; border: 1px solid rgba(0, 255, 204, 0.5);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.8), 0 0 16px rgba(0, 255, 204, 0.18);
+}
+.center-stage.mode-map #viewport-container .crosshair { width: 32px; height: 32px; }
+.center-stage.mode-map #viewport-container .crosshair::before,
+.center-stage.mode-map #viewport-container .crosshair::after { display: none; }
+.center-stage.mode-map #autonomy-map-panel .pip-minimap-bar { display: none !important; }
+
+/* Mode 3: Split Command View (50% Live Camera + 50% Interactive 2D Map) */
+.center-stage.mode-split #viewport-container {
+  position: relative; width: 100%; height: 100%; z-index: 10;
+}
+.center-stage.mode-split #autonomy-map-panel {
+  position: relative; width: 100%; height: 100%; z-index: 10;
+  border-radius: 6px; border: 1px solid #1a283b; background: #050911;
+}
+.center-stage.mode-split #autonomy-map-panel .pip-minimap-bar,
+.center-stage.mode-split #viewport-container .pip-expand-btn { display: none !important; }
+
+/* Tactical Map Canvas & Floating HUD Controls */
+#autonomy-map-panel {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#nav-map-canvas {
+  width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none;
+}
+.map-top-hud {
+  position: absolute; top: 10px; left: 12px; right: 12px; z-index: 22;
+  display: flex; justify-content: space-between; align-items: center;
+  pointer-events: none; gap: 8px;
+}
+.map-hud-pill {
+  pointer-events: auto; background: rgba(8, 14, 23, 0.86);
+  border: 1px solid #1e354d; border-radius: 6px; padding: 6px 10px;
+  backdrop-filter: blur(8px); display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: #d1d9e6; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+}
+.map-tool-btn {
+  background: #111e2e; border: 1px solid #223b54; color: #9rb4c9;
+  color: #b8cde0; border-radius: 4px; padding: 4px 8px; font-size: 11px;
+  font-weight: 600; cursor: pointer; transition: all 0.15s ease;
+}
+.map-tool-btn:hover { background: #192f47; color: #00ffcc; border-color: #00ffcc; }
+.map-tool-btn.active { background: rgba(0,255,204,0.16); color: #00ffcc; border-color: #00ffcc; }
+
+.map-bottom-dock {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 24; background: rgba(8, 14, 23, 0.92); border: 1px solid rgba(0, 255, 204, 0.38);
+  border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(10px);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.72), 0 0 18px rgba(0, 255, 204, 0.12);
+  max-width: 96%;
+}
+.btn-nav-action {
+  border-radius: 5px; padding: 6px 12px; font-size: 11px; font-weight: 700;
+  cursor: pointer; border: 1px solid transparent; transition: all 0.18s ease;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.btn-nav-dispatch {
+  background: linear-gradient(135deg, #00ffcc, #00b8ff); color: #041016;
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.35);
+}
+.btn-nav-dispatch:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-nav-preview {
+  background: #102133; border-color: #00d4ff; color: #00d4ff;
+}
+.btn-nav-preview:hover { background: rgba(0, 212, 255, 0.15); }
+.btn-nav-home {
+  background: #0d261c; border-color: #00ff88; color: #00ff88;
+}
+.btn-nav-home:hover { background: rgba(0, 255, 136, 0.18); }
+.btn-nav-sethome {
+  background: #14202e; border-color: #8ba2b5; color: #d1d9e6;
+}
+.btn-nav-sethome:hover { border-color: #00ffcc; color: #00ffcc; }
+.btn-nav-cancel {
+  background: rgba(255, 42, 75, 0.18); border-color: #ff2a4b; color: #ff5c77;
+}
+.btn-nav-cancel:hover { background: #ff2a4b; color: #fff; }
+
+.preset-chip {
+  background: #0e1926; border: 1px solid #1d3249; color: #b8cde0;
+  border-radius: 4px; padding: 4px 7px; font-size: 10px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s ease; text-align: center;
+}
+.preset-chip:hover { border-color: #00ffcc; color: #00ffcc; background: rgba(0,255,204,0.08); }
+
+/* ──────────────────────────────────────────────────────────────
+ * Rover 1 additions on top of the verbatim Rover 2 HUD stylesheet
+ * ────────────────────────────────────────────────────────────── */
+.badge-link { color: #00ffcc; border-color: #1c3347; text-decoration: none; cursor: pointer; }
+.badge-link:hover { border-color: #00ffcc; box-shadow: 0 0 8px rgba(0,255,204,0.25); }
+.auth-ok { color: #00ff88 !important; border-color: rgba(0,255,136,0.55) !important; }
+.auth-bad { color: #ffaa00 !important; border-color: rgba(255,170,0,0.55) !important; }
+
+.token-row { display: flex; gap: 4px; align-items: center; margin-top: 6px; }
+.token-row input {
+  flex: 1; min-width: 0; background: #0b131e; color: #d1d9e6; border: 1px solid #1e344b;
+  border-radius: 3px; padding: 3px 6px; font-size: 10px; font-family: monospace; user-select: text;
+}
+.token-row button, .mini-btn {
+  background: #15202e; border: 1px solid #5f7a91; color: #8ba2b5; border-radius: 3px;
+  padding: 3px 7px; font-size: 10px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.token-row button:hover, .mini-btn:hover { border-color: #00ffcc; color: #00ffcc; }
+
+.btn-arm { flex: 1; padding: 8px 8px; border-radius: 5px; font-size: 11px; font-weight: 800; letter-spacing: 0.4px;
+  cursor: pointer; transition: all 0.15s ease; background: #1a0d10; color: #ff4765; border: 1px solid #ff2a4b; }
+.btn-arm.armed { background: #06231e; color: #00ff88; border-color: #00ff88; box-shadow: 0 0 10px rgba(0,255,136,0.35); }
+.btn-arm:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.hud-toast-stack { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 999;
+  display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+.hud-toast { background: rgba(8,14,23,0.95); border: 1px solid #00ffcc; color: #d1d9e6; border-radius: 6px;
+  padding: 7px 14px; font-size: 12px; font-weight: 600; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  animation: hud-toast-in 0.25s ease-out; max-width: 80vw; }
+.hud-toast.error { border-color: #ff2a4b; color: #ffccd2; }
+.hud-toast.warn { border-color: #ffaa00; color: #ffe0a3; }
+.hud-toast.ok { border-color: #00ff88; color: #b8ffd9; }
+@keyframes hud-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.preview-only-note { font-size: 9.5px; color: #8ba2b5; line-height: 1.35; }
+.stat-val.ok { color: #00ff88; }
+.stat-val.warn { color: #ffaa00; }
+.stat-val.bad { color: #ff4765; }
+.stat-val.dim { color: #5f7a91; }
+.btn-cam-hud { right: 130px !important; border-color: #8ba2b5 !important; color: #d1d9e6 !important; }
+.top-bar-right::-webkit-scrollbar { height: 0; width: 0; }
+
+/* Responsive priority rules: keep E-STOP, UPS plug, RPi UPS battery, Connection/Temp, and Token visible on reduced windows */
+@media (max-width: 1620px) {
+  .hud-title { font-size: 12.5px !important; letter-spacing: 0.8px; }
+  .view-tab { padding: 4px 8px; font-size: 10.5px; }
+  .badge { padding: 4px 6px; font-size: 11px; gap: 4px; }
+  #motor-battery-badge,
+  #btn-top-init-home,
+  #gamepad-badge,
+  #link-touch-ui { display: none !important; }
+  .cockpit-grid { grid-template-columns: 262px 1fr 266px; gap: 8px; padding: 8px; }
+}
+@media (max-width: 1340px) {
+  #btn-top-home,
+  #link-eng-ui { display: none !important; }
+  #conn-badge { min-width: 118px !important; }
+  #ups-plug-badge { min-width: 82px !important; }
+  #battery-badge { min-width: 116px !important; }
+  #auth-badge { min-width: 78px !important; }
+  .cockpit-grid { grid-template-columns: 244px 1fr 248px; gap: 6px; padding: 6px; }
+  .radar-box { width: 220px !important; height: 220px !important; }
+  #lidar-canvas { width: 220px !important; height: 220px !important; }
+}
+@media (max-width: 1080px) {
+  .hud-title { display: none !important; }
+  .cockpit-grid { grid-template-columns: 224px 1fr 232px; }
+  .radar-box { width: 196px !important; height: 196px !important; }
+  #lidar-canvas { width: 196px !important; height: 196px !important; }
+}
+@media (max-height: 820px) {
+  .radar-box { width: 204px !important; height: 204px !important; }
+  #lidar-canvas { width: 204px !important; height: 204px !important; }
+  .card { padding: 7px 9px; gap: 4px; }
+}
+
