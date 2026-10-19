@@ -151,6 +151,8 @@
   makeStick($('stkL'), 'y');
   makeStick($('stkR'), 'x');
   document.addEventListener('visibilitychange', () => { if (document.hidden) { st.lin = st.ang = 0; resetKnobs(); } });
+  window.addEventListener('pagehide', () => { st.lin = st.ang = 0; resetKnobs(); });
+  window.addEventListener('blur', () => { st.lin = st.ang = 0; resetKnobs(); });
 
   H.on('drive_cmd', (c) => {
     const est = H.estimateCommandedVelocity(c.x, c.y);
@@ -161,17 +163,20 @@
   // ── Camera ─────────────────────────────────────────────────
   const cam = $('cam');
   let camOn = true;
+  let camLoaded = false;
   let flip = localStorage.getItem('hud_cam_flip') === '1';
   function applyFlip() { cam.style.transform = flip ? 'rotate(180deg)' : 'none'; }
   function startCam() {
-    cam.onload = () => { $('camMsg').style.display = 'none'; };
-    cam.onerror = () => { $('camMsg').style.display = 'flex'; $('camMsg').textContent = 'Camera error — retrying…'; setTimeout(() => { if (camOn) startCam(); }, 5000); };
+    camLoaded = false;
+    cam.onload = () => { camLoaded = true; $('camMsg').style.display = 'none'; };
+    cam.onerror = () => { camLoaded = false; $('camMsg').style.display = 'flex'; $('camMsg').textContent = 'Camera error — retrying…'; setTimeout(() => { if (camOn) startCam(); }, 5000); };
     cam.src = `/api/camera?t=${Date.now()}`;
     $('bCam').textContent = '⏸ Cam';
   }
   function stopCam() {
     cam.onload = cam.onerror = null;
     cam.removeAttribute('src');
+    camLoaded = false;
     $('camMsg').style.display = 'flex';
     $('camMsg').textContent = 'Camera paused';
     $('bCam').textContent = '▶ Cam';
@@ -183,6 +188,14 @@
     if (document.fullscreenElement) document.exitFullscreen(); else if (d.requestFullscreen) d.requestFullscreen().catch(() => {});
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { if (camOn) stopCam(); } else if (camOn) startCam(); });
+  window.addEventListener('pageshow', (ev) => { if (ev && ev.persisted && camOn) startCam(); });
+  let hadWsConn = false;
+  H.on('connection', (s) => {
+    if (s.wsConnected) {
+      if (hadWsConn && camOn && !camLoaded) startCam();
+      hadWsConn = true;
+    }
+  });
   applyFlip();
   startCam();
 
@@ -212,6 +225,9 @@
     if (r.width > 20 && r.height > 20) { mc.width = Math.round(r.width); mc.height = Math.round(r.height); }
   }
   window.addEventListener('resize', sizeMap);
+  window.addEventListener('orientationchange', () => {
+    [40, 180, 420].forEach(ms => setTimeout(() => { sizeRadar(); sizeMap(); }, ms));
+  });
   if (window.ResizeObserver) new ResizeObserver(sizeMap).observe($('mapPane'));
   setTimeout(sizeMap, 100);
   setInterval(() => { H.updateTrail(view); H.drawMap(mctx, view, mc.width, mc.height, mobMode === 'drive'); }, 66);

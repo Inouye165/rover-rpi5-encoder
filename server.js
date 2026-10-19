@@ -4624,6 +4624,26 @@ async function collectSystemHealth() {
   const adc = await execFileText('vcgencmd', ['pmic_read_adc', 'EXT5V_V'], 1500);
   const adcMatch = adc && adc.match(/EXT5V_V\s+volt\(\d+\)=([0-9.]+)V/);
   if (adcMatch) out.ext5vV = Math.round(parseFloat(adcMatch[1]) * 1000) / 1000;
+  try {
+    const pciDir = '/sys/bus/pci/devices';
+    if (fs.existsSync(pciDir)) {
+      for (const bdf of fs.readdirSync(pciDir)) {
+        const devPath = path.join(pciDir, bdf);
+        const v = fs.existsSync(path.join(devPath, 'vendor')) ? fs.readFileSync(path.join(devPath, 'vendor'), 'utf8').trim().toLowerCase() : '';
+        const d = fs.existsSync(path.join(devPath, 'device')) ? fs.readFileSync(path.join(devPath, 'device'), 'utf8').trim().toLowerCase() : '';
+        if (v === '0x1e60' && d === '0x2864') {
+          const rt = fs.existsSync(path.join(devPath, 'power', 'runtime_status')) ? fs.readFileSync(path.join(devPath, 'power', 'runtime_status'), 'utf8').trim() : 'unknown';
+          const ctrl = fs.existsSync(path.join(devPath, 'power', 'control')) ? fs.readFileSync(path.join(devPath, 'power', 'control'), 'utf8').trim() : 'unknown';
+          const devPstate = fs.existsSync(path.join(devPath, 'power_state')) ? fs.readFileSync(path.join(devPath, 'power_state'), 'utf8').trim() : 'unknown';
+          const parentPath = fs.realpathSync(path.join(devPath, '..'));
+          let brState = fs.existsSync(path.join(parentPath, 'power_state')) ? fs.readFileSync(path.join(parentPath, 'power_state'), 'utf8').trim() : 'unknown';
+          if (brState !== 'D3hot' && rt === 'suspended' && devPstate === 'D3hot') brState = 'D3hot';
+          out.hailo = { present: true, bdf, runtimeStatus: rt, powerControl: ctrl, bridgePowerState: brState };
+          break;
+        }
+      }
+    }
+  } catch (_) {}
   return out;
 }
 app.get('/api/system', async (req, res) => {

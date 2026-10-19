@@ -31,27 +31,27 @@
         <button class="view-tab" id="tab-view-split" data-view="split" title="Split FPV Camera + 2D Map (3)">🔀 Split View</button>
       </div>
     </div>
-    <div style="display:flex; align-items:center; gap:5px; flex-shrink:1; min-width:0; overflow-x:auto;">
+    <div class="top-bar-right" style="display:flex; align-items:center; gap:5px; flex-shrink:1; min-width:0; overflow-x:auto;">
       <button class="btn-estop" id="btn-top-estop" title="Instant Emergency Stop &amp; Disarm (Spacebar / Esc / Controller B or X)">🛑 E-STOP (SPACE / B)</button>
-      <button class="top-quick-btn home-btn" id="btn-top-home" title="Nav2: autonomously drive back to the saved HOME pose (asks for confirmation)">🏠 Return Home</button>
-      <button class="top-quick-btn" id="btn-top-init-home" title="Tell AMCL the rover is sitting on the HOME pad (no motion)">📍 Localize @ Home</button>
-      <div class="badge" id="conn-badge" style="min-width: 148px; justify-content: space-between;">
+      <div class="badge" id="ups-plug-badge" style="min-width: 96px; justify-content: center; color: #8ba2b5;" title="Power source inferred from the X1206 state-of-charge trend (no AC-detect line available)">🔌 AC: CHECKING</div>
+      <div class="badge badge-battery" id="battery-badge" style="min-width: 132px; justify-content: center;">🔋 RPi UPS: --% (--V)</div>
+      <div class="badge" id="conn-badge" style="min-width: 136px; justify-content: space-between;">
         <span style="display:inline-flex; align-items:center; gap:5px;">
           <span class="status-dot" id="conn-dot"></span>
-          <span id="conn-text" style="display:inline-block; min-width:64px;">Connecting...</span>
+          <span id="conn-text" style="display:inline-block; min-width:56px;">Connecting...</span>
         </span>
-        <span id="rpi-temp" style="margin-left: 4px; padding-left: 5px; border-left: 1px solid #203146; font-size: 11px; font-weight: 700; color: #888888; display: inline-block; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums;">🌡️ --°C</span>
+        <span id="rpi-temp" style="margin-left: 4px; padding-left: 5px; border-left: 1px solid #203146; font-size: 11px; font-weight: 700; color: #888888; display: inline-block; min-width: 50px; text-align: right; font-variant-numeric: tabular-nums;">🌡️ --°C</span>
       </div>
-      <div class="badge" id="ups-plug-badge" style="min-width: 102px; justify-content: center; color: #8ba2b5;" title="Power source inferred from the X1206 state-of-charge trend (no AC-detect line available)">🔌 AC: CHECKING</div>
-      <div class="badge badge-battery" id="battery-badge" style="min-width: 138px; justify-content: center;">🔋 RPi UPS: --% (--V)</div>
-      <div class="badge badge-battery" id="motor-battery-badge" style="color:#5f7a91; min-width: 106px; justify-content: center;" title="Rover 1 has no motor-pack voltage sensor wired to the ESP32">⚙ Motor: N/A</div>
-      <div class="badge" id="auth-badge" style="min-width: 92px; justify-content: center; cursor:pointer;" title="Operator token status — click to edit">🔑 NO TOKEN</div>
-      <div class="badge" id="gamepad-badge" style="color: #5f7a91; border-color: #203146; min-width: 98px; justify-content: center;">
+      <div class="badge" id="auth-badge" style="min-width: 88px; justify-content: center; cursor:pointer;" title="Operator token status — click to edit">🔑 NO TOKEN</div>
+      <button class="top-quick-btn home-btn top-secondary-ctrl" id="btn-top-home" title="Nav2: autonomously drive back to the saved HOME pose (asks for confirmation)">🏠 Return Home</button>
+      <button class="top-quick-btn top-secondary-ctrl" id="btn-top-init-home" title="Tell AMCL the rover is sitting on the HOME pad (no motion)">📍 Localize @ Home</button>
+      <div class="badge badge-battery top-secondary-ctrl" id="motor-battery-badge" style="color:#5f7a91; min-width: 96px; justify-content: center;" title="Rover 1 has no motor-pack voltage sensor wired to the ESP32">⚙ Motor: N/A</div>
+      <div class="badge top-secondary-ctrl" id="gamepad-badge" style="color: #5f7a91; border-color: #203146; min-width: 94px; justify-content: center;">
         <span id="gamepad-icon">🎮</span>
         <span id="gamepad-status-text">NO GAMEPAD</span>
       </div>
-      <a href="hud-mobile.html?mode=mobile" class="badge badge-link" title="Switch to Phone Touch Cockpit">📱 Touch UI</a>
-      <a href="index.html" class="badge badge-link" title="Legacy engineering cockpit (calibration, tests, diagnostics)">🛠 Engineering</a>
+      <a href="hud-mobile.html?mode=mobile" class="badge badge-link top-secondary-ctrl" id="link-touch-ui" title="Switch to Phone Touch Cockpit">📱 Touch UI</a>
+      <a href="index.html" class="badge badge-link top-secondary-ctrl" id="link-eng-ui" title="Legacy engineering cockpit (calibration, tests, diagnostics)">🛠 Engineering</a>
     </div>
   </header>
 
@@ -63,20 +63,20 @@
           <span>360° LiDAR Radar</span>
           <span id="stat-radar-badge" style="color:#5f7a91; font-size:10px; font-weight:bold;">SCANNING...</span>
         </div>
-        <div style="position:relative; width:260px; height:260px; margin:0 auto;">
+        <div class="radar-box" style="position:relative; width:260px; height:260px; margin:0 auto;">
           <canvas id="lidar-canvas" width="260" height="260" style="display:block; border-radius:4px;"></canvas>
-          <div style="position:absolute; top:4px; left:0; width:260px; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
+          <div style="position:absolute; top:4px; left:0; width:100%; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
             <span id="hud-scan-age" style="color:rgba(0,255,204,0.75);">AGE: --</span>
             <span id="hud-nearest-stat" style="color:#00ffcc; font-weight:bold;">NEAREST: --</span>
           </div>
-          <div style="position:absolute; bottom:4px; left:0; width:260px; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
+          <div style="position:absolute; bottom:4px; left:0; width:100%; display:flex; justify-content:space-between; padding:0 6px; font-size:9px; font-family:monospace; pointer-events:none; box-sizing:border-box;">
             <span id="hud-lidar-stat" style="color:#00ff66; font-weight:bold;">360° LIDAR: WAITING</span>
             <span id="hud-lidar-min" style="color:#00ff66;">MIN: --</span>
           </div>
         </div>
 
-        <div style="margin-top:5px; background:#070b10; border:1px solid #142332; border-radius:4px; padding:6px; font-size:10px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; color:#8ba2b5;">
+        <div style="margin-top:4px; background:#070b10; border:1px solid #142332; border-radius:4px; padding:5px 6px; font-size:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; color:#8ba2b5;">
             <span>Color:
               <select id="sel-radar-color" style="background:#101a24; color:#00ffcc; border:1px solid #1c3347; border-radius:3px; font-size:9px; padding:1px 2px;">
                 <option value="range" selected>Range (Dist)</option>
@@ -99,7 +99,7 @@
               </select>
             </span>
           </div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; font-size:9px; color:#5f7a91; border-top:1px solid #142332; padding-top:4px; margin-top:4px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; font-size:9px; color:#5f7a91; border-top:1px solid #142332; padding-top:3px; margin-top:3px;">
             <div>360° Scan Pts: <b id="disp-lidar-pts" style="color:#00ff88;">0 pts</b></div>
             <div>LiDAR Rate: <b id="disp-lidar-hz" style="color:#00ff88;">-- Hz</b></div>
             <div>Device: <b id="disp-lidar-dev" style="color:#8ba2b5;">RPLiDAR C1</b></div>
@@ -114,27 +114,30 @@
           <span>Geekworm X1206 UPS Health</span>
           <span id="ups-health-badge" style="color:#00ffcc; font-size:9px; font-weight:700;">MONITORING</span>
         </div>
-        <div id="ups-plug-banner" class="plug-state-bat" style="text-align:center; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:800; letter-spacing:0.6px; margin-bottom:2px; font-variant-numeric:tabular-nums;">
+        <div id="ups-plug-banner" class="plug-state-bat" style="text-align:center; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:800; letter-spacing:0.6px; margin-bottom:2px; font-variant-numeric:tabular-nums;">
           🔌 CHECKING POWER SOURCE...
         </div>
-        <div class="stat-row"><span>State of Charge</span><span class="stat-val" id="ups-soc">-- %</span></div>
-        <div class="stat-row"><span>Terminal Voltage</span><span class="stat-val" id="ups-voltage">-- V</span></div>
-        <div class="stat-row"><span>Power Source</span><span class="stat-val" id="ups-state">Standby</span></div>
-        <div class="stat-row"><span>Net Rate</span><span class="stat-val" id="ups-rate">-- %/hr</span></div>
-        <div class="stat-row"><span>Estimated Time</span><span class="stat-val" id="ups-time-left">Calibrating</span></div>
-        <div class="stat-row"><span>Trend Window</span><span class="stat-val" id="ups-window" style="font-size:11px; color:#8ba2b5;">--</span></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px 10px; font-size:11px;">
+          <div class="stat-row" style="margin-bottom:0;"><span>SOC</span><span class="stat-val" id="ups-soc">-- %</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Voltage</span><span class="stat-val" id="ups-voltage">-- V</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Source</span><span class="stat-val" id="ups-state">Standby</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Net Rate</span><span class="stat-val" id="ups-rate">-- %/hr</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Est. Time</span><span class="stat-val" id="ups-time-left">Calibrating</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Window</span><span class="stat-val" id="ups-window" style="font-size:10px; color:#8ba2b5;">--</span></div>
+        </div>
         <div id="ups-health-diag" style="font-size:10px; color:#00ffcc; background:#070b10; border:1px solid #142332; border-radius:4px; padding:4px 6px; margin-top:2px;">
           Checking cell voltage &amp; charge trend...
         </div>
-        <div class="bar-wrap"><div class="bar-fill" id="ups-bar"></div></div>
+        <div class="bar-wrap" style="margin-top:3px;"><div class="bar-fill" id="ups-bar"></div></div>
       </div>
 
       <div class="card">
         <div class="card-title"><span>Attitude &amp; Heading (IMU)</span><span id="imu-badge" style="color:#5f7a91; font-size:9px; font-weight:700;">--</span></div>
-        <div class="stat-row"><span>Heading (Yaw)</span><span class="stat-val" id="imu-yaw" style="color:#00ffcc;">--°</span></div>
-        <div class="stat-row"><span>Pitch</span><span class="stat-val" id="imu-pitch">--°</span></div>
-        <div class="stat-row"><span>Roll</span><span class="stat-val" id="imu-roll">--°</span></div>
-        <div style="font-size: 10px; color: #5f7a91; margin-top: 3px;">Source: BNO08x on ESP32 (game rotation vector, non-magnetic)</div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; font-size:11px; text-align:center;">
+          <div style="background:#070b10; border:1px solid #142332; border-radius:4px; padding:3px 4px;"><div style="font-size:9px; color:#5f7a91;">YAW</div><span class="stat-val" id="imu-yaw" style="color:#00ffcc;">--°</span></div>
+          <div style="background:#070b10; border:1px solid #142332; border-radius:4px; padding:3px 4px;"><div style="font-size:9px; color:#5f7a91;">PITCH</div><span class="stat-val" id="imu-pitch">--°</span></div>
+          <div style="background:#070b10; border:1px solid #142332; border-radius:4px; padding:3px 4px;"><div style="font-size:9px; color:#5f7a91;">ROLL</div><span class="stat-val" id="imu-roll">--°</span></div>
+        </div>
       </div>
     </section>
 
@@ -195,6 +198,63 @@
 
     <!-- Right Pane -->
     <section class="side-pane right" aria-label="Autonomy and drive">
+      <div class="card" id="drivetrain-card">
+        <div class="card-title">
+          <span>Maker ESP32 4WD Drivetrain</span>
+          <span id="drivetrain-badge" style="color:#5f7a91; font-size:9px; font-weight:700;">--</span>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px 10px; font-size:11px;">
+          <div class="stat-row" style="margin-bottom:0;"><span>Lin Vel</span><span class="stat-val" id="disp-lin">0.00 m/s</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Ang Vel</span><span class="stat-val" id="disp-ang">0.00 rad/s</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Lim Cmd</span><span class="stat-val" id="disp-cmd" style="font-size:10.5px;">0.00 / 0.00</span></div>
+          <div class="stat-row" style="margin-bottom:0;"><span>Firmware</span><span class="stat-val" id="disp-fw" style="font-size:10.5px;">--</span></div>
+        </div>
+        <div class="stat-row" style="margin-top:3px; margin-bottom:0;"><span>Speed Throttle</span><span class="stat-val" id="disp-throttle">50%</span></div>
+        <input type="range" id="throttle-slider" min="10" max="100" value="50" style="width: 100%; margin-top: 2px;" aria-label="Manual drive speed throttle">
+      </div>
+
+      <div class="card" id="drive-controls-card">
+        <div class="card-title">
+          <span>Drive Controls</span>
+          <span id="gp-conn-dot" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#5f7a91;"></span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button id="btn-card-estop" class="js-estop" style="flex:1.25; padding:8px 8px; background:#ff2a4b; color:#ffffff; border:1px solid #ff7788; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:0.4px; cursor:pointer; box-shadow:0 0 12px rgba(255,42,75,0.45); transition:all 0.15s ease;">🛑 E-STOP (B / SPACE)</button>
+          <button id="btn-arm-toggle" class="btn-arm" title="Arm / disarm the ESP32 drivetrain (requires operator token)">🔒 ARM</button>
+        </div>
+        <div class="token-row">
+          <input type="password" id="token-input" placeholder="Operator token" autocomplete="off" aria-label="Operator token">
+          <button id="btn-token-save">Save</button>
+          <button id="btn-token-clear" title="Forget token on this browser">✕</button>
+        </div>
+        <div id="token-status" style="font-size:10px; color:#8ba2b5;">Token: not set</div>
+        <div style="font-size:11px; color:#00ffcc; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="gp-name">No gamepad detected</div>
+        <div id="gp-wake-hint" style="font-size:10px; color:#ffaa00; line-height:1.3;">🎮 Press any button on your controller to connect.</div>
+        <div id="gp-security-alert" style="display:none; background:#241607; border:1px solid #ffaa00; border-radius:4px; padding:6px; margin-top:2px; font-size:10px; color:#ffdd99; line-height:1.4;">
+          <b>⚠️ Browser HTTP Block:</b> Chrome/Edge block gamepads on plain HTTP IPs. Add <code id="gp-origin">this origin</code> under <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, or tunnel with <code>ssh -L 3000:localhost:3000 ron@10.0.0.246</code>.
+        </div>
+        <div style="display:flex; gap:6px; margin-top:2px;">
+          <div id="gp-deadman-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #ff2a4b; color:#ff4765;">LB/LT: RELEASED</div>
+          <div id="gp-turbo-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #203146; color:#5f7a91;">RB: TURBO OFF</div>
+        </div>
+        <div id="gp-deadman-alert" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:2px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;">⚠️ HOLD LB OR LT TO DRIVE (Deadman Safety Active)</div>
+        <div id="drive-hint" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:2px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;"></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:3px; font-size:10px; color:#8ba2b5;">
+          <div>
+            <span>Linear (Stick Y):</span>
+            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-lin-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
+          </div>
+          <div>
+            <span>Angular (Stick X):</span>
+            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-ang-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
+          </div>
+        </div>
+        <div style="font-size: 10.5px; line-height: 1.45; color: #8ba2b5; margin-top: 3px;">
+          • <b>E-Stop:</b> <b>Spacebar / Esc</b> or Controller <b>B / X / Y / Back</b><br>
+          • <b>Drive:</b> <b>WASD / Arrows</b> or hold <b>LB / LT</b> on controller
+        </div>
+      </div>
+
       <div class="card" style="border-color:#1e3a52; background:linear-gradient(180deg, #0d1826 0%, #0d1522 100%);">
         <div class="card-title">
           <span style="color:#00ffcc;">🧭 Autonomy &amp; Mission Control</span>
@@ -236,63 +296,6 @@
         </details>
       </div>
 
-      <div class="card" id="drivetrain-card">
-        <div class="card-title">
-          <span>Maker ESP32 4WD Drivetrain</span>
-          <span id="drivetrain-badge" style="color:#5f7a91; font-size:9px; font-weight:700;">--</span>
-        </div>
-        <div class="stat-row"><span>Firmware</span><span class="stat-val" id="disp-fw" style="font-size:11px;">--</span></div>
-        <div class="stat-row"><span>Linear Vel (odom)</span><span class="stat-val" id="disp-lin">0.00 m/s</span></div>
-        <div class="stat-row"><span>Angular Vel (odom)</span><span class="stat-val" id="disp-ang">0.00 rad/s</span></div>
-        <div class="stat-row"><span>Limited Cmd</span><span class="stat-val" id="disp-cmd" style="font-size:11px;">0.00 / 0.00</span></div>
-        <div class="stat-row"><span>Speed Throttle</span><span class="stat-val" id="disp-throttle">50%</span></div>
-        <input type="range" id="throttle-slider" min="10" max="100" value="50" style="width: 100%; margin-top: 6px;" aria-label="Manual drive speed throttle">
-      </div>
-
-      <div class="card">
-        <div class="card-title">
-          <span>Drive Controls</span>
-          <span id="gp-conn-dot" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#5f7a91;"></span>
-        </div>
-        <div style="display:flex; gap:6px;">
-          <button id="btn-card-estop" class="js-estop" style="flex:1.25; padding:8px 8px; background:#ff2a4b; color:#ffffff; border:1px solid #ff7788; border-radius:5px; font-size:11px; font-weight:800; letter-spacing:0.4px; cursor:pointer; box-shadow:0 0 12px rgba(255,42,75,0.45); transition:all 0.15s ease;">🛑 E-STOP (B / SPACE)</button>
-          <button id="btn-arm-toggle" class="btn-arm" title="Arm / disarm the ESP32 drivetrain (requires operator token)">🔒 ARM</button>
-        </div>
-        <div style="font-size:11px; color:#00ffcc; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="gp-name">No gamepad detected</div>
-        <div id="gp-wake-hint" style="font-size:10px; color:#ffaa00; line-height:1.3; margin-top:2px;">🎮 Press any button on your controller to connect.</div>
-        <div id="gp-security-alert" style="display:none; background:#241607; border:1px solid #ffaa00; border-radius:4px; padding:6px; margin-top:4px; font-size:10px; color:#ffdd99; line-height:1.4;">
-          <b>⚠️ Browser HTTP Block:</b> Chrome/Edge block gamepads on plain HTTP IPs. Add <code id="gp-origin">this origin</code> under <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, or tunnel with <code>ssh -L 3000:localhost:3000 ron@10.0.0.246</code>.
-        </div>
-        <div style="display:flex; gap:6px; margin-top:4px;">
-          <div id="gp-deadman-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #ff2a4b; color:#ff4765;">LB/LT: RELEASED</div>
-          <div id="gp-turbo-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #203146; color:#5f7a91;">RB: TURBO OFF</div>
-        </div>
-        <div id="gp-deadman-alert" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:4px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;">⚠️ HOLD LB OR LT TO DRIVE (Deadman Safety Active)</div>
-        <div id="drive-hint" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:4px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;"></div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px; font-size:10px; color:#8ba2b5;">
-          <div>
-            <span>Linear (Stick Y):</span>
-            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-lin-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
-          </div>
-          <div>
-            <span>Angular (Stick X):</span>
-            <div style="height:6px; background:#15202e; border-radius:3px; overflow:hidden; margin-top:2px;"><div id="gp-ang-bar" style="height:100%; width:0%; background:#00ffcc; transition:width 0.05s ease;"></div></div>
-          </div>
-        </div>
-        <div class="token-row">
-          <input type="password" id="token-input" placeholder="Operator token" autocomplete="off" aria-label="Operator token">
-          <button id="btn-token-save">Save</button>
-          <button id="btn-token-clear" title="Forget token on this browser">✕</button>
-        </div>
-        <div id="token-status" style="font-size:10px; color:#8ba2b5;">Token: not set</div>
-        <div style="font-size: 11px; line-height: 1.5; color: #8ba2b5; margin-top: 6px;">
-          • <b>Controller E-Stop:</b> <b>B</b>, <b>X</b>, <b>Y</b>, <b>Back</b>, or <b>Stick Click</b><br>
-          • <b>Keyboard:</b> <b>Spacebar / Esc</b> = E-Stop | <b>WASD / Arrows</b> = Drive<br>
-          • <b>Deadman:</b> hold <b>LB / LT</b> to drive with a controller<br>
-          • Drive commands stream at 10 Hz; the server stops the rover if they stop arriving.
-        </div>
-      </div>
-
       <div class="card">
         <div class="card-title">Hardware Bus Checklist</div>
         <div class="stat-row"><span>Geekworm X1206 UPS</span><span class="stat-val dim" id="stat-ups">CHECKING...</span></div>
@@ -303,6 +306,7 @@
         <div class="stat-row"><span>Nav2 Bridge</span><span class="stat-val dim" id="stat-nav">CHECKING...</span></div>
         <div class="stat-row"><span>AMCL Localization</span><span class="stat-val dim" id="stat-loc">CHECKING...</span></div>
         <div class="stat-row"><span>SLAM Toolbox</span><span class="stat-val dim" id="stat-slam">CHECKING...</span></div>
+        <div class="stat-row"><span>Hailo-8 M.2 AI</span><span class="stat-val dim" id="stat-hailo">CHECKING...</span></div>
         <div class="stat-row"><span>RPi 5 Power</span><span class="stat-val dim" id="stat-rpi">CHECKING...</span></div>
       </div>
     </section>
