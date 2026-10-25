@@ -4662,6 +4662,100 @@ app.get('/api/system', async (req, res) => {
   }
 });
 
+// --- ESP32-S3 TCA9548A (0x70) 8-Channel ToF Sensor Bench API (VL53L7CX 8x8 & VL53L4CD Cliff) ---
+const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
+const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
+const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
+const DEFAULT_TOF_MAPPING = {
+  front_l7cx: 'auto',
+  rear_l7cx: 'auto',
+  cliff_fl: 'auto',
+  cliff_fr: 'auto',
+  cliff_rl: 'auto',
+  cliff_rr: 'auto',
+  aux_1: 'auto',
+  aux_2: 'auto'
+};
+
+function loadTofMapping() {
+  try {
+    if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
+      return { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+    }
+  } catch (_) {}
+  return { ...DEFAULT_TOF_MAPPING };
+}
+
+app.get('/api/tof-sensors', (req, res) => {
+  const now = Date.now();
+  const mapping = loadTofMapping();
+  try {
+    if (!fs.existsSync(TOF_STATE_FILE_PATH)) {
+      return res.json({
+        ok: true,
+        connected: false,
+        stale: true,
+        hostAgeMs: null,
+        mapping,
+        data: null
+      });
+    }
+    const rawText = fs.readFileSync(TOF_STATE_FILE_PATH, 'utf8');
+    const data = JSON.parse(rawText);
+    const hostTs = Number(data.host_timestamp_ms) || 0;
+    const hostAgeMs = hostTs > 0 ? Math.max(0, now - hostTs) : null;
+    const stale = hostAgeMs === null || hostAgeMs > 3000;
+    return res.json({
+      ok: true,
+      connected: !stale,
+      stale,
+      hostAgeMs,
+      mapping,
+      data
+    });
+  } catch (err) {
+    return res.json({
+      ok: true,
+      connected: false,
+      stale: true,
+      hostAgeMs: null,
+      mapping,
+      error: err.message,
+      data: null
+    });
+  }
+});
+
+app.post('/api/tof-sensors/rescan', (req, res) => {
+  try {
+    fs.writeFileSync(TOF_CMD_FILE_PATH, 'TOF_RESCAN\n', 'utf8');
+    res.json({ ok: true, requested: 'TOF_RESCAN', timestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tof-sensors/mapping', (req, res) => {
+  try {
+    const current = loadTofMapping();
+    const incoming = (req.body && typeof req.body === 'object') ? req.body : {};
+    const updated = { ...current };
+    for (const key of Object.keys(DEFAULT_TOF_MAPPING)) {
+      if (Object.prototype.hasOwnProperty.call(incoming, key)) {
+        const val = String(incoming[key]).trim().toLowerCase();
+        if (val === 'auto' || /^[0-7]$/.test(val)) {
+          updated[key] = val === 'auto' ? 'auto' : Number(val);
+        }
+      }
+    }
+    fs.writeFileSync(TOF_MAPPING_FILE_PATH, JSON.stringify(updated, null, 2), 'utf8');
+    res.json({ ok: true, mapping: updated });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/pid-telemetry', (req, res) => {
   const now = Date.now();
   if (!latestPidTelemetry) {
