@@ -970,6 +970,9 @@
   // Radar renderer (Rover 2 obstacle radar look, LiDAR only)
   // ────────────────────────────────────────────────────────────
   function radarRings(maxR) {
+    if (maxR <= 0.3) return [0.1, 0.2, 0.25];
+    if (maxR <= 0.6) return [0.1, 0.25, 0.5];
+    if (maxR <= 1.2) return [0.25, 0.5, 1.0];
     if (maxR <= 2.1) return [0.5, 1.0, 1.5, 2.0];
     if (maxR <= 3.1) return [1.0, 2.0, 3.0];
     if (maxR <= 5.1) return [1.0, 2.5, 5.0];
@@ -990,7 +993,8 @@
       ctx.strokeStyle = r >= maxR - 0.05 ? 'rgba(0, 255, 204, 0.30)' : 'rgba(0, 255, 204, 0.13)';
       ctx.beginPath(); ctx.arc(cx, cy, r * scale, 0, 2 * Math.PI); ctx.stroke();
       ctx.fillStyle = 'rgba(95, 122, 145, 0.75)'; ctx.font = '8px monospace'; ctx.textAlign = 'left';
-      ctx.fillText(`${r}m`, cx + 3, cy - r * scale + 8);
+      const label = maxR < 1.0 ? `${Math.round(r * 100)}cm` : `${r}m`;
+      ctx.fillText(label, cx + 3, cy - r * scale + 8);
     });
     ctx.strokeStyle = 'rgba(0, 255, 204, 0.15)';
     ctx.beginPath();

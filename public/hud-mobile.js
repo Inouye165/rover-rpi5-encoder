@@ -203,6 +203,11 @@
   const radar = $('radar');
   const rctx = radar.getContext('2d');
   let radarSize = 140;
+  const radarRanges = [3.0, 1.0, 0.50, 0.25];
+  let radarRangeIdx = 0;
+  radar.addEventListener('click', () => {
+    radarRangeIdx = (radarRangeIdx + 1) % radarRanges.length;
+  });
   function sizeRadar() {
     const r = radar.getBoundingClientRect();
     radarSize = Math.max(80, Math.round(Math.min(r.width, r.height)));
@@ -211,7 +216,8 @@
   window.addEventListener('resize', sizeRadar);
   setTimeout(sizeRadar, 60);
   setInterval(() => {
-    const res = H.drawRadar(rctx, radarSize, { maxRange: 3.0, color: 'range', pointSize: 2 });
+    const curRange = radarRanges[radarRangeIdx];
+    const res = H.drawRadar(rctx, radarSize, { maxRange: curRange, color: 'range', pointSize: 2 });
     if (res && res.live && res.nearest) setText('hMin', `LIDAR ${res.nearest.d.toFixed(2)} m`);
     else setText('hMin', H.state.lidarStatus && H.state.lidarStatus.connected === false ? 'LIDAR OFFLINE' : 'LIDAR --');
   }, 200);
