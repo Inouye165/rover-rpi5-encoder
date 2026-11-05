@@ -17,7 +17,7 @@
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none;
       -webkit-touch-callout:none; touch-action:none; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--txt); overflow:hidden;
+  html,body { margin:0; height:100%; height:100dvh; background:var(--bg); color:var(--txt); overflow:hidden;
               font-family:-apple-system,system-ui,Roboto,sans-serif; overscroll-behavior:none; }
   #app { position:fixed; inset:0; display:flex; flex-direction:column;
          padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
@@ -26,6 +26,7 @@
   #top { flex:0 0 clamp(36px,6.5vh,44px); display:flex; align-items:center; gap:5px; padding:0 6px;
          background:var(--panel); border-bottom:1px solid var(--line); font-size:clamp(10px,1.5vh + .35vw,13px);
          font-weight:600; white-space:nowrap; overflow-x:auto; font-variant-numeric:tabular-nums; }
+  #top::-webkit-scrollbar { height:0; width:0; }
   #top .chip { padding:2px 6px; border-radius:10px; background:#101a24; border:1px solid var(--line); flex-shrink:0;
                white-space:nowrap; font-variant-numeric:tabular-nums; text-align:center; }
   .chip.plug-ac { background:rgba(0,255,136,.18) !important; border-color:#00ff88 !important; color:#00ff88 !important; }
@@ -48,10 +49,19 @@
              color:var(--green); font-weight:800; font-size:11px; flex-shrink:0; }
   #estop { height:78%; padding:0 10px; border:0; border-radius:6px; background:var(--bad); color:#fff;
            font-weight:800; font-size:inherit; flex-shrink:0; }
+  @media (max-width: 480px) {
+    #btnTopHome, #cLat { display:none !important; }
+    .mtab { padding:3px 6px; font-size:10px; }
+    #top .chip { padding:2px 5px; font-size:10.5px; }
+    #cBat { min-width:86px !important; }
+    #cAuth { min-width:48px !important; }
+    #cTmp { min-width:42px !important; }
+    #estop { padding:0 7px; font-size:10.5px; }
+  }
 
   /* Main Stage: Seamless transitions between Drive, Tactical Map, and Split */
   #main { flex:1; min-height:0; display:flex; flex-direction:column; position:relative; }
-  #stage { flex:1; min-height:0; position:relative; background:#03060a; overflow:hidden;
+  #stage { flex:1; min-height:180px; position:relative; background:#03060a; overflow:hidden;
            display:grid; grid-template-columns:1fr; grid-template-rows:1fr; gap:6px;
            transition:all .35s cubic-bezier(.22,1,.36,1); }
   #stage.mode-split { grid-template-rows:1fr 1fr; }
@@ -61,7 +71,7 @@
   /* Mode: Drive (FPV Full + Mini-Map bottom-left) */
   #stage.mode-drive #view { width:100%; height:100%; z-index:5; }
   #stage.mode-drive #mapPane {
-    position:absolute; bottom:44px; left:6px; width:clamp(118px,30vmin,175px); height:clamp(95px,24vmin,140px);
+    position:absolute; bottom:38px; left:6px; width:clamp(108px,28vmin,165px); height:clamp(84px,21vmin,132px);
     z-index:15; border-radius:8px; border:1px solid rgba(0,255,204,.45); background:rgba(6,10,16,.9);
     box-shadow:0 6px 18px rgba(0,0,0,.75);
   }
@@ -71,7 +81,7 @@
   /* Mode: Map (2D SLAM Map Full + Camera PiP top-right) */
   #stage.mode-map #mapPane { width:100%; height:100%; z-index:5; background:#050911; }
   #stage.mode-map #view {
-    position:absolute; top:42px; right:6px; width:clamp(135px,34vmin,210px); height:clamp(84px,21vmin,130px);
+    position:absolute; top:42px; right:6px; width:clamp(124px,32vmin,195px); height:clamp(78px,20vmin,122px);
     z-index:18; border-radius:8px; border:1px solid rgba(0,255,204,.5); background:#000;
     box-shadow:0 6px 20px rgba(0,0,0,.8);
   }
@@ -87,7 +97,7 @@
   #cam { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
   #camMsg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim);
             font-size:13px; pointer-events:none; text-align:center; padding:12px; }
-  #radar { position:absolute; top:6px; right:6px; width:clamp(100px,25vmin,170px); height:clamp(100px,25vmin,170px);
+  #radar { position:absolute; top:6px; right:6px; width:clamp(88px,23vmin,155px); height:clamp(88px,23vmin,155px);
            background:rgba(5,8,12,.68); border:1px solid var(--line); border-radius:8px; pointer-events:none; }
   #hud { position:absolute; top:6px; left:6px; display:flex; flex-direction:column; gap:3px; font-size:11px;
          font-weight:600; pointer-events:none; z-index:6; }
@@ -135,44 +145,62 @@
   .pbtn { background:#101c2a; border:1px solid var(--line); color:var(--txt); border-radius:5px; padding:6px 4px;
           font-size:11px; font-weight:700; text-align:center; }
 
-  /* Dual Touch Sticks Dock */
-  #ctl { flex:0 0 clamp(140px,33vh,260px); display:flex; align-items:center; justify-content:space-around;
-         background:var(--panel); border-top:1px solid var(--line); position:relative; }
-  .stickWrap { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px; color:var(--dim); font-weight:700; }
-  .stick { position:relative; width:clamp(112px,min(26vh,38vw),195px); height:clamp(112px,min(26vh,38vw),195px);
+  /* Dual Touch Sticks Dock (Portrait default) */
+  #ctl { flex:0 0 clamp(128px,27dvh,215px); display:flex; align-items:center; justify-content:space-around;
+         padding:4px 8px; background:var(--panel); border-top:1px solid var(--line); position:relative; }
+  .stickWrap { display:flex; flex-direction:column; align-items:center; gap:2px; font-size:10px; color:var(--dim); font-weight:700; }
+  .stick { position:relative; width:clamp(98px,min(21dvh,32vw),165px); height:clamp(98px,min(21dvh,32vw),165px);
            border-radius:50%; background:radial-gradient(circle,#13202d 0%,#0a121a 70%); border:2px solid var(--line); }
-  .stick.v { border-radius:60px; width:clamp(66px,min(13vh,19vw),105px); }
+  .stick.v { border-radius:60px; width:clamp(58px,min(12dvh,17vw),92px); }
   .knob { position:absolute; left:50%; top:50%; width:44%; height:44%; margin:-22% 0 0 -22%; border-radius:50%;
           background:#2a4d68; border:2px solid var(--ok); pointer-events:none; }
   .stick.v .knob { width:80%; height:auto; aspect-ratio:1; margin:0; left:10%; top:50%; transform:translateY(-50%); }
-  #midCol { display:flex; flex-direction:column; gap:5px; align-items:stretch; width:clamp(96px,25vw,154px); }
-  #ctlEstop { padding:9px 5px; border-radius:8px; border:2px solid #ff7788; background:#ff2a4b; color:#fff;
-              font-weight:900; font-size:12px; letter-spacing:0.3px; box-shadow:0 0 12px rgba(255,42,75,0.5); }
+  #midCol { display:flex; flex-direction:column; gap:4px; align-items:stretch; width:clamp(108px,32vw,160px); }
+  #ctlEstop { padding:6px 5px; border-radius:7px; border:2px solid #ff7788; background:#ff2a4b; color:#fff;
+              font-weight:900; font-size:11px; letter-spacing:0.3px; box-shadow:0 0 10px rgba(255,42,75,0.45); }
   #ctlEstop:active { background:#fff; color:#ff1738; }
-  #ctlResume { padding:8px 5px; border-radius:8px; border:2px solid var(--ok); background:#08261e; color:var(--ok);
-               font-weight:800; font-size:11.5px; letter-spacing:0.3px; }
-  #ctlResume:active { background:var(--ok); color:#041016; }
-  #arm { padding:8px 6px; border-radius:8px; border:2px solid var(--bad); background:#1a0d10; color:var(--bad);
-         font-weight:800; font-size:12px; }
+  #arm { padding:6px 5px; border-radius:7px; border:2px solid var(--bad); background:#1a0d10; color:var(--bad);
+         font-weight:800; font-size:11px; }
   #arm.on { border-color:var(--ok); background:#06231e; color:var(--ok); }
-  #spdLbl { font-size:11px; color:var(--dim); text-align:center; }
-  #spd { width:100%; touch-action:pan-x; }
-  #readout { font-size:10px; color:var(--dim); text-align:center; font-variant-numeric:tabular-nums; }
+  #spdLbl { font-size:10.5px; color:var(--dim); text-align:center; }
+  #spd { width:100%; touch-action:pan-x; height:18px; }
+  #readout { font-size:9.5px; color:var(--dim); text-align:center; font-variant-numeric:tabular-nums; }
 
-  /* Landscape adjustments */
+  /* Landscape adjustments: non-overlapping 3-column grid (Left Stick | Camera+Map Stage + Bottom Control Strip | Right Stick) */
   @media (orientation:landscape) {
     #stage.mode-split { grid-template-rows:1fr; grid-template-columns:1fr 1fr; }
     #stage.mode-split #mapPane { border-top:0; border-left:1px solid var(--line); }
-    #main { flex-direction:row; }
-    #ctl { position:absolute; inset:0; background:transparent; border:0; pointer-events:none; flex:none;
-           justify-content:space-between; padding:0 10px; align-items:flex-end; padding-bottom:8px; z-index:20; }
-    #ctl > * { pointer-events:auto; }
-    .stick { opacity:.78; background:radial-gradient(circle,rgba(19,32,45,.8) 0%,rgba(10,18,26,.55) 70%); }
-    #midCol { position:absolute; left:50%; bottom:44px; transform:translateX(-50%); width:clamp(96px,15vw,140px); }
-    #stage.mode-map #ctl .stickWrap { opacity:.55; }
-    #stage.mode-map #midCol { display:none; }
-    #viewBtns { bottom:auto; top:6px; left:50%; }
-    #hud { top:42px; }
+    #main {
+      display:grid;
+      grid-template-columns:clamp(94px,16vw,144px) 1fr clamp(106px,18vw,162px);
+      grid-template-rows:1fr auto;
+      align-items:stretch;
+    }
+    #stage { grid-column:2; grid-row:1; min-height:0; }
+    #ctl { display:contents; }
+    #stkLWrap {
+      grid-column:1; grid-row:1 / span 2;
+      justify-content:center; padding:6px 4px;
+      background:var(--panel); border-right:1px solid var(--line); z-index:20;
+    }
+    #stkRWrap {
+      grid-column:3; grid-row:1 / span 2;
+      justify-content:center; padding:6px 4px;
+      background:var(--panel); border-left:1px solid var(--line); z-index:20;
+    }
+    #stkL { width:clamp(54px,8vw,82px); height:clamp(112px,56dvh,180px); }
+    #stkR { width:clamp(90px,min(48dvh,15vw),144px); height:clamp(90px,min(48dvh,15vw),144px); }
+    #midCol {
+      grid-column:2; grid-row:2;
+      width:100%; flex-direction:row; align-items:center; justify-content:center;
+      gap:8px; padding:4px 10px; background:var(--panel); border-top:1px solid var(--line); z-index:20;
+    }
+    #ctlEstop, #arm { padding:5px 10px; font-size:11px; flex-shrink:0; }
+    #spdLbl { white-space:nowrap; font-size:10.5px; }
+    #spd { width:clamp(75px,18vw,140px); }
+    #readout { min-width:58px; font-size:10px; }
+    #stage.mode-drive #mapPane { bottom:6px; left:6px; width:clamp(104px,22vmin,150px); height:clamp(78px,18vmin,116px); }
+    #viewBtns { bottom:6px; left:50%; }
   }
   /* Rover 1 additions */
   #tokenBar { position:absolute; inset:auto 8px 50px 8px; z-index:26; background:rgba(9,15,24,.96); border:1px solid var(--warn);
@@ -198,11 +226,11 @@
       <button class="mtab" id="tabMap" data-mode="map">🗺️ Map</button>
       <button class="mtab" id="tabSplit" data-mode="split">🔀 Split</button>
     </div>
+    <span class="chip" id="cBat" style="min-width:98px;">🔋 --%</span>
+    <span class="chip" id="cAuth" style="min-width:56px;">🔑 --</span>
+    <span class="chip" id="cTmp" style="min-width:46px;">-- °C</span>
+    <span class="chip" id="cLat" style="min-width:54px;">-- ms</span>
     <button class="top-act" id="btnTopHome">🏠 Home</button>
-    <span class="chip" id="cBat" style="min-width:108px;">🔋 --%</span>
-    <span class="chip" id="cAuth" style="min-width:64px;">🔑 --</span>
-    <span class="chip" id="cTmp" style="min-width:52px;">-- °C</span>
-    <span class="chip" id="cLat" style="min-width:62px;">-- ms</span>
     <span id="spacer"></span>
     <button id="estop">🛑 E-STOP</button>
   </div>
@@ -281,7 +309,7 @@
     </div>
 
     <div id="ctl">
-      <div class="stickWrap"><div class="stick v" id="stkL"><div class="knob"></div></div>FWD / REV</div>
+      <div class="stickWrap" id="stkLWrap"><div class="stick v" id="stkL"><div class="knob"></div></div>FWD / REV</div>
       <div id="midCol">
         <button id="ctlEstop">🛑 E-STOP</button>
         <button id="arm">ARM</button>
@@ -289,7 +317,7 @@
         <input type="range" id="spd" min="10" max="100" value="60" aria-label="Drive speed">
         <div id="readout">—</div>
       </div>
-      <div class="stickWrap"><div class="stick" id="stkR"><div class="knob"></div></div>TURN</div>
+      <div class="stickWrap" id="stkRWrap"><div class="stick" id="stkR"><div class="knob"></div></div>TURN</div>
     </div>
   </div>
   <div id="mobToast"></div>

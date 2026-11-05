@@ -222,10 +222,46 @@ async function desktopTests() {
   assert.throws(() => H.parseMissionScript('dance wildly', { x: 0, y: 0, yawRad: 0 }, null));
   assert.throws(() => H.parseMissionScript('return home', { x: 0, y: 0, yawRad: 0 }, null), /HOME/);
 
-  console.log('Core 4: battery view mapping');
+  console.log('Core 4: battery view mapping + 0.0V dummy guard');
   assert.strictEqual(H.batteryView({ voltage: 3.97, percentage: 49.2, powerState: 'CHARGING' }).plug, 'AC: CHARGING');
   assert.strictEqual(H.batteryView({ voltage: 3.4, percentage: 8, powerState: 'DISCHARGING' }).level, 'critical');
+  assert.strictEqual(H.batteryView({ voltage: 0.0 }).pct, null, '0.0V dummy packet must not report valid battery');
+  assert.strictEqual(H.batteryView({ voltage: 0.0 }).level, 'unknown');
   assert.strictEqual(H.batteryView(null).pct, null);
+
+  console.log('Desktop 11: top-bar prioritizes battery/plug/conn/auth before secondary buttons and right pane puts Drivetrain/Drive Controls above Autonomy');
+  const htmlTxt = read('hud.html');
+  const idxPlug = htmlTxt.indexOf('id="ups-plug-badge"');
+  const idxBat = htmlTxt.indexOf('id="battery-badge"');
+  const idxConn = htmlTxt.indexOf('id="conn-badge"');
+  const idxAuth = htmlTxt.indexOf('id="auth-badge"');
+  const idxHome = htmlTxt.indexOf('id="btn-top-home"');
+  const idxInitHome = htmlTxt.indexOf('id="btn-top-init-home"');
+  const idxMotor = htmlTxt.indexOf('id="motor-battery-badge"');
+  const idxGamepad = htmlTxt.indexOf('id="gamepad-badge"');
+  assert(idxPlug > 0 && idxBat > 0 && idxConn > 0 && idxAuth > 0, 'critical top-bar badges missing');
+  assert(idxPlug < idxHome && idxBat < idxHome && idxConn < idxHome && idxAuth < idxHome, 'critical badges must precede Return Home');
+  assert(idxBat < idxInitHome && idxBat < idxMotor && idxBat < idxGamepad, 'battery badge must precede secondary badges');
+  const idxDriveCard = htmlTxt.indexOf('id="drivetrain-card"');
+  const idxCtrlCard = htmlTxt.indexOf('id="drive-controls-card"');
+  const idxAutonomyCard = htmlTxt.indexOf('Autonomy &amp; Mission Control');
+  assert(idxDriveCard > 0 && idxCtrlCard > 0 && idxDriveCard < idxAutonomyCard && idxCtrlCard < idxAutonomyCard, 'Drivetrain & Drive Controls must precede Autonomy card in right sidebar');
+  const cssTxt = read('hud.css');
+  assert(cssTxt.includes('@media (max-width: 1620px)') && cssTxt.includes('@media (max-width: 1340px)') && cssTxt.includes('@media (max-width: 1080px)'), 'responsive @media rules missing in hud.css');
+
+  console.log('Desktop 12: pagehide while driving immediately flushes zero joystick frame');
+  const env2 = makeDom('hud.html', { token: TOKEN, extraScripts: ['hud-desktop.js'] });
+  await sleep(30);
+  const ws2 = env2.MockWS.instances[0];
+  ws2.serverSend({ type: 'auth_result', ok: true });
+  ws2.serverSend({ type: 'normal_drive_status', armed: true });
+  env2.w.dispatchEvent(new env2.w.KeyboardEvent('keydown', { key: 'w', bubbles: true }));
+  env2.H._driveTick();
+  env2.sent.length = 0;
+  env2.w.dispatchEvent(new env2.w.Event('pagehide'));
+  const zeroFlush = env2.sent.find(m => m.type === 'joystick' && m.x === 0 && m.y === 0 && m.deadman === false);
+  assert(zeroFlush, 'pagehide while driving must immediately send zero joystick frame with deadman:false');
+  env2.dom.window.close();
 
   env.dom.window.close();
 }
@@ -242,9 +278,13 @@ async function mobileTests() {
   assert(env.sent.find(m => m.type === 'disarm_normal_drive'), 'mobile disarm');
   assert(env.fetches.find(f => f.url === '/api/drive/disarm'), 'mobile HTTP disarm');
 
-  console.log('Mobile 2: Rover 2 mobile CSS was injected');
+  console.log('Mobile 2: Rover 2 mobile CSS + non-overlapping landscape 3-column grid and top-bar battery priority');
+  const mobHtml = read('hud-mobile.html');
+  assert(mobHtml.indexOf('id="cBat"') < mobHtml.indexOf('id="btnTopHome"'), 'mobile #cBat must precede #btnTopHome');
+  assert(mobHtml.indexOf('id="cAuth"') < mobHtml.indexOf('id="btnTopHome"'), 'mobile #cAuth must precede #btnTopHome');
   const styleTxt = env.w.document.querySelector('style').textContent;
   assert(styleTxt.includes('#stage.mode-split') && styleTxt.includes('.stick.v'), 'Rover 2 mobile CSS missing');
+  assert(styleTxt.includes('#stkLWrap') && styleTxt.includes('#stkRWrap') && styleTxt.includes('display:contents'), 'landscape 3-column non-overlapping grid CSS missing');
   assert(!styleTxt.includes('ROVER2_MOBILE_CSS'), 'template placeholder left in page');
   env.dom.window.close();
 }
@@ -261,3 +301,4 @@ async function mobileTests() {
     process.exit(1);
   }
 })();
+

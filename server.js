@@ -4624,6 +4624,26 @@ async function collectSystemHealth() {
   const adc = await execFileText('vcgencmd', ['pmic_read_adc', 'EXT5V_V'], 1500);
   const adcMatch = adc && adc.match(/EXT5V_V\s+volt\(\d+\)=([0-9.]+)V/);
   if (adcMatch) out.ext5vV = Math.round(parseFloat(adcMatch[1]) * 1000) / 1000;
+  try {
+    const pciDir = '/sys/bus/pci/devices';
+    if (fs.existsSync(pciDir)) {
+      for (const bdf of fs.readdirSync(pciDir)) {
+        const devPath = path.join(pciDir, bdf);
+        const v = fs.existsSync(path.join(devPath, 'vendor')) ? fs.readFileSync(path.join(devPath, 'vendor'), 'utf8').trim().toLowerCase() : '';
+        const d = fs.existsSync(path.join(devPath, 'device')) ? fs.readFileSync(path.join(devPath, 'device'), 'utf8').trim().toLowerCase() : '';
+        if (v === '0x1e60' && d === '0x2864') {
+          const rt = fs.existsSync(path.join(devPath, 'power', 'runtime_status')) ? fs.readFileSync(path.join(devPath, 'power', 'runtime_status'), 'utf8').trim() : 'unknown';
+          const ctrl = fs.existsSync(path.join(devPath, 'power', 'control')) ? fs.readFileSync(path.join(devPath, 'power', 'control'), 'utf8').trim() : 'unknown';
+          const devPstate = fs.existsSync(path.join(devPath, 'power_state')) ? fs.readFileSync(path.join(devPath, 'power_state'), 'utf8').trim() : 'unknown';
+          const parentPath = fs.realpathSync(path.join(devPath, '..'));
+          let brState = fs.existsSync(path.join(parentPath, 'power_state')) ? fs.readFileSync(path.join(parentPath, 'power_state'), 'utf8').trim() : 'unknown';
+          if (brState !== 'D3hot' && rt === 'suspended' && devPstate === 'D3hot') brState = 'D3hot';
+          out.hailo = { present: true, bdf, runtimeStatus: rt, powerControl: ctrl, bridgePowerState: brState };
+          break;
+        }
+      }
+    }
+  } catch (_) {}
   return out;
 }
 app.get('/api/system', async (req, res) => {
@@ -4637,6 +4657,118 @@ app.get('/api/system', async (req, res) => {
   }
   try {
     res.json(await systemHealthInFlight);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- ESP32-S3 TCA9548A (0x70) 8-Channel ToF Sensor Bench API (VL53L7CX 8x8 & VL53L4CD Cliff) ---
+const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
+const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
+const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
+const DEFAULT_TOF_MAPPING = {
+  front_left_l7cx: 1,
+  front_left_l7cx_rot: '90_ccw',
+  front_right_l7cx: 0,
+  front_right_l7cx_rot: '90_ccw',
+  rear_left_l7cx: 'auto',
+  rear_left_l7cx_rot: '90_ccw',
+  rear_right_l7cx: 'auto',
+  rear_right_l7cx_rot: '90_ccw',
+  cliff_fl: 'auto',
+  cliff_fr: 'auto',
+  cliff_rl: 'auto',
+  cliff_rr: 'auto',
+  aux_1: 'auto',
+  aux_2: 'auto'
+};
+
+function loadTofMapping() {
+  try {
+    if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
+      const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+      delete mapping.front_l7cx;
+      delete mapping.front_l7cx_rot;
+      delete mapping.rear_l7cx;
+      delete mapping.rear_l7cx_rot;
+      return mapping;
+    }
+  } catch (_) {}
+  return { ...DEFAULT_TOF_MAPPING };
+}
+
+app.get('/api/tof-sensors', (req, res) => {
+  const now = Date.now();
+  const mapping = loadTofMapping();
+  try {
+    if (!fs.existsSync(TOF_STATE_FILE_PATH)) {
+      return res.json({
+        ok: true,
+        connected: false,
+        stale: true,
+        hostAgeMs: null,
+        mapping,
+        data: null
+      });
+    }
+    const rawText = fs.readFileSync(TOF_STATE_FILE_PATH, 'utf8');
+    const data = JSON.parse(rawText);
+    const hostTs = Number(data.host_timestamp_ms) || 0;
+    const hostAgeMs = hostTs > 0 ? Math.max(0, now - hostTs) : null;
+    const stale = hostAgeMs === null || hostAgeMs > 3000;
+    return res.json({
+      ok: true,
+      connected: !stale,
+      stale,
+      hostAgeMs,
+      mapping,
+      data
+    });
+  } catch (err) {
+    return res.json({
+      ok: true,
+      connected: false,
+      stale: true,
+      hostAgeMs: null,
+      mapping,
+      error: err.message,
+      data: null
+    });
+  }
+});
+
+app.post('/api/tof-sensors/rescan', (req, res) => {
+  try {
+    fs.writeFileSync(TOF_CMD_FILE_PATH, 'TOF_RESCAN\n', 'utf8');
+    res.json({ ok: true, requested: 'TOF_RESCAN', timestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tof-sensors/mapping', (req, res) => {
+  try {
+    const current = loadTofMapping();
+    const incoming = (req.body && typeof req.body === 'object') ? req.body : {};
+    const updated = { ...current };
+    for (const key of Object.keys(DEFAULT_TOF_MAPPING)) {
+      if (Object.prototype.hasOwnProperty.call(incoming, key)) {
+        if (key.endsWith('_rot')) {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (['0', '90_ccw', '180', '90_cw', '90_ccw_noflip'].includes(val)) {
+            updated[key] = val;
+          }
+        } else {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (val === 'auto' || /^[0-7]$/.test(val)) {
+            updated[key] = val === 'auto' ? 'auto' : Number(val);
+          }
+        }
+      }
+    }
+    fs.writeFileSync(TOF_MAPPING_FILE_PATH, JSON.stringify(updated, null, 2), 'utf8');
+    res.json({ ok: true, mapping: updated });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

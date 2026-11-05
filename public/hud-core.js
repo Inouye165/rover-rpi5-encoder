@@ -990,13 +990,13 @@
     return `${Math.floor(mins / 60)}h ${String(Math.round(mins % 60)).padStart(2, '0')}m`;
   }
   function batteryView(b) {
-    if (!b || !isNum(b.voltage)) {
+    if (!b || !isNum(b.voltage) || b.voltage <= 2.0) {
       return { pct: null, text: '--%', voltText: '-- V', level: 'unknown', plug: 'CHECKING', plugClass: '' };
     }
-    const pct = isNum(b.percentage) ? b.percentage : null;
+    const pct = isNum(b.percentage) ? clamp(b.percentage, 0, 100) : null;
     let level = 'ok';
-    if (pct !== null && pct <= 10) level = 'critical';
-    else if (pct !== null && pct <= 20) level = 'warn';
+    if ((pct !== null && pct <= 10) || (b.voltage <= 4.35 && b.voltage < 3.35)) level = 'critical';
+    else if ((pct !== null && pct <= 20) || (b.voltage <= 4.35 && b.voltage < 3.50)) level = 'warn';
     const ps = b.powerState || 'UNKNOWN';
     let plug = 'TREND…', plugClass = '';
     if (ps === 'CHARGING') { plug = 'AC: CHARGING'; plugClass = 'plug-state-ac'; }
@@ -1011,6 +1011,17 @@
     };
   }
 
+  function flushZeroOnBackground() {
+    const active = currentDriveVector();
+    const hadMotion = active.src !== null || drive.zeroFramesLeft > 0 || Math.abs(drive.lastCmd.x) > 0.001 || Math.abs(drive.lastCmd.y) > 0.001;
+    releaseAllDriveInputs();
+    drive.zeroFramesLeft = 0;
+    drive.lastCmd = { x: 0, y: 0 };
+    if (hadMotion) {
+      wsSend({ type: 'joystick', x: 0, y: 0, keepalive: true, deadman: false });
+    }
+  }
+
   // ────────────────────────────────────────────────────────────
   // Boot
   // ────────────────────────────────────────────────────────────
@@ -1023,10 +1034,14 @@
     setInterval(driveTick, 1000 / JOY_SEND_HZ);
     if (global.document) {
       global.document.addEventListener('visibilitychange', () => {
-        if (global.document.hidden) releaseAllDriveInputs();
+        if (global.document.hidden) flushZeroOnBackground();
       });
     }
-    global.addEventListener && global.addEventListener('pagehide', () => releaseAllDriveInputs());
+    global.addEventListener && global.addEventListener('pagehide', () => flushZeroOnBackground());
+    global.addEventListener && global.addEventListener('pageshow', (ev) => {
+      releaseAllDriveInputs();
+      if (ev && ev.persisted && (!ws || ws.readyState > 1)) connect();
+    });
     global.addEventListener && global.addEventListener('blur', () => clearDriveInput('keyboard'));
   }
 

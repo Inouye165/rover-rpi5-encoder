@@ -361,3 +361,39 @@ canvas#lidar-canvas {
 .stat-val.bad { color: #ff4765; }
 .stat-val.dim { color: #5f7a91; }
 .btn-cam-hud { right: 130px !important; border-color: #8ba2b5 !important; color: #d1d9e6 !important; }
+.top-bar-right::-webkit-scrollbar { height: 0; width: 0; }
+
+/* Responsive priority rules: keep E-STOP, UPS plug, RPi UPS battery, Connection/Temp, and Token visible on reduced windows */
+@media (max-width: 1620px) {
+  .hud-title { font-size: 12.5px !important; letter-spacing: 0.8px; }
+  .view-tab { padding: 4px 8px; font-size: 10.5px; }
+  .badge { padding: 4px 6px; font-size: 11px; gap: 4px; }
+  #motor-battery-badge,
+  #btn-top-init-home,
+  #gamepad-badge,
+  #link-touch-ui { display: none !important; }
+  .cockpit-grid { grid-template-columns: 262px 1fr 266px; gap: 8px; padding: 8px; }
+}
+@media (max-width: 1340px) {
+  #btn-top-home,
+  #link-eng-ui { display: none !important; }
+  #conn-badge { min-width: 118px !important; }
+  #ups-plug-badge { min-width: 82px !important; }
+  #battery-badge { min-width: 116px !important; }
+  #auth-badge { min-width: 78px !important; }
+  .cockpit-grid { grid-template-columns: 244px 1fr 248px; gap: 6px; padding: 6px; }
+  .radar-box { width: 220px !important; height: 220px !important; }
+  #lidar-canvas { width: 220px !important; height: 220px !important; }
+}
+@media (max-width: 1080px) {
+  .hud-title { display: none !important; }
+  .cockpit-grid { grid-template-columns: 224px 1fr 232px; }
+  .radar-box { width: 196px !important; height: 196px !important; }
+  #lidar-canvas { width: 196px !important; height: 196px !important; }
+}
+@media (max-height: 820px) {
+  .radar-box { width: 204px !important; height: 204px !important; }
+  #lidar-canvas { width: 204px !important; height: 204px !important; }
+  .card { padding: 7px 9px; gap: 4px; }
+}
+

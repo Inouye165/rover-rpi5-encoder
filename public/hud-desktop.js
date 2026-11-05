@@ -258,13 +258,30 @@
     if (document.hidden) { if (camOn) stopCamera(); }
     else if (camOn) startCamera();
   });
+  window.addEventListener('pageshow', (ev) => {
+    if (ev && ev.persisted && camOn) startCamera();
+  });
+  let hadWsConn = false;
+  H.on('connection', (s) => {
+    if (s.wsConnected) {
+      if (hadWsConn && camOn && !camLoaded) startCamera();
+      hadWsConn = true;
+    }
+  });
   applyFlip();
   startCamera();
 
   // ── Radar ──────────────────────────────────────────────────
-  const radarCtx = $('lidar-canvas').getContext('2d');
+  const radarCanvas = $('lidar-canvas');
+  const radarCtx = radarCanvas.getContext('2d');
   function redrawRadar() {
-    const res = H.drawRadar(radarCtx, 260, {
+    const rBox = radarCanvas.getBoundingClientRect && radarCanvas.getBoundingClientRect();
+    const rSize = (rBox && rBox.width > 80) ? Math.round(rBox.width) : 260;
+    if (radarCanvas.width !== rSize || radarCanvas.height !== rSize) {
+      radarCanvas.width = rSize;
+      radarCanvas.height = rSize;
+    }
+    const res = H.drawRadar(radarCtx, rSize, {
       maxRange: parseFloat($('sel-radar-range').value),
       color: $('sel-radar-color').value,
       pointSize: parseFloat($('sel-radar-ptsize').value)
@@ -640,6 +657,12 @@
       const throttled = sys.throttled && sys.throttled !== '0x0';
       const txt = `${isNum(t) ? t.toFixed(0) + '°C' : '--'}${isNum(sys.ext5vV) ? ' · ' + sys.ext5vV.toFixed(2) + 'V' : ''}${throttled ? ' · THROTTLED ' + sys.throttled : ''}`;
       setStat('stat-rpi', txt, throttled || (isNum(t) && t >= 80) ? 'bad' : (isNum(t) && t >= 70 ? 'warn' : 'ok'));
+      if (sys.hailo && sys.hailo.present) {
+        const isIdle = sys.hailo.runtimeStatus === 'suspended' || sys.hailo.bridgePowerState === 'D3hot';
+        setStat('stat-hailo', isIdle ? `IDLE · ${sys.hailo.bridgePowerState === 'D3hot' ? 'D3hot' : 'SUSPENDED'}` : `ACTIVE (${sys.hailo.powerControl})`, isIdle ? 'ok' : 'warn');
+      } else {
+        setStat('stat-hailo', 'STANDBY', 'dim');
+      }
     }
   }
 
