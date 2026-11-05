@@ -55,6 +55,7 @@
     slam: null,
     lidarStatus: null,
     scan: { points: [], scanHz: null, t: 0, frameTimes: [] },
+    tof: { points: [], t: 0 },
     map: null,
     mapVersion: 0,
     lastWsMsg: 0,
@@ -318,6 +319,60 @@
     return out;
   }
 
+  // Front-corner VL53L7CX 8x8 ToF sensors (mount offsets are assumed placeholders, keep in
+  // sync with foundation.launch.py): robot frame x forward, y left, mounts angled 8 deg outward.
+  const TOF_MOUNTS = {
+    front_left_l7cx:  { x: 0.14, y:  0.08, yawDeg:  8 },
+    front_right_l7cx: { x: 0.14, y: -0.08, yawDeg: -8 },
+  };
+  function tofDisplayToSource(z, rot) {
+    const r = Math.floor(z / 8), c = z % 8;
+    if (rot === '90_ccw') return (7 - c) * 8 + (7 - r);
+    if (rot === '90_ccw_noflip') return c * 8 + (7 - r);
+    if (rot === '90_cw') return (7 - c) * 8 + r;
+    if (rot === '180') return 63 - z;
+    return z;
+  }
+  // One radar point per display column: the nearest valid zone across all 8 rows.
+  function tofToRobotFrame(resp) {
+    const out = [];
+    const data = resp && resp.data;
+    if (!resp || resp.stale || !data || !Array.isArray(data.channels)) return out;
+    const mapping = resp.mapping || {};
+    for (const slot of Object.keys(TOF_MOUNTS)) {
+      const chIdx = mapping[slot];
+      if (typeof chIdx !== 'number') continue;
+      const ch = data.channels.find(c => c.ch === chIdx);
+      if (!ch || !ch.present || !ch.init || !Array.isArray(ch.grid_mm) || ch.grid_mm.length < 64) continue;
+      if (!(ch.age_ms <= 1000)) continue;
+      const rot = String(mapping[slot + '_rot'] || '90_ccw');
+      const m = TOF_MOUNTS[slot];
+      const my = m.yawDeg * Math.PI / 180;
+      for (let c = 0; c < 8; c++) {
+        let best = -1;
+        for (let r = 0; r < 8; r++) {
+          const d = ch.grid_mm[tofDisplayToSource(r * 8 + c, rot)];
+          if (d >= 20 && d <= 4000 && (best < 0 || d < best)) best = d;
+        }
+        if (best < 0) continue;
+        const dm = best / 1000;
+        const a = (3.5 - c) * (45 / 8) * Math.PI / 180; // left positive
+        const sx = dm * Math.cos(a), sy = dm * Math.sin(a);
+        const x = m.x + sx * Math.cos(my) - sy * Math.sin(my);
+        const y = m.y + sx * Math.sin(my) + sy * Math.cos(my);
+        out.push({ x, y, d: Math.hypot(x, y), slot });
+      }
+    }
+    return out;
+  }
+  async function pollTofSensors() {
+    const r = await api('/api/tof-sensors', { timeoutMs: 1500 });
+    if (!r.ok || !r.data) return false;
+    state.tof = { points: tofToRobotFrame(r.data), t: Date.now() };
+    emit('tof', state.tof);
+    return true;
+  }
+
   async function pollLidarScan() {
     const r = await api('/api/lidar/scan', { timeoutMs: 1500 });
     if (!r.ok || !Array.isArray(r.data.points)) return false;
@@ -361,6 +416,7 @@
   }
 
   function startPolling() {
+    startPoller('tof-sensors', 250, pollTofSensors);
     startPoller('lidar-scan', () => (state.lidarStatus && state.lidarStatus.connected === false) ? 2000 : 200, pollLidarScan);
     startPoller('lidar-status', 2000, async () => {
       const r = await api('/api/lidar/status', { timeoutMs: 2000 });
@@ -969,6 +1025,16 @@
           ctx.fillStyle = '#00ff66';
         }
         ctx.fillRect(u - ptSize / 2, v - ptSize / 2, ptSize, ptSize);
+      }
+    }
+    // Front ToF (VL53L7CX 8x8) overlay: magenta squares.
+    if (state.tof.points.length && Date.now() - state.tof.t < 2500) {
+      const tsz = ptSize + 1.6;
+      ctx.fillStyle = '#ff44ee';
+      for (const p of state.tof.points) {
+        if (p.d > maxR) continue;
+        if (!nearest || p.d < nearest.d) nearest = p;
+        ctx.fillRect(cx - p.y * scale - tsz / 2, cy - p.x * scale - tsz / 2, tsz, tsz);
       }
     }
     return { live, nearest };

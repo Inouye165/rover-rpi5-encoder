@@ -31,6 +31,7 @@ setup(
         'console_scripts': [
             'rover_system_health = rover_bringup.rover_system_health:main',
             'rover_lidar_bridge = rover_bringup.rover_lidar_bridge:main',
+            'rover_tof_bridge = rover_bringup.rover_tof_bridge:main',
             'rover_encoder_odometry = rover_bringup.rover_encoder_odometry:main',
             'rover_cmd_vel_bridge = rover_bringup.rover_cmd_vel_bridge:main',
             'rover_imu_bridge = rover_bringup.rover_imu_bridge:main',
