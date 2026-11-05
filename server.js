@@ -4667,10 +4667,6 @@ const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
 const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
 const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
 const DEFAULT_TOF_MAPPING = {
-  front_l7cx: 'auto',
-  front_l7cx_rot: '90_ccw',
-  rear_l7cx: 'auto',
-  rear_l7cx_rot: '90_ccw',
   front_left_l7cx: 1,
   front_left_l7cx_rot: '90_ccw',
   front_right_l7cx: 0,
@@ -4691,7 +4687,6 @@ function loadTofMapping() {
   try {
     if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
       const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
-      return { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
       const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
       delete mapping.front_l7cx;
       delete mapping.front_l7cx_rot;
