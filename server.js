@@ -4668,7 +4668,17 @@ const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
 const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
 const DEFAULT_TOF_MAPPING = {
   front_l7cx: 'auto',
+  front_l7cx_rot: '90_ccw',
   rear_l7cx: 'auto',
+  rear_l7cx_rot: '90_ccw',
+  front_left_l7cx: 1,
+  front_left_l7cx_rot: '90_ccw',
+  front_right_l7cx: 0,
+  front_right_l7cx_rot: '90_ccw',
+  rear_left_l7cx: 'auto',
+  rear_left_l7cx_rot: '90_ccw',
+  rear_right_l7cx: 'auto',
+  rear_right_l7cx_rot: '90_ccw',
   cliff_fl: 'auto',
   cliff_fr: 'auto',
   cliff_rl: 'auto',
@@ -4682,6 +4692,12 @@ function loadTofMapping() {
     if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
       const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
       return { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+      const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+      delete mapping.front_l7cx;
+      delete mapping.front_l7cx_rot;
+      delete mapping.rear_l7cx;
+      delete mapping.rear_l7cx_rot;
+      return mapping;
     }
   } catch (_) {}
   return { ...DEFAULT_TOF_MAPPING };
@@ -4743,9 +4759,16 @@ app.post('/api/tof-sensors/mapping', (req, res) => {
     const updated = { ...current };
     for (const key of Object.keys(DEFAULT_TOF_MAPPING)) {
       if (Object.prototype.hasOwnProperty.call(incoming, key)) {
-        const val = String(incoming[key]).trim().toLowerCase();
-        if (val === 'auto' || /^[0-7]$/.test(val)) {
-          updated[key] = val === 'auto' ? 'auto' : Number(val);
+        if (key.endsWith('_rot')) {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (['0', '90_ccw', '180', '90_cw', '90_ccw_noflip'].includes(val)) {
+            updated[key] = val;
+          }
+        } else {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (val === 'auto' || /^[0-7]$/.test(val)) {
+            updated[key] = val === 'auto' ? 'auto' : Number(val);
+          }
         }
       }
     }

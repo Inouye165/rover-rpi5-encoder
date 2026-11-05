@@ -256,7 +256,14 @@
       font-size: 11px;
       color: var(--muted);
     }
-    .ch-select-wrap {
+    .card-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .ch-select-wrap,
+    .rot-select-wrap {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -266,6 +273,15 @@
     select.ch-select {
       background: #081018;
       color: var(--accent);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    select.rot-select {
+      background: #081018;
+      color: #38bdf8;
       border: 1px solid var(--border);
       border-radius: 5px;
       padding: 4px 7px;
@@ -452,10 +468,10 @@
       <div class="mux-strip" id="mux-strip-container"></div>
     </section>
 
-    <!-- 2x VL53L7CX Wide-Field 8x8 Obstacle Sensors -->
+    <!-- 4x VL53L7CX Wide-Field 8x8 Obstacle Sensors -->
     <section>
       <div class="section-header">
-        <h2>2. Wide-Field 8×8 Distance Sensors (`2 × VL53L7CX` — Front &amp; Rear)</h2>
+        <h2>2. Wide-Field 8×8 Distance Sensors (`4 × VL53L7CX` — Front-Left, Front-Right, Rear-Left, Rear-Right)</h2>
         <div class="legend-bar">
           <span>Zone Color (mm):</span>
           <span class="legend-swatch"><span class="swatch-box" style="background:#991b1b;"></span>&lt;120mm</span>
@@ -490,8 +506,10 @@
 
   <script>
     const WIDE_SLOTS = [
-      { key: 'front_l7cx', title: 'Front Wide-Field 8×8', subtitle: 'VL53L7CX · Forward Obstacle Array (Unmounted / Bench)', preferredIdx: 0 },
-      { key: 'rear_l7cx',  title: 'Rear Wide-Field 8×8',  subtitle: 'VL53L7CX · Rear Obstacle Array (Unmounted / Bench)',    preferredIdx: 1 }
+      { key: 'front_left_l7cx',  title: 'Front-Left Wide-Field 8×8',  subtitle: 'Mux CH 1 (0x29) · VL53L7CX · Front-Left Obstacle Array',  preferredCh: 1 },
+      { key: 'front_right_l7cx', title: 'Front-Right Wide-Field 8×8', subtitle: 'Mux CH 0 (0x29) · VL53L7CX · Front-Right Obstacle Array', preferredCh: 0 },
+      { key: 'rear_left_l7cx',   title: 'Rear-Left Wide-Field 8×8',   subtitle: 'VL53L7CX · Rear-Left Obstacle Array (Auto / Unassigned)', preferredCh: 'auto' },
+      { key: 'rear_right_l7cx',  title: 'Rear-Right Wide-Field 8×8',  subtitle: 'VL53L7CX · Rear-Right Obstacle Array (Auto / Unassigned)', preferredCh: 'auto' }
     ];
 
     const CLIFF_SLOTS = [
@@ -507,8 +525,14 @@
     ];
 
     let currentMapping = {
-      front_l7cx: 'auto',
-      rear_l7cx: 'auto',
+      front_left_l7cx: 1,
+      front_left_l7cx_rot: '90_ccw',
+      front_right_l7cx: 0,
+      front_right_l7cx_rot: '90_ccw',
+      rear_left_l7cx: 'auto',
+      rear_left_l7cx_rot: '90_ccw',
+      rear_right_l7cx: 'auto',
+      rear_right_l7cx_rot: '90_ccw',
       cliff_fl: 'auto',
       cliff_fr: 'auto',
       cliff_rl: 'auto',
@@ -579,6 +603,7 @@
           const isCenter = centerSet.has(z) ? 'center-zone' : '';
           cellsHtml += `<div class="zone-cell ${isCenter}" id="cell-${slot.key}-${z}">--</div>`;
         }
+        const initialRot = currentMapping[`${slot.key}_rot`] || localStorage.getItem(`rot_${slot.key}`) || '90_ccw';
         card.innerHTML = `
           <div class="card-head">
             <div class="card-title-block">
@@ -588,19 +613,31 @@
               </h3>
               <p id="sub-${slot.key}">${slot.subtitle}</p>
             </div>
-            <div class="ch-select-wrap">
-              <label for="sel-${slot.key}">Mux Channel:</label>
-              <select class="ch-select" id="sel-${slot.key}" data-slot="${slot.key}">
-                <option value="auto">Auto (VL53L7CX #${slot.preferredIdx + 1})</option>
-                <option value="0">CH 0</option>
-                <option value="1">CH 1</option>
-                <option value="2">CH 2</option>
-                <option value="3">CH 3</option>
-                <option value="4">CH 4</option>
-                <option value="5">CH 5</option>
-                <option value="6">CH 6</option>
-                <option value="7">CH 7</option>
-              </select>
+            <div class="card-controls">
+              <div class="ch-select-wrap">
+                <label for="sel-${slot.key}">Mux Channel:</label>
+                <select class="ch-select" id="sel-${slot.key}" data-slot="${slot.key}">
+                  <option value="auto">Auto (${slot.preferredCh !== undefined && slot.preferredCh !== 'auto' ? 'Default CH ' + slot.preferredCh : 'Unassigned'})</option>
+                  <option value="0">CH 0</option>
+                  <option value="1">CH 1</option>
+                  <option value="2">CH 2</option>
+                  <option value="3">CH 3</option>
+                  <option value="4">CH 4</option>
+                  <option value="5">CH 5</option>
+                  <option value="6">CH 6</option>
+                  <option value="7">CH 7</option>
+                </select>
+              </div>
+              <div class="rot-select-wrap">
+                <label for="rot-${slot.key}">Rotation:</label>
+                <select class="rot-select" id="rot-${slot.key}" data-slot="${slot.key}">
+                  <option value="90_ccw"${initialRot === '90_ccw' ? ' selected' : ''}>90° CCW (Rover 1 Calibrated)</option>
+                  <option value="90_ccw_noflip"${initialRot === '90_ccw_noflip' ? ' selected' : ''}>90° CCW (Unmirrored)</option>
+                  <option value="0"${initialRot === '0' ? ' selected' : ''}>0° (Raw)</option>
+                  <option value="90_cw"${initialRot === '90_cw' ? ' selected' : ''}>90° CW</option>
+                  <option value="180"${initialRot === '180' ? ' selected' : ''}>180°</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -654,6 +691,23 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ [slotKey]: val })
+            });
+          } catch (_) {}
+        });
+      });
+
+      // Bind rotation dropdown changes
+      document.querySelectorAll('select.rot-select').forEach((sel) => {
+        sel.addEventListener('change', async (e) => {
+          const slotKey = e.target.getAttribute('data-slot');
+          const val = e.target.value;
+          currentMapping[`${slotKey}_rot`] = val;
+          localStorage.setItem(`rot_${slotKey}`, val);
+          try {
+            await fetch('/api/tof-sensors/mapping', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ [`${slotKey}_rot`]: val })
             });
           } catch (_) {}
         });
@@ -713,9 +767,17 @@
         return chObj || null;
       }
 
-      if (slot.key === 'front_l7cx' || slot.key === 'rear_l7cx') {
-        const l7List = channels.filter(c => c.present && c.type === 'VL53L7CX');
-        const chosen = l7List[slot.preferredIdx] || null;
+      if (slot.preferredCh !== undefined && slot.preferredCh !== 'auto') {
+        const chObj = channels.find(c => c.ch === slot.preferredCh && !usedChannels.has(c.ch));
+        if (chObj) {
+          usedChannels.add(chObj.ch);
+          return chObj;
+        }
+      }
+
+      if (slot.key.includes('l7cx')) {
+        const l7List = channels.filter(c => c.present && c.type === 'VL53L7CX' && !usedChannels.has(c.ch));
+        const chosen = l7List[0] || null;
         if (chosen) usedChannels.add(chosen.ch);
         return chosen;
       }
@@ -765,7 +827,16 @@
 
       card.className = 'sensor-card online';
       dot.className = 'dot ok';
-      sub.textContent = `Mux CH ${chData.ch} (0x29) · ${chData.type} · Frame #${chData.frames} (age ${chData.age_ms} ms)`;
+      const rot = currentMapping[`${slot.key}_rot`] || localStorage.getItem(`rot_${slot.key}`) || '90_ccw';
+      const rotLabels = {
+        '90_ccw': '90° CCW (Calibrated)',
+        '90_ccw_noflip': '90° CCW (Unmirrored)',
+        '0': '0° (Raw)',
+        '90_cw': '90° CW',
+        '180': '180°'
+      };
+      const rotLabel = rotLabels[rot] || '90° CCW';
+      sub.textContent = `Mux CH ${chData.ch} (0x29) · ${chData.type} · Frame #${chData.frames} (age ${chData.age_ms} ms) · [${rotLabel}]`;
 
       const minMm = chData.min_mm;
       const ctrMm = chData.center_mm;
@@ -781,11 +852,33 @@
       metaEl.textContent = `${chData.valid_zones || 0}/64 zones · ${chData.temp_c ?? '--'}°C`;
 
       const grid = Array.isArray(chData.grid_mm) ? chData.grid_mm : [];
-      for (let z = 0; z < 64; z++) {
-        const cell = document.getElementById(`cell-${slot.key}-${z}`);
-        const d = grid[z] !== undefined ? grid[z] : -1;
+      for (let zDisp = 0; zDisp < 64; zDisp++) {
+        const rDisp = Math.floor(zDisp / 8);
+        const cDisp = zDisp % 8;
+        let zSrc;
+        if (rot === '90_ccw') {
+          // 90° CCW (Rover 1 Chassis Mount):
+          // Vertical mapping: sensor col = 7 - rDisp (verified: up and down is correct)
+          // Horizontal mapping: sensor row = 7 - cDisp (flipped: left is left, right is right)
+          zSrc = ((7 - cDisp) * 8) + (7 - rDisp);
+        } else if (rot === '90_ccw_noflip') {
+          // 90° CCW without horizontal mirror: sensor row = cDisp, sensor col = 7 - rDisp
+          zSrc = (cDisp * 8) + (7 - rDisp);
+        } else if (rot === '90_cw') {
+          // 90° clockwise: sensor row = 7 - cDisp, sensor col = rDisp
+          zSrc = ((7 - cDisp) * 8) + rDisp;
+        } else if (rot === '180') {
+          // 180°
+          zSrc = 63 - zDisp;
+        } else {
+          // 0° (Raw)
+          zSrc = zDisp;
+        }
+        const cell = document.getElementById(`cell-${slot.key}-${zDisp}`);
+        const d = grid[zSrc] !== undefined ? grid[zSrc] : -1;
         cell.style.cssText = zoneColorStyle(d);
         cell.innerHTML = d >= 0 ? `${d}<span class="u">mm</span>` : '--';
+        cell.title = `Display [r${rDisp}, c${cDisp}] · Sensor Zone #${zSrc} (r${Math.floor(zSrc / 8)}, c${zSrc % 8}): ${d >= 0 ? d + ' mm' : 'No Target'}`;
       }
     }
 
@@ -853,11 +946,18 @@
         const txtActive = document.getElementById('txt-active-count');
 
         if (payload.mapping) {
-          currentMapping = payload.mapping;
+          currentMapping = { ...currentMapping, ...payload.mapping };
           for (const [k, v] of Object.entries(currentMapping)) {
             const sel = document.getElementById(`sel-${k}`);
             if (sel && document.activeElement !== sel) {
               sel.value = String(v);
+            }
+            if (k.endsWith('_rot')) {
+              const slotBase = k.replace('_rot', '');
+              const rotSel = document.getElementById(`rot-${slotBase}`);
+              if (rotSel && document.activeElement !== rotSel) {
+                rotSel.value = String(v);
+              }
             }
           }
         }
