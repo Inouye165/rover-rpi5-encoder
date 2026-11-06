@@ -287,13 +287,22 @@
       pointSize: parseFloat($('sel-radar-ptsize').value)
     });
     const sc = H.state.scan;
+    const tf = H.state.tof;
     const ls = H.state.lidarStatus;
     const badge = $('stat-radar-badge');
     if (res && res.live) {
-      badge.textContent = '360° LIDAR LIVE'; badge.style.color = '#00ff88';
-      setText('hud-lidar-stat', '360° LIDAR: LIVE');
+      if (res.lidarLive && res.tofLive) {
+        badge.textContent = 'LIDAR + TOF LIVE'; badge.style.color = '#00ff88';
+        setText('hud-lidar-stat', '360° LIDAR + TOF: LIVE');
+      } else if (res.lidarLive) {
+        badge.textContent = '360° LIDAR LIVE'; badge.style.color = '#00ff88';
+        setText('hud-lidar-stat', '360° LIDAR: LIVE');
+      } else {
+        badge.textContent = 'FRONT TOF LIVE'; badge.style.color = '#ff44ee';
+        setText('hud-lidar-stat', 'FRONT TOF: LIVE (LIDAR OFF)');
+      }
       setText('hud-nearest-stat', res.nearest ? `NEAREST: ${res.nearest.d.toFixed(2)} m` : 'NEAREST: --');
-      setText('hud-lidar-min', res.nearest ? `MIN: ${(res.nearest.d * 100).toFixed(0)} cm` : 'MIN: --');
+      setText('hud-lidar-min', res.nearest ? `MIN: ${(res.nearest.d * 100).toFixed(0)} cm (${(res.nearest.d / 0.0254).toFixed(1)} in)` : 'MIN: --');
     } else {
       const disconnected = ls && ls.connected === false;
       badge.textContent = disconnected ? 'DISCONNECTED' : 'STALE';
@@ -302,9 +311,10 @@
       setText('hud-nearest-stat', 'NEAREST: --');
       setText('hud-lidar-min', 'MIN: --');
     }
-    setText('hud-scan-age', sc.t ? `AGE: ${((Date.now() - sc.t) / 1000).toFixed(1)}s` : 'AGE: --');
-    setText('disp-lidar-pts', `${sc.points.length} pts`);
-    setText('disp-lidar-hz', isNum(sc.scanHz) && res && res.live ? `${sc.scanHz.toFixed(1)} Hz` : '-- Hz');
+    const latestT = Math.max(sc.t || 0, (tf && tf.t) || 0);
+    setText('hud-scan-age', latestT ? `AGE: ${((Date.now() - latestT) / 1000).toFixed(1)}s` : 'AGE: --');
+    setText('disp-lidar-pts', `${sc.points.length} pts${tf && tf.points.length ? ` (+${tf.points.length} ToF)` : ''}`);
+    setText('disp-lidar-hz', isNum(sc.scanHz) && res && res.lidarLive ? `${sc.scanHz.toFixed(1)} Hz` : '-- Hz');
   }
   ['sel-radar-range', 'sel-radar-color', 'sel-radar-ptsize'].forEach(id => $(id).addEventListener('change', redrawRadar));
   setInterval(redrawRadar, 150);

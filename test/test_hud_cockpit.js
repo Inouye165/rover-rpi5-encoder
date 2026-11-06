@@ -229,6 +229,37 @@ async function desktopTests() {
   assert.strictEqual(H.batteryView({ voltage: 0.0 }).level, 'unknown');
   assert.strictEqual(H.batteryView(null).pct, null);
 
+  console.log('Core 5: ToF 8x8 -> robot frame + radar live/nearest with micro zoom');
+  const grid64 = new Array(64).fill(-1);
+  grid64[27] = 100; // 0.10 m ahead of front-right ToF sensor
+  const tofPayload = {
+    stale: false,
+    mapping: {
+      front_right_l7cx: 0,
+      front_right_l7cx_rot: 'none'
+    },
+    data: {
+      channels: [
+        { ch: 0, type: 'VL53L7CX', present: 1, init: 1, age_ms: 40, grid_mm: grid64 },
+        { ch: 2, type: 'VL53L4CD', present: 1, init: 1, age_ms: 40, dist_mm: 150 }
+      ]
+    }
+  };
+  const tofPts = H.tofToRobotFrame(tofPayload);
+  assert.strictEqual(tofPts.length, 1, 'single populated column should yield 1 point; single-zone CH 2 ignored');
+  assert(tofPts[0].x > 0.14 && tofPts[0].y < 0, 'CH 0 front-right reading should project forward (+x) and right (-y)');
+  H.state.scan = { points: [], t: 0 };
+  H.state.tof = { points: tofPts, t: Date.now() };
+  const radarCtx = {
+    fillRect() {}, strokeRect() {}, beginPath() {}, arc() {},
+    stroke() {}, fill() {}, moveTo() {}, lineTo() {}, fillText() {}
+  };
+  const radarRes = H.drawRadar(radarCtx, 260, { maxRange: 0.25 });
+  assert.strictEqual(radarRes.live, true, 'radar must report live when ToF is active even if LiDAR has 0 points');
+  assert.strictEqual(radarRes.tofLive, true);
+  assert.strictEqual(radarRes.lidarLive, false);
+  assert(radarRes.nearest && radarRes.nearest.d > 0.15 && radarRes.nearest.d < 0.30, 'nearest distance must reflect close-in ToF obstacle');
+
   console.log('Desktop 11: top-bar prioritizes battery/plug/conn/auth before secondary buttons and right pane puts Drivetrain/Drive Controls above Autonomy');
   const htmlTxt = read('hud.html');
   const idxPlug = htmlTxt.indexOf('id="ups-plug-badge"');

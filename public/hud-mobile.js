@@ -218,8 +218,12 @@
   setInterval(() => {
     const curRange = radarRanges[radarRangeIdx];
     const res = H.drawRadar(rctx, radarSize, { maxRange: curRange, color: 'range', pointSize: 2 });
-    if (res && res.live && res.nearest) setText('hMin', `LIDAR ${res.nearest.d.toFixed(2)} m`);
-    else setText('hMin', H.state.lidarStatus && H.state.lidarStatus.connected === false ? 'LIDAR OFFLINE' : 'LIDAR --');
+    if (res && res.live && res.nearest) {
+      const tag = res.lidarLive ? 'LIDAR' : 'TOF';
+      setText('hMin', `${tag} ${res.nearest.d.toFixed(2)} m (${(res.nearest.d / 0.0254).toFixed(1)} in)`);
+    } else {
+      setText('hMin', H.state.lidarStatus && H.state.lidarStatus.connected === false ? 'LIDAR OFFLINE' : 'LIDAR --');
+    }
   }, 200);
 
   // ── Map ────────────────────────────────────────────────────

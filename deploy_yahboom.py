@@ -9,11 +9,14 @@ import re
 
 EXPECTED_ROS_NODES = [
     "/base_link_to_laser_frame_publisher",
+    "/base_link_to_tof_front_left_publisher",
+    "/base_link_to_tof_front_right_publisher",
     "/foxglove_bridge",
     "/rover_cmd_vel_bridge",
     "/rover_encoder_odometry",
     "/rover_lidar_bridge",
     "/rover_system_health",
+    "/rover_tof_bridge",
 ]
 
 EXPECTED_PARAMS = {

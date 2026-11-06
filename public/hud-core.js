@@ -1014,8 +1014,8 @@
     ctx.fillStyle = '#00ffcc'; ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, 2 * Math.PI); ctx.fill();
 
     let nearest = null;
-    const live = state.scan.points.length && Date.now() - state.scan.t < 2500;
-    if (live) {
+    const lidarLive = Boolean(state.scan.points.length && Date.now() - state.scan.t < 2500);
+    if (lidarLive) {
       for (const p of state.scan.points) {
         if (!nearest || p.d < nearest.d) nearest = p;
         if (p.d > maxR) continue;
@@ -1032,16 +1032,17 @@
       }
     }
     // Front ToF (VL53L7CX 8x8) overlay: magenta squares.
-    if (state.tof.points.length && Date.now() - state.tof.t < 2500) {
+    const tofLive = Boolean(state.tof.points.length && Date.now() - state.tof.t < 2500);
+    if (tofLive) {
       const tsz = ptSize + 1.6;
       ctx.fillStyle = '#ff44ee';
       for (const p of state.tof.points) {
-        if (p.d > maxR) continue;
         if (!nearest || p.d < nearest.d) nearest = p;
+        if (p.d > maxR) continue;
         ctx.fillRect(cx - p.y * scale - tsz / 2, cy - p.x * scale - tsz / 2, tsz, tsz);
       }
     }
-    return { live, nearest };
+    return { live: Boolean(lidarLive || tofLive), lidarLive, tofLive, nearest };
   }
 
   // ────────────────────────────────────────────────────────────
@@ -1119,7 +1120,7 @@
     TOKEN_KEY, JOY_SEND_HZ, LIDAR_MIN_RANGE_M,
     state, on, emit, start, api,
     getToken, setToken, wsSend,
-    getPose, quatToEuler, normAngle, toPath, lidarPointsToRobotFrame,
+    getPose, quatToEuler, normAngle, toPath, lidarPointsToRobotFrame, tofToRobotFrame, tofDisplayToSource,
     setThrottle, getThrottle, setDriveInput, clearDriveInput, releaseAllDriveInputs, estimateCommandedVelocity,
     emergencyStop, arm, disarm,
     planPath, dispatchGoal, cancelNav, initHome, homeGoal, relativeGoal, parseMissionScript, previewMission,

@@ -102,6 +102,7 @@ class RoverTofBridgeNode(Node):
         self.range_min = float(self.get_parameter("range_min_m").value)
         self.range_max = float(self.get_parameter("range_max_m").value)
         self.max_age_ms = int(self.get_parameter("max_age_ms").value)
+        self.session = requests.Session()
 
         self.pubs = {}
         for slot, name in (("front_left_l7cx", "front_left"), ("front_right_l7cx", "front_right")):
@@ -115,7 +116,7 @@ class RoverTofBridgeNode(Node):
 
     def _poll(self):
         try:
-            payload = requests.get(self.url, timeout=1.0).json()
+            payload = self.session.get(self.url, timeout=1.0).json()
         except Exception as exc:  # noqa: BLE001
             if not self._warned:
                 self.get_logger().warn(f"ToF API unreachable at {self.url}: {exc}")
@@ -151,7 +152,8 @@ class RoverTofBridgeNode(Node):
             rng.min_range = float(self.range_min)
             rng.max_range = float(self.range_max)
             min_mm = ch.get("min_mm", -1)
-            rng.range = (min_mm / 1000.0) if min_mm is not None and min_mm >= 0 else float("inf")
+            min_m = (min_mm / 1000.0) if (min_mm is not None and min_mm >= 0) else -1.0
+            rng.range = float(min_m) if (self.range_min <= min_m <= self.range_max) else float("inf")
             range_pub.publish(rng)
 
 
