@@ -54,3 +54,4 @@ Authoritative operating instructions, hardware reference, workflow rules, and sa
   ```powershell
   $env:ROVER_PI_HOST="10.0.0.246"; $env:ROVER_PI_USER="ron"; python deploy_yahboom.py
   ```
+

@@ -1,208 +1,83 @@
-# Rover Cockpit & Telemetry Dashboard
+# Rover 1 — Host Cockpit, Sensor Bridges & ROS 2 Jazzy / Nav2 Stack (`yahboom-encoder`)
 
-A high-performance control cockpit and telemetry dashboard for a custom 4WD / Mecanum Rover tank. The system is designed to run on a **Raspberry Pi 5** on board the rover, which communicates with a **Maker ESP32 Pro Board** (the low-level motor/encoder controller) and drives **4 wheel encoder motors**.
-
----
-
-## 📐 Project Architecture & Two-Repository System
-
-The rover operates on a **two-repository architecture**:
-
-| Repository | Local Path | Deployment Target | Role & Purpose |
-| :--- | :--- | :--- | :--- |
-| **`yahboom-encoder`** *(This Repo)* | `C:\Users\Ron\electronic_projects\yahboom-encoder` | Raspberry Pi 5 (`/home/ron/yahboom-encoder`) | Host software: Cockpit API, LiDAR sidecar, ROS 2 Jazzy Docker stack, encoder odometry, TF transforms, Foxglove bridge, diagnostics, future SLAM/Nav2. |
-| **`esp-maker-usba-4motor`** | `C:\Users\Ron\electronic_projects\esp\esp-maker-usba-4motor` | Maker USB32 Pro / Maker-ESP32 Pro Board | Embedded C++ PlatformIO firmware: motor control, encoder acquisition, closed-loop speed control, serial protocol, watchdog, arming, e-stop, and low-level safety. |
+Primary Raspberry Pi 5 host repository (`/home/ron/yahboom-encoder` on `ron@10.0.0.246`) for **Rover 1** (4-motor differential-drive wheel rover).
 
 > [!IMPORTANT]
 > **Legacy Repository Naming Clarification**:
-> `yahboom-encoder` is a legacy repository and folder name. The rover **does not use the old Yahboom motor-driver board**. The active motor controller is the **Maker USB32 Pro / Maker-ESP32 Pro**. The repository name and RPi deployment path (`/home/ron/yahboom-encoder`) are intentionally left unchanged until the rover is fully operational.
+> `yahboom-encoder` is a legacy repository and folder name. Rover 1 **does not use a Yahboom motor-driver board**. The active motor controller is the **NULLLAB Maker-ESP32-Pro** (`1.3.4-remap-r03`, `/dev/rover-esp32`) and the auxiliary ToF/Status LED controller is the **Lonely Binary ESP32-S3 N16R8** (`1.2.4-tof-mux`, `/dev/ttyAMA0`).
 
-### System Data Flow
-```
-Maker ESP32 firmware
- → USB serial (/dev/rover-esp32)
- → Raspberry Pi rover-server.service
- → read-only host APIs (http://127.0.0.1:3000)
- → ROS 2 Docker nodes
- → /odom, /scan, /tf and diagnostics
- → Foxglove now, SLAM/Nav2 later
-```
-
-### Hardware Ownership & Safety Boundaries
-- **`rover-server.service`**: Exclusively owns `/dev/rover-esp32` (serial telemetry & commands).
-- **`rover-lidar.service`**: Exclusively owns `/dev/rover-lidar` (LiDAR telemetry).
-- **ROS 2 Docker Container**: Has **no `/dev` mounts** and reads read-only host APIs.
-- **Foxglove**: Visualization only.
-- **`/cmd_vel`**: Not currently enabled in ROS 2.
-- **Arming Safety**: The rover must remain **disarmed** during software-only development and testing.
+For authoritative operating rules, hardware pinouts, current session handoff, and open tasks, see:
+- [`AGENTS.md`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/AGENTS.md) — Hardware reference, safety boundaries, and verification commands.
+- [`HANDOFF.md`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/HANDOFF.md) & [`TODO.md`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/TODO.md) — Current session state and prioritized tasks.
+- [`PROJECT_STATUS.md`](file:///c:/Users/Ron/electronic_projects/esp/esp-maker-usba-4motor/PROJECT_STATUS.md) *(in `esp-maker-usba-4motor`)* — Complete roadmap, test catalog, chronological test ledger, and daily engineering log.
 
 ---
 
-```
-                                +-----------------------------+
-                                |      Web Client Browser     |
-                                |     (Control Cockpit UI)    |
-                                +--------------+--------------+
-                                               | (WebSockets / HTTP)
-                                               v
-+----------------------------------------------+----------------------------------------------+
-| Raspberry Pi 5 On-Board Computer                                                            |
-|                                                                                             |
-|   +---------------------------------------------------------------------------------------+ |
-|   |                                 Node.js Cockpit Server                                | |
-|   |                                       (server.js)                                     | |
-|   +-------------------------------------------+-------------------------------------------+ |
-|                                               |                                             |
-|                                               | (USB Serial /dev/ttyUSB0)                   |
-|                                               v                                             |
-+-----------------------------------------------+---------------------------------------------+
-                                                |
-                                                v
-                                +---------------+---------------+
-                                |     Maker ESP32 Pro Board     |
-                                |  (Low-level Motor Controller) |
-                                +---------------+---------------+
-                                                |
-                                                +---> 4x Encoder Motors
-```
+## 1. Two-Repository Architecture
 
-The system comprises two core parts:
-1. **Low-level Brains (Maker ESP32 Pro Board)**: Directly interfaces with the 4 encoder motors (M1..M4), processing encoder ticks and driving motor power. It communicates with the host server over a fast binary protocol via USB serial. It also mocks gyro/accelerometer data based on motor control and sends simulated battery level.
-2. **Host Server (Node.js)**: Runs on the RPi5. Serves the web interface, manages the serial connection to the ESP32 (`/dev/ttyUSB0`), processes joystick speed commands, and handles motor closed-loop position control.
+| Repository | Local Path | Deployment Target | Role & Ownership |
+| :--- | :--- | :--- | :--- |
+| **`yahboom-encoder`** *(This Repo)* | `c:\Users\Ron\electronic_projects\yahboom-encoder` | **Raspberry Pi 5** (`ron@10.0.0.246:/home/ron/yahboom-encoder`) | Host software: Node.js Cockpit Server (`server.js` on `:3000`), Rover Ground Control HUD (`public/hud.html`), Mobile Touch HUD (`public/hud-mobile.html`), 8×8 ToF Sensor Bench (`public/sensors.html`), RPLiDAR C1 sidecar (`:3002`), Geekworm X1206 UPS monitor, and ROS 2 Jazzy / Nav2 Docker stack (`ros2/`). |
+| **`esp-maker-usba-4motor`** *(Firmware Repo)* | `c:\Users\Ron\electronic_projects\esp\esp-maker-usba-4motor` | **Maker-ESP32-Pro** (`/dev/rover-esp32`) & **ESP32-S3 N16R8** (`/dev/ttyAMA0` / OTA) | Embedded C++ PlatformIO firmware for the 4-motor controller (`src/`, `1.3.4-remap-r03`), ESP32-S3 ToF/LED controller (`esp32s3_status_led/`, `1.2.4-tof-mux`), and reusable exact-motion test suite (`tools/rover_tests/`). |
 
 ---
 
-## 🔩 Hardware References
+## 2. Hardware Ownership & System Services on Raspberry Pi 5 (`10.0.0.246`)
 
-Use this section to store authoritative hardware links (board repositories, schematics, pinout docs, and vendor resources).
-
-* **Maker ESP32 Pro (physical driver/control board) repository:** https://github.com/nulllaborg/maker-esp32-pro.git
-* **Raspberry Pi 5 GPIO Pinout:**
-  ![Raspberry Pi 5 GPIO Pinout](pictures/rpi5_gpio.jpg)
+| Service / Container | Owned Device / Port | Role |
+| :--- | :--- | :--- |
+| **`rover-server.service`** (`server.js`) | `/dev/rover-esp32` → `/dev/ttyUSB0` (`1a86:7523`, `115200` baud), HTTP/WS `:3000` | Exclusively owns the Maker-ESP32-Pro serial link (`v1.1` binary protocol), enforces operator token auth, 500 ms autonomy watchdog, 600 ms manual drive keepalive watchdog (`manual_drive_watchdog.js`), and serves the HUD Cockpit & REST APIs. |
+| **`esp32s3-status-led.service`** | `/dev/ttyAMA0` (`115200` baud GPIO UART0) | Streams RPi5 status heartbeats (`G`/`B`/`R`) to the Lonely Binary ESP32-S3 and writes live 8-channel `TCA9548A` (`0x70`) ToF telemetry to `/tmp/esp32s3_tof_state.json` (served at `GET /api/tof-sensors`). |
+| **`rover-lidar.service`** (`rplidar_sidecar.py`) | `/dev/rover-lidar` (`10c4:ea60`, `460800` baud), HTTP `:3002` | Exclusively owns the RPLiDAR C1 serial device and serves 360° scan frames (`GET /scan`, `GET /status`), proxied by `server.js` at `/api/lidar/*`. |
+| **`hailo-powersave.service`** | PCIe `0001:04:00.0` (`/dev/hailo0`) | Places the Hailo-8 M.2 AI module into `D3hot` runtime PM with upstream ASM1182e bridge `ASPM L1` when idle. |
+| **Docker `rover-ros2`** (`ros2/compose.yaml`) | Host network (`:3010` Nav Bridge, `:8765` Foxglove Bridge), **no `/dev` mounts** | Runs ROS 2 Jazzy (`bringup.launch.py` = `foundation.launch.py` + `navigation.launch.py`): `/odom`, `/imu/data`, `/scan`, `/tof/front_left/*`, `/tof/front_right/*`, `/tf`, AMCL, Smac2D Planner, DWB Controller, Collision Monitor, and `rover_cmd_vel_bridge`. |
 
 ---
 
-## 🛠️ Deploying to the Raspberry Pi 5
+## 3. Cockpit Web Interfaces (`http://10.0.0.246:3000`)
 
-We have automated the deployment pipeline using RPi5-specific systemd service configurations and automated scripts.
+- **Desktop Ground Control HUD (`/` or `/hud.html`)**:
+  - High-contrast tactical HUD with live Geekworm X1206 UPS State-of-Charge (`MAX17043` on RPi5 I2C `0x36`) & charging trend (`battery_trend.js`), BNO08x non-magnetic IMU attitude (`0x4B`), 4-wheel PID/PWM/encoder telemetry, Nav2 route preview & dispatch, and a **combined 360° LiDAR + Front 8×8 ToF Obstacle Radar** with close-in zoom steps (**`0.25 m (10 in)`**, **`0.5 m (20 in)`**, **`1.0 m (3.3 ft)`**, `2 m`, `3 m`, `5 m`, `8 m`).
+- **Mobile Touch HUD (`/hud-mobile.html`)**:
+  - Landscape 3-column non-overlapping touch interface with dual virtual joysticks, E-STOP, ARM toggle, and close-in obstacle radar.
+- **8-Channel ToF Sensor Bench (`/sensors.html`)**:
+  - Live 8×8 zone heatmaps and distance matrices for `CH 0` (`front_right_l7cx` `VL53L7CX`, $-8^\circ$ yaw), `CH 1` (`front_left_l7cx` `VL53L7CX`, $+8^\circ$ yaw), and `CH 2` (`VL53L4CD` single-zone).
+- **Legacy Engineering Cockpit (`/index.html`)**:
+  - Detailed diagnostic tabs and single-motor raised-wheel maintenance test runner.
 
-### 1. Configure Local Environment
-Create or edit your local `.env` file (which is git-ignored) in the root of the project to define the target network credentials and serial port:
-```env
-# WiFi Credentials (used by setup scripts)
-WIFI_SSID=<your_wifi_ssid>
-WIFI_PASSWORD=<your_wifi_password>
+---
 
-# RPi5 Deployment & Target Configurations
-RPI_IP=<your_rpi5_ip_address>
-RPI_USER=ron
-RPI_PASSWORD=<your_rpi5_password>
+## 4. Sensor & Robot TF Tree (`foundation.launch.py`)
 
-# Server Settings
-PORT=3000
-SERIAL_PORT=/dev/ttyUSB0
-BAUD_RATE=115200
-```
+With `base_link` at the physical center of the rover (`+X` forward, `+Y` left, `+Z` up):
 
-### 2. Deploy from Windows to RPi5
-Open a PowerShell terminal in the project directory on your Windows dev machine and execute:
+| Parent Frame | Child Frame | Translation `(x, y, z)` (m) | Rotation `(roll, pitch, yaw)` | Sensor / Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `odom` | `base_link` | Dynamic (`rover_encoder_odometry`) | Dynamic | Calibrated effective wheel diameter `0.06695 m` (`1974.1667` ticks/rev). |
+| `base_link` | `laser_frame` | `(+0.03175, 0.0, +0.17145)` | `(0, 0, 0)` | RPLiDAR C1 optical center (`17.15 cm` above `base_link`). |
+| `base_link` | `imu_link` | `(-0.0254, -0.0254, +0.14605)` | `(0, 0, 0)` | Adafruit BNO08x IMU (`SH2_GAME_ROTATION_VECTOR_NON_MAGNETIC`). |
+| `base_link` | `tof_front_left_link` | `(+0.14, +0.08, +0.08)` *(placeholder)* | `(0, 0, +0.139626 rad [+8°])` | Front-Left `VL53L7CX` 8×8 (`CH 1`), angled $+8^\circ$ outward. |
+| `base_link` | `tof_front_right_link` | `(+0.14, -0.08, +0.08)` *(placeholder)* | `(0, 0, -0.139626 rad [-8°])` | Front-Right `VL53L7CX` 8×8 (`CH 0`), angled $-8^\circ$ outward. |
+
+---
+
+## 5. Verification & Deployment Commands
+
+### A. Run Automated Unit Tests Locally
 ```powershell
-.\rpi5\deploy.ps1
-```
-*This script will pack the project files (excluding dependencies/cache), transfer them to the Pi (using details specified in your `.env` file), and execute the remote installation script.*
+# 1. HUD Cockpit, Battery & Watchdog Node.js Tests
+node test/test_hud_cockpit.js
+node test/test_geekworm_battery.js
+node test/test_manual_drive_watchdog.js
 
-### 3. Remote Setup Details
-The script automatically executes `rpi5/setup.sh` on the RPi5, which:
-* Installs system prerequisites (`nodejs`, `build-essential`).
-* Configures local NetworkManager to connect to the configured WiFi (defined in `.env` as `WIFI_SSID`).
-* Installs all Node dependency modules.
-* Installs and launches the persistent systemd background service:
-  * **`rover-server.service`**: Automatically starts the Node server on boot.
-
----
-
-## 🩺 Monitoring and Maintenance
-
-Once deployed, the Cockpit webpage is served at:
-**`http://<your_rpi5_ip_address>:3000`**
-
-To monitor the background services on the Pi, SSH into `<your_rpi5_ip_address>` and run:
-
-```bash
-# Check service status
-systemctl status rover-server.service
-
-# View real-time output logs
-journalctl -u rover-server.service -f
+# 2. ROS 2 Bridge & Navigation Policy Python Tests
+pytest ros2/ros2_ws/src/rover_bringup/test/test_tof_bridge.py ros2/ros2_ws/src/rover_bringup/test/test_lidar_bridge.py ros2/ros2_ws/src/rover_bringup/test/test_nav2_config.py ros2/ros2_ws/src/rover_bringup/test/test_config.py
+pytest test/test_production_map_assets.py test/test_cold_start_localization_policy.py test/test_dispatch_localization_refresh.py
 ```
 
----
-
-## 📂 Project Structure
-
-* `server.js` - Primary Express & WebSocket telemetry + control server.
-* `rplidar_sidecar.py` - Python async service for RPLIDAR C1.
-* `public/` - Dashboard web frontend (HTML/CSS/JS).
-* `maker_esp32_pro/` - Firmware project directory for the ESP32 microcontroller.
-* `rpi5/` - Deployment artifacts:
-  * `deploy.ps1` - Windows packaging & SSH/SFTP deployment automation.
-  * `setup.sh` - System configuration, dependencies, and service installation.
-  * `99-rover-lidar.rules` - udev rule mapping CP2102N to `/dev/rover-lidar`.
-  * `rover-server.service.template` - Service unit configuration template.
-  * `rover-lidar.service.template` - LiDAR service unit configuration template.
-
----
-
-## 📚 Motion Control & Calibration Documentation
-
-* [Motion Control, Architecture & Automatic Calibration](docs/motion-control-and-calibration.md) - System architecture, component responsibilities, failure/fix chronology, confirmed floor test results, and proposed future automated commissioning sequence.
-* [Nav2 Motion Tuning Audit & Configuration Analysis](docs/nav2-motion-tuning-audit.md) - Parameter audit matrix, existing vs missing Nav2 layers, velocity smoother requirements, and calibration taper speed vs hardware stall deadband guidance.
-* [Manual SLAM Mapping & Nav2 Handoff](docs/manual-slam-mapping-handoff.md) - Audit of ROS 2 SLAM/Nav2 packages, empirical Foxglove mapping results, open diagnostic hypotheses, and next-phase implementation scope.
-
----
-
-
-## 📡 RPLIDAR C1 Integration
-
-The rover integrates a USB RPLIDAR C1 scanning telemetry sensor connected directly to the Raspberry Pi 5.
-
-### 1. Hardware Connection & Symlink
-* The RPLIDAR C1 CP2102N USB converter registers dynamically on the Pi.
-* A custom udev rule `/etc/udev/rules.d/99-rover-lidar.rules` creates a stable `/dev/rover-lidar` symlink with `0666` permissions on boot.
-
-### 2. Python Async Sidecar Service (`rover-lidar.service`)
-* The `rplidar_sidecar.py` service runs on port `3002`.
-* It utilizes the `rplidarc1` asynchronous library to connect to `/dev/rover-lidar` at `460800` baud.
-* It downsamples scan data to a maximum of 360 points (1-degree increments) and exposes them on:
-  - `GET /status`: telemetry performance, scan Hz, health, errors.
-  - `GET /scan`: latest complete 360-degree polar coordinate measurements.
-* The Node Express server proxies these routes under `/api/lidar/status` and `/api/lidar/scan`.
-
-### 3. Monitoring LiDAR
-To monitor the LiDAR background service on the Pi, run:
-```bash
-# Check service status
-systemctl status rover-lidar.service
-
-# View real-time output logs
-journalctl -u rover-lidar.service -f
+### B. Deploy Host & ROS 2 Stack to Raspberry Pi 5 (`ron@10.0.0.246`)
+```powershell
+cd c:\Users\Ron\electronic_projects\yahboom-encoder
+$env:ROVER_PI_HOST="10.0.0.246"; $env:ROVER_PI_USER="ron"; python deploy_yahboom.py
 ```
-
-### 4. Physical Dimensions & SLAM Configuration
-To configure SLAM (e.g., Cartographer, Gmapping, or RTAB-Map) and the robot TF tree, use the following physical dimensions and sensor mounting offsets:
-
-* **Rover Physical Dimensions:**
-  - **Length ($L$):** $9.0\text{ inches}$ ($228.6\text{ mm}$ or $0.2286\text{ m}$)
-  - **Width ($W$):** $8.75\text{ inches}$ ($222.25\text{ mm}$ or $0.22225\text{ m}$)
-
-* **LiDAR Mounting Position:**
-  - **Front Offset:** Mounted $4.0\text{ inches}$ ($101.6\text{ mm}$ or $0.1016\text{ m}$) behind the front-most edge of the rover.
-  - **Left Offset:** Mounted $3.0\text{ inches}$ ($76.2\text{ mm}$ or $0.0762\text{ m}$) inside from the left-most edge of the rover.
-
-* **SLAM TF Transform (`base_link` to `laser` / `laser_frame`):**
-  If defining `base_link` as the physical center of the rover body ($X$ pointing forward, $Y$ pointing left, $Z$ pointing up):
-  - **$x$ translation (forward):** $+0.5\text{ inches} = +12.7\text{ mm} = +0.0127\text{ m}$ (calculated as $L/2 - \text{Front Offset} = 4.5" - 4"$)
-  - **$y$ translation (left):** $+1.375\text{ inches} = +34.925\text{ mm} = +0.034925\text{ m}$ (calculated as $W/2 - \text{Left Offset} = 4.375" - 3"$)
-  - **$z$ translation (height):** Adjust based on vertical mount height.
-  - **Yaw rotation:** $0.0\text{ rad}$ (LiDAR is aligned facing forward).
-
+*(Uploads updated host & ROS 2 files over SSH key auth, rebuilds `rover_bringup` in `rover-ros2` when needed, restarts services, and verifies all expected ROS 2 nodes and disarmed safety state.)*
