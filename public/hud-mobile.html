@@ -55,6 +55,7 @@
     #top .chip { padding:2px 5px; font-size:10.5px; }
     #cBat { min-width:86px !important; }
     #cAuth { min-width:48px !important; }
+    #cGp { min-width:50px !important; }
     #cTmp { min-width:42px !important; }
     #estop { padding:0 7px; font-size:10.5px; }
   }
@@ -228,6 +229,7 @@
     </div>
     <span class="chip" id="cBat" style="min-width:98px;">🔋 --%</span>
     <span class="chip" id="cAuth" style="min-width:56px;">🔑 --</span>
+    <span class="chip" id="cGp" style="min-width:62px; color:var(--dim); cursor:pointer;" title="Xbox / Gamepad controller status">🎮 OFF</span>
     <span class="chip" id="cTmp" style="min-width:46px;">-- °C</span>
     <span class="chip" id="cLat" style="min-width:54px;">-- ms</span>
     <button class="top-act" id="btnTopHome">🏠 Home</button>
@@ -323,6 +325,7 @@
   <div id="mobToast"></div>
 </div>
 <script src="hud-core.js"></script>
+<script src="hud-gamepad.js"></script>
 <script src="hud-mobile.js"></script>
 </body>
 </html>

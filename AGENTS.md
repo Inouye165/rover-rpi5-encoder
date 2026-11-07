@@ -41,7 +41,9 @@ Authoritative operating instructions, hardware reference, workflow rules, and sa
 
 - **Run HUD & Node.js Unit Tests**:
   ```powershell
+  npm test
   node test/test_hud_cockpit.js
+  node test/test_hud_gamepad.js
   node test/test_geekworm_battery.js
   node test/test_manual_drive_watchdog.js
   ```

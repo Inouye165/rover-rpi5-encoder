@@ -153,78 +153,12 @@
     hintTimer = setTimeout(() => { e.style.display = 'none'; }, 1800);
   });
 
-  // ── Gamepad ────────────────────────────────────────────────
-  const GP_DEADBAND = 0.12;
-  const ESTOP_BUTTONS = [1, 2, 3, 8, 10, 11];
-  let gpPrevEstop = false;
-  function shape(v) {
-    const a = Math.abs(v);
-    if (a < GP_DEADBAND) return 0;
-    return Math.sign(v) * (a - GP_DEADBAND) / (1 - GP_DEADBAND);
-  }
-  function getPad() {
-    if (!navigator.getGamepads) return null;
-    const pads = navigator.getGamepads();
-    for (let i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected) return pads[i];
-    return null;
-  }
-  function pollGamepad() {
-    const gp = getPad();
-    const badge = $('gamepad-badge');
-    if (!gp) {
-      setText('gamepad-status-text', 'NO GAMEPAD');
-      badge.style.color = '#5f7a91';
-      $('gp-conn-dot').style.background = '#5f7a91';
-      setText('gp-name', 'No gamepad detected');
-      $('gp-wake-hint').style.display = 'block';
-      H.clearDriveInput('gamepad');
-      return;
-    }
-    setText('gamepad-status-text', 'GAMEPAD OK');
-    badge.style.color = '#00ffcc';
-    $('gp-conn-dot').style.background = '#00ffcc';
-    setText('gp-name', gp.id);
-    $('gp-wake-hint').style.display = 'none';
-
-    const pressed = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
-    const estopNow = ESTOP_BUTTONS.some(pressed);
-    if (estopNow && !gpPrevEstop) estop('GAMEPAD');
-    gpPrevEstop = estopNow;
-
-    const deadman = pressed(4) || (gp.buttons[6] && gp.buttons[6].value > 0.5);
-    const turbo = pressed(5);
-    const y = -shape(gp.axes[1] || 0);
-    const rx = shape(gp.axes[2] || 0);
-    const x = Math.abs(rx) > 0 ? rx : shape(gp.axes[0] || 0);
-
-    const dm = $('gp-deadman-indicator');
-    dm.textContent = deadman ? 'LB/LT: HELD' : 'LB/LT: RELEASED';
-    dm.style.borderColor = deadman ? '#00ff88' : '#ff2a4b';
-    dm.style.color = deadman ? '#00ff88' : '#ff4765';
-    const tb = $('gp-turbo-indicator');
-    tb.textContent = turbo ? 'RB: TURBO ON' : 'RB: TURBO OFF';
-    tb.style.borderColor = turbo ? '#ffaa00' : '#203146';
-    tb.style.color = turbo ? '#ffaa00' : '#5f7a91';
-
-    const moving = Math.abs(x) > 0 || Math.abs(y) > 0;
-    $('gp-deadman-alert').style.display = (moving && !deadman && !estopNow) ? 'block' : 'none';
-    if (deadman && !estopNow && moving) {
-      H.setDriveInput('gamepad', x, y, turbo ? 1.5 : 1);
-    } else {
-      H.clearDriveInput('gamepad');
-    }
-  }
-  setInterval(pollGamepad, 50);
-  window.addEventListener('gamepadconnected', (e) => toast(`🎮 Controller connected: ${e.gamepad.id}`, 'ok'));
-  window.addEventListener('gamepaddisconnected', () => { H.clearDriveInput('gamepad'); toast('🎮 Controller disconnected', 'warn'); });
-  if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-    $('gp-security-alert').style.display = 'block';
-    setText('gp-origin', location.origin);
-  }
-
+  // ── Gamepad Indicator Bars ─────────────────────────────────
   H.on('drive_cmd', (c) => {
-    $('gp-lin-bar').style.width = `${Math.round(Math.abs(c.y) * 100)}%`;
-    $('gp-ang-bar').style.width = `${Math.round(Math.abs(c.x) * 100)}%`;
+    const lin = $('gp-lin-bar');
+    const ang = $('gp-ang-bar');
+    if (lin) lin.style.width = `${Math.round(Math.abs(c.y) * 100)}%`;
+    if (ang) ang.style.width = `${Math.round(Math.abs(c.x) * 100)}%`;
   });
 
   // ── Camera ─────────────────────────────────────────────────

@@ -241,10 +241,10 @@
           <b>⚠️ Browser HTTP Block:</b> Chrome/Edge block gamepads on plain HTTP IPs. Add <code id="gp-origin">this origin</code> under <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, or tunnel with <code>ssh -L 3000:localhost:3000 ron@10.0.0.246</code>.
         </div>
         <div style="display:flex; gap:6px; margin-top:2px;">
-          <div id="gp-deadman-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #ff2a4b; color:#ff4765;">LB/LT: RELEASED</div>
-          <div id="gp-turbo-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #203146; color:#5f7a91;">RB: TURBO OFF</div>
+          <div id="gp-deadman-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #ff2a4b; color:#ff4765;">DEADMAN: RELEASED</div>
+          <div id="gp-turbo-indicator" style="flex:1; padding:4px 6px; font-size:10px; font-weight:700; text-align:center; border-radius:3px; background:#101a24; border:1px solid #203146; color:#8ba2b5;">START: ARM | BACK: DISARM</div>
         </div>
-        <div id="gp-deadman-alert" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:2px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;">⚠️ HOLD LB OR LT TO DRIVE (Deadman Safety Active)</div>
+        <div id="gp-deadman-alert" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:2px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;">⚠️ SQUEEZE RT OR RB TO DRIVE (Deadman Safety Active)</div>
         <div id="drive-hint" style="display:none; background:#2b1803; border:1px solid #ffaa00; border-radius:3px; padding:4px 6px; margin-top:2px; font-size:10px; color:#ffdd99; font-weight:700; text-align:center;"></div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:3px; font-size:10px; color:#8ba2b5;">
           <div>
@@ -257,8 +257,9 @@
           </div>
         </div>
         <div style="font-size: 10.5px; line-height: 1.45; color: #8ba2b5; margin-top: 3px;">
-          • <b>E-Stop:</b> <b>Spacebar / Esc</b> or Controller <b>B / X / Y / Back</b><br>
-          • <b>Drive:</b> <b>WASD / Arrows</b> or hold <b>LB / LT</b> on controller
+          • <b>E-Stop:</b> <b>Spacebar / Esc</b> or Controller <b>A / B / X / Y</b><br>
+          • <b>Drive:</b> <b>WASD / Arrows</b> or hold <b>RT / RB</b> (or LB/LT) + Left Stick<br>
+          • <b>Arm / Disarm:</b> Controller <b>Start</b> (arm) / <b>Back</b> (disarm)
         </div>
       </div>
 
@@ -322,6 +323,7 @@
   <div class="hud-toast-stack" id="toast-stack" aria-live="polite"></div>
 
   <script src="hud-core.js"></script>
+  <script src="hud-gamepad.js"></script>
   <script src="hud-desktop.js"></script>
 </body>
 </html>

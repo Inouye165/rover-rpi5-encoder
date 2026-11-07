@@ -14,6 +14,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
+const { runTests: runGamepadTests } = require('./test_hud_gamepad');
 const {
   FRONT_STOP_THRESHOLD_MM,
   FRONT_CRAWL_THRESHOLD_MM,
@@ -29,12 +30,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function staticChecks() {
   console.log('Static 1: HUD files contain no hard-coded 64-hex operator token');
-  for (const f of ['hud.html', 'hud-core.js', 'hud-desktop.js', 'hud-mobile.html', 'hud-mobile.js']) {
+  for (const f of ['hud.html', 'hud-core.js', 'hud-gamepad.js', 'hud-desktop.js', 'hud-mobile.html', 'hud-mobile.js']) {
     const txt = read(f);
     assert(!/[0-9a-f]{64}/i.test(txt), `${f} contains a 64-hex token literal`);
   }
   console.log('Static 2: HUD never publishes ROS topics directly (no rosbridge advertise/publish)');
-  for (const f of ['hud-core.js', 'hud-desktop.js', 'hud-mobile.js']) {
+  for (const f of ['hud-core.js', 'hud-gamepad.js', 'hud-desktop.js', 'hud-mobile.js']) {
     const txt = read(f);
     assert(!/op:\s*['"](advertise|publish)['"]/.test(txt), `${f} publishes to rosbridge`);
     assert(!/:9090/.test(txt), `${f} talks to rosbridge port 9090`);
@@ -666,6 +667,7 @@ async function mobileTests() {
     staticChecks();
     await desktopTests();
     await mobileTests();
+    await runGamepadTests();
     console.log('ALL HUD COCKPIT TESTS PASSED');
     process.exit(0);
   } catch (err) {
