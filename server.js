@@ -931,7 +931,7 @@ function processLidarClearanceScan(scanData) {
 setInterval(pollLidarClearance, 100);
 
 // ────────────────────────────────────────────────────────────
-// Front ToF Obstacle Safety Zone Engine (<=50mm Crawl, <=10mm Stop)
+// Front ToF Obstacle Safety Zone Engine (<=75mm Crawl, <=30mm Stop)
 // ────────────────────────────────────────────────────────────
 const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
 const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
@@ -1268,7 +1268,7 @@ function startDriveKeepaliveLoop() {
           }
         }
 
-        // Immediate front-zone override: bypass slew delay when entering <=50mm CRAWL or <=10mm STOP
+        // Immediate front-zone override: bypass slew delay when entering <=75mm CRAWL or <=30mm STOP
         const zoneLimited = applyFrontSafetyZoneToVelocity(limitedLinear, limitedAngular, frontZone);
         limitedLinear = zoneLimited.linear;
         limitedAngular = zoneLimited.angular;
@@ -1294,7 +1294,7 @@ function startDriveKeepaliveLoop() {
     const vz = Math.round(limitedAngular * 1000);
     let clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
     if (frontZone && frontZone.state === 'STOP') {
-      clearanceMask &= ~0x01; // Clear forward clearance bit when within <=10mm stop zone
+      clearanceMask &= ~0x01; // Clear forward clearance bit when within <=30mm stop zone
     }
     
     sendBinaryCommand(FUNC_MOTION, [
@@ -6084,7 +6084,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
   }
 
-  // Clamping + Front ToF Safety Zone Gate (<=50mm CRAWL, <=10mm STOP)
+  // Clamping + Front ToF Safety Zone Gate (<=75mm CRAWL, <=30mm STOP)
   const maxLin = parseFloat(process.env.AUTONOMY_MAX_LINEAR_MPS) || (floorTesting ? 0.17 : 0.80);
   const maxAng = parseFloat(process.env.AUTONOMY_MAX_ANGULAR_RADPS) || (floorTesting ? 0.90 : 3.00);
   const baseClampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
@@ -6115,7 +6115,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
   const clampedLin = zoneGated.linear;
   const clampedAng = zoneGated.angular;
 
-  // Low-speed stop zero-bypass (or Front Safety Zone <=10mm STOP): bypass slew ramp immediately
+  // Low-speed stop zero-bypass (or Front Safety Zone <=30mm STOP): bypass slew ramp immediately
   if (isZeroCmd || (zoneGated.action === 'STOP' && clampedLin === 0.0 && clampedAng === 0.0)) {
     const isLowSpeed = (Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15) || zoneGated.action === 'STOP';
     if (isLowSpeed) {

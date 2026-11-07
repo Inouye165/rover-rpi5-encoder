@@ -267,9 +267,9 @@ async function desktopTests() {
   assert.strictEqual(radarRes.lidarLive, false);
   assert(radarRes.nearest && radarRes.nearest.d > 0.15 && radarRes.nearest.d < 0.30, 'nearest distance must reflect close-in ToF obstacle');
 
-  console.log('Core 6: Front Safety Zone (<=50mm crawl, <=10mm stop) for autonomous and manual driving');
-  assert.strictEqual(FRONT_STOP_THRESHOLD_MM, 10);
-  assert.strictEqual(FRONT_CRAWL_THRESHOLD_MM, 50);
+  console.log('Core 6: Front Safety Zone (<=75mm crawl, <=30mm stop) for autonomous and manual driving');
+  assert.strictEqual(FRONT_STOP_THRESHOLD_MM, 30);
+  assert.strictEqual(FRONT_CRAWL_THRESHOLD_MM, 75);
   const nowMs = Date.now();
   const makeTofState = (leftMm, rightMm) => ({
     host_timestamp_ms: nowMs,
@@ -280,47 +280,84 @@ async function desktopTests() {
   });
   const mapping = { front_left_l7cx: 1, front_right_l7cx: 0 };
 
-  // > 50 mm -> CLEAR
-  const zClear = evaluateFrontSafetyZone(makeTofState(80, 120), mapping, { nowMs });
-  assert.strictEqual(zClear.state, 'CLEAR');
-  assert.strictEqual(zClear.minMm, 80);
-  const vClear = applyFrontSafetyZoneToVelocity(0.20, 0.50, zClear);
+  // Explicit boundary cases: 0, 29, 30, 31, 74, 75, 76 mm
+  // Boundary 1: 0 mm -> STOP (0..30 mm)
+  const zBound0 = evaluateFrontSafetyZone(makeTofState(0, 120), mapping, { nowMs });
+  assert.strictEqual(zBound0.state, 'STOP', '0 mm must be STOP');
+  assert.strictEqual(zBound0.minMm, 0);
+
+  // Boundary 2: 29 mm -> STOP (0..30 mm)
+  const zBound29 = evaluateFrontSafetyZone(makeTofState(120, 29), mapping, { nowMs });
+  assert.strictEqual(zBound29.state, 'STOP', '29 mm must be STOP');
+  assert.strictEqual(zBound29.minMm, 29);
+
+  // Boundary 3: 30 mm -> STOP (0..30 mm)
+  const zBound30 = evaluateFrontSafetyZone(makeTofState(30, 120), mapping, { nowMs });
+  assert.strictEqual(zBound30.state, 'STOP', '30 mm must be STOP');
+  assert.strictEqual(zBound30.minMm, 30);
+
+  // Boundary 4: 31 mm -> CRAWL (31..75 mm)
+  const zBound31 = evaluateFrontSafetyZone(makeTofState(120, 31), mapping, { nowMs });
+  assert.strictEqual(zBound31.state, 'CRAWL', '31 mm must be CRAWL');
+  assert.strictEqual(zBound31.minMm, 31);
+
+  // Boundary 5: 74 mm -> CRAWL (31..75 mm)
+  const zBound74 = evaluateFrontSafetyZone(makeTofState(74, 120), mapping, { nowMs });
+  assert.strictEqual(zBound74.state, 'CRAWL', '74 mm must be CRAWL');
+  assert.strictEqual(zBound74.minMm, 74);
+
+  // Boundary 6: 75 mm -> CRAWL (31..75 mm)
+  const zBound75 = evaluateFrontSafetyZone(makeTofState(120, 75), mapping, { nowMs });
+  assert.strictEqual(zBound75.state, 'CRAWL', '75 mm must be CRAWL');
+  assert.strictEqual(zBound75.minMm, 75);
+
+  // Boundary 7: 76 mm -> CLEAR (> 75 mm)
+  const zBound76 = evaluateFrontSafetyZone(makeTofState(76, 120), mapping, { nowMs });
+  assert.strictEqual(zBound76.state, 'CLEAR', '76 mm must be CLEAR');
+  assert.strictEqual(zBound76.minMm, 76);
+
+  // > 75 mm -> CLEAR velocity evaluation (normal uninhibited operation)
+  const vClear = applyFrontSafetyZoneToVelocity(0.20, 0.50, zBound76);
   assert.strictEqual(vClear.linear, 0.20);
   assert.strictEqual(vClear.angular, 0.50);
   assert.strictEqual(vClear.clamped, false);
 
-  // <= 50 mm (e.g. 50 mm and 25 mm) -> CRAWL (slows forward driving to crawlSpeedMps = 0.03 m/s)
-  const zCrawl50 = evaluateFrontSafetyZone(makeTofState(50, 90), mapping, { nowMs });
-  assert.strictEqual(zCrawl50.state, 'CRAWL');
-  assert.strictEqual(zCrawl50.minMm, 50);
-  const vCrawl = applyFrontSafetyZoneToVelocity(0.20, 0.40, zCrawl50);
-  assert.strictEqual(vCrawl.linear, DEFAULT_CRAWL_LINEAR_MPS, 'forward speed in <=50mm zone must clamp to crawl speed');
+  // 31..75 mm -> CRAWL velocity evaluation (slows forward driving to crawlSpeedMps = 0.03 m/s)
+  const vCrawl = applyFrontSafetyZoneToVelocity(0.20, 0.40, zBound75);
+  assert.strictEqual(vCrawl.linear, DEFAULT_CRAWL_LINEAR_MPS, 'forward speed in <=75mm zone must clamp to crawl speed');
   assert(vCrawl.angular > 0 && vCrawl.angular < 0.40, 'turn rate scales proportionally with crawl speed');
   assert.strictEqual(vCrawl.clamped, true);
   assert.strictEqual(vCrawl.action, 'CRAWL');
 
-  // <= 10 mm (e.g. 10 mm and 0 mm) -> STOP (fully stops forward motion, allows reverse)
-  const zStop10 = evaluateFrontSafetyZone(makeTofState(65, 10), mapping, { nowMs });
-  assert.strictEqual(zStop10.state, 'STOP');
-  assert.strictEqual(zStop10.minMm, 10);
-  const vStopFwd = applyFrontSafetyZoneToVelocity(0.20, 0.15, zStop10);
-  assert.strictEqual(vStopFwd.linear, 0.0, 'forward motion must fully stop within 10mm');
-  assert.strictEqual(vStopFwd.angular, 0.0, 'angular motion must fully stop when forward blocked within 10mm');
+  // 0..30 mm -> STOP velocity evaluation (fully stops forward motion, allows reverse)
+  const vStopFwd = applyFrontSafetyZoneToVelocity(0.20, 0.15, zBound30);
+  assert.strictEqual(vStopFwd.linear, 0.0, 'forward motion must fully stop within 30mm');
+  assert.strictEqual(vStopFwd.angular, 0.0, 'angular motion must fully stop when forward blocked within 30mm');
   assert.strictEqual(vStopFwd.clamped, true);
   assert.strictEqual(vStopFwd.action, 'STOP');
 
-  const zStop0 = evaluateFrontSafetyZone(makeTofState(0, -1), mapping, { nowMs });
-  assert.strictEqual(zStop0.state, 'STOP', '0 mm contact reading must trigger STOP');
-  assert.strictEqual(zStop0.minMm, 0);
-
-  // Reverse motion must still be allowed in STOP zone so rover can back away
-  const vStopRev = applyFrontSafetyZoneToVelocity(-0.10, 0.0, zStop10);
+  // Reverse motion must still be allowed in STOP zone so rover can back away (reverse escape)
+  const vStopRev = applyFrontSafetyZoneToVelocity(-0.10, 0.0, zBound30);
   assert.strictEqual(vStopRev.linear, -0.10, 'reverse motion must be allowed when stopped at front obstacle');
   assert.strictEqual(vStopRev.action, 'REVERSE_ALLOWED');
 
+  // Client-side browser fallback evaluateFrontZone boundary tests
+  const makeResp = (mm) => ({
+    stale: false,
+    mapping: { front_left_l7cx: 1 },
+    data: { channels: [{ ch: 1, type: 'VL53L7CX', present: 1, init: 1, age_ms: 20, min_mm: mm }] }
+  });
+  assert.strictEqual(H.evaluateFrontZone(makeResp(0)).state, 'STOP');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(29)).state, 'STOP');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(30)).state, 'STOP');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(31)).state, 'CRAWL');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(74)).state, 'CRAWL');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(75)).state, 'CRAWL');
+  assert.strictEqual(H.evaluateFrontZone(makeResp(76)).state, 'CLEAR');
+
   // HUD client-side evaluateFrontZone + 8 mm close-in ToF radar point retention
   const closeGrid = new Array(64).fill(-1);
-  closeGrid[27] = 8; // 8 mm (inside <=10mm stop zone)
+  closeGrid[27] = 8; // 8 mm (inside <=30mm stop zone)
   const closeResp = {
     stale: false,
     mapping: { front_right_l7cx: 0, front_right_l7cx_rot: 'none' },
@@ -371,8 +408,8 @@ async function desktopTests() {
   assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent.trim(), 'PROXIMITY — OFFLINE');
   assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-offline'));
 
-  // 3. Stationary crawl zone (11..50 mm, no motion reduced) -> Yellow: PROXIMITY — CRAWL ZONE
-  const zCrawlStationary = evaluateFrontSafetyZone(makeTofState(32, 90), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
+  // 3. Stationary crawl zone (31..75 mm, no motion reduced) -> Yellow: PROXIMITY — CRAWL ZONE
+  const zCrawlStationary = evaluateFrontSafetyZone(makeTofState(45, 90), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
   assert.strictEqual(zCrawlStationary.state, 'CRAWL');
   assert.strictEqual(zCrawlStationary.intervening, false);
   assert.strictEqual(zCrawlStationary.indicatorCode, 'CRAWL_ZONE');
@@ -386,8 +423,8 @@ async function desktopTests() {
   assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — CRAWL ZONE');
   assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-warn'));
 
-  // 4. Active slowdown intervention (11..50 mm while forward motion > 0.03 m/s is reduced) -> Yellow: PROXIMITY — SLOWING
-  const zSlowing = evaluateFrontSafetyZone(makeTofState(32, 90), mapping, { nowMs, requestedLinearMps: 0.20, requestedAngularRadps: 0 });
+  // 4. Active slowdown intervention (31..75 mm while forward motion > 0.03 m/s is reduced) -> Yellow: PROXIMITY — SLOWING
+  const zSlowing = evaluateFrontSafetyZone(makeTofState(45, 90), mapping, { nowMs, requestedLinearMps: 0.20, requestedAngularRadps: 0 });
   assert.strictEqual(zSlowing.state, 'CRAWL');
   assert.strictEqual(zSlowing.intervening, true);
   assert.strictEqual(zSlowing.indicatorCode, 'SLOWING');
@@ -400,8 +437,8 @@ async function desktopTests() {
   assert.strictEqual(ind.slowDownOverride, true);
   assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — SLOWING');
 
-  // 5. Stationary stop zone (<= 10 mm, no motion commanded) -> Red: PROXIMITY — STOP ZONE
-  const zStopStationary = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
+  // 5. Stationary stop zone (0..30 mm, no motion commanded) -> Red: PROXIMITY — STOP ZONE
+  const zStopStationary = evaluateFrontSafetyZone(makeTofState(65, 20), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
   assert.strictEqual(zStopStationary.state, 'STOP');
   assert.strictEqual(zStopStationary.intervening, false);
   assert.strictEqual(zStopStationary.indicatorCode, 'STOP_ZONE');
@@ -415,8 +452,8 @@ async function desktopTests() {
   assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — STOP ZONE');
   assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-bad'));
 
-  // 6. Active stop intervention (<= 10 mm while forward/in-place motion is blocked) -> Red: PROXIMITY — STOP
-  const zStopping = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: 0.18, requestedAngularRadps: 0 });
+  // 6. Active stop intervention (0..30 mm while forward/in-place motion is blocked) -> Red: PROXIMITY — STOP
+  const zStopping = evaluateFrontSafetyZone(makeTofState(65, 20), mapping, { nowMs, requestedLinearMps: 0.18, requestedAngularRadps: 0 });
   assert.strictEqual(zStopping.state, 'STOP');
   assert.strictEqual(zStopping.intervening, true);
   assert.strictEqual(zStopping.indicatorCode, 'STOP');
@@ -430,7 +467,7 @@ async function desktopTests() {
   assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — STOP');
 
   // 7. Reverse escape in stop zone (vx < 0 allowed without restriction) -> Red: PROXIMITY — STOP ZONE (not claiming block)
-  const zReverseEscape = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: -0.12, requestedAngularRadps: 0 });
+  const zReverseEscape = evaluateFrontSafetyZone(makeTofState(65, 20), mapping, { nowMs, requestedLinearMps: -0.12, requestedAngularRadps: 0 });
   assert.strictEqual(zReverseEscape.state, 'STOP');
   assert.strictEqual(zReverseEscape.intervening, false);
   assert.strictEqual(zReverseEscape.effectiveLinearMps, -0.12);
@@ -441,7 +478,7 @@ async function desktopTests() {
   assert.strictEqual(ind.code, 'STOP_ZONE');
   assert.strictEqual(ind.text, 'PROXIMITY — STOP ZONE');
 
-  // 8. Recovery to clear (> 50 mm) -> Neutral: PROXIMITY — CLEAR, and unrelated motor-power / E-stop / dynamic-brake do not pollute it
+  // 8. Recovery to clear (> 75 mm) -> Neutral: PROXIMITY — CLEAR, and unrelated motor-power / E-stop / dynamic-brake do not pollute it
   const zRecovered = evaluateFrontSafetyZone(makeTofState(180, 220), mapping, { nowMs, requestedLinearMps: 0.20, requestedAngularRadps: 0 });
   H.state.drive = { armed: false, mode: 4 }; // Disarmed + E-stop mode
   H._handleMessage({

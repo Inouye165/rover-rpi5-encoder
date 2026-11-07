@@ -19,9 +19,9 @@
   const LIDAR_MIN_RANGE_M = 0.15;
   const MANUAL_MAX_LINEAR_MPS = 0.80;   // server.js manual limit (non floor-testing)
   const MANUAL_MAX_ANGULAR_RADPS = 3.00;
-  const FRONT_STOP_MM = 10;             // <= 10 mm in front of rover -> full forward stop
-  const FRONT_CRAWL_MM = 50;            // <= 50 mm in front of rover -> slow to crawl
-  const FRONT_CRAWL_LINEAR_MPS = 0.03;  // 30 mm/s crawl cap inside 50 mm zone
+  const FRONT_STOP_MM = 30;             // <= 30 mm in front of rover -> full forward stop
+  const FRONT_CRAWL_MM = 75;            // <= 75 mm in front of rover -> slow to crawl
+  const FRONT_CRAWL_LINEAR_MPS = 0.03;  // 30 mm/s crawl cap inside 75 mm zone
   const FRONT_CRAWL_ANGULAR_RADPS = 0.35;
   const FRONT_ZONE_STALE_MS = 2500;     // Expire stale proximity telemetry to OFFLINE
 

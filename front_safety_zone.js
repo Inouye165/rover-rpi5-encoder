@@ -4,21 +4,21 @@
  *
  * Enforces a two-tier safety zone directly in front of the rover for BOTH
  * manual driving (BROWSER / GAMEPAD) and autonomous driving (ROS_AUTONOMY / CALIBRATION_TEST):
- *   - <= 50 mm (FRONT_CRAWL_THRESHOLD_MM): slows forward motion to a crawl (0.03 m/s)
- *   - <= 10 mm (FRONT_STOP_THRESHOLD_MM):  fully stops forward (and in-place) motion (0.0 m/s)
+ *   - <= 75 mm (FRONT_CRAWL_THRESHOLD_MM): slows forward motion to a crawl (0.03 m/s)
+ *   - <= 30 mm (FRONT_STOP_THRESHOLD_MM):  fully stops forward (and in-place) motion (0.0 m/s)
  *   - Reverse motion (vx < 0) remains allowed so the rover can back away from the obstacle.
  *
  * Authoritative Radar Proximity Indicator states:
  *   - PROXIMITY — OFFLINE    (gray,    level='offline'): sensor data unavailable or stale
- *   - PROXIMITY — CLEAR      (neutral, level='clear'):   valid sensor data shows no restriction (> 50 mm)
- *   - PROXIMITY — CRAWL ZONE (yellow,  level='warn'):    obstacle in 11..50 mm crawl zone, not actively reducing motion
- *   - PROXIMITY — SLOWING    (yellow,  level='warn'):    obstacle in 11..50 mm crawl zone, actively reducing commanded motion
- *   - PROXIMITY — STOP ZONE  (red,     level='bad'):     obstacle in <= 10 mm stop zone, stationary or reversing without restriction
- *   - PROXIMITY — STOP       (red,     level='bad'):     obstacle in <= 10 mm stop zone, actively blocking commanded motion
+ *   - PROXIMITY — CLEAR      (neutral, level='clear'):   valid sensor data shows no restriction (> 75 mm)
+ *   - PROXIMITY — CRAWL ZONE (yellow,  level='warn'):    obstacle in 31..75 mm crawl zone, not actively reducing motion
+ *   - PROXIMITY — SLOWING    (yellow,  level='warn'):    obstacle in 31..75 mm crawl zone, actively reducing commanded motion
+ *   - PROXIMITY — STOP ZONE  (red,     level='bad'):     obstacle in 0..30 mm stop zone, stationary or reversing without restriction
+ *   - PROXIMITY — STOP       (red,     level='bad'):     obstacle in 0..30 mm stop zone, actively blocking commanded motion
  */
 
-const FRONT_STOP_THRESHOLD_MM = 10;
-const FRONT_CRAWL_THRESHOLD_MM = 50;
+const FRONT_STOP_THRESHOLD_MM = 30;
+const FRONT_CRAWL_THRESHOLD_MM = 75;
 const DEFAULT_CRAWL_LINEAR_MPS = 0.03;   // Calibrated Case 10 crawl speed (30 mm/s)
 const DEFAULT_CRAWL_ANGULAR_RADPS = 0.35; // Calibrated nominal slow spin rate
 const MAX_VALID_TOF_MM = 4000;
@@ -119,7 +119,7 @@ function applyFrontSafetyZoneToVelocity(linearMps, angularRadps, zoneStatus) {
         minMm: zoneStatus.minMm
       };
     }
-    // Any forward or in-place motion is fully stopped within 10 mm; stationary reports STOP ZONE
+    // Any forward or in-place motion is fully stopped within 30 mm; stationary reports STOP ZONE
     const wasMoving = Math.abs(lin) > 1e-6 || Math.abs(ang) > 1e-6;
     return {
       linear: 0.0,

@@ -224,11 +224,13 @@
     if (dInd && dInd.code === 'STOP') {
       setText('hMin', `🛑 PROXIMITY — STOP (${fz.minMm} mm)`);
     } else if (dInd && dInd.code === 'STOP_ZONE') {
-      setText('hMin', `🛑 STOP ZONE ${fz.minMm} mm (≤10mm)`);
+      const stopThresh = (fz && fz.stopThresholdMm) || 30;
+      setText('hMin', `🛑 STOP ZONE ${fz.minMm} mm (≤${stopThresh}mm)`);
     } else if (dInd && dInd.code === 'SLOWING') {
       setText('hMin', `⚠️ PROXIMITY — SLOWING (${fz.minMm} mm)`);
     } else if (dInd && dInd.code === 'CRAWL_ZONE') {
-      setText('hMin', `⚠️ CRAWL ZONE ${fz.minMm} mm (≤50mm)`);
+      const crawlThresh = (fz && fz.crawlThresholdMm) || 75;
+      setText('hMin', `⚠️ CRAWL ZONE ${fz.minMm} mm (≤${crawlThresh}mm)`);
     } else if (res && res.live && res.nearest) {
       const tag = res.lidarLive ? 'LIDAR' : 'TOF';
       setText('hMin', `${tag} ${res.nearest.d.toFixed(2)} m (${(res.nearest.d / 0.0254).toFixed(1)} in)`);

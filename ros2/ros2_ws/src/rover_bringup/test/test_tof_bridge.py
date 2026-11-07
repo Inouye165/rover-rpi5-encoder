@@ -128,8 +128,8 @@ def test_grid_to_points_respects_range_bounds():
 
 def test_grid_to_points_preserves_close_stop_and_crawl_zone_readings_by_default():
     grid = [-1] * 64
-    grid[0] = 8    # 8 mm (inside <=10 mm stop zone)
-    grid[1] = 45   # 45 mm (inside <=50 mm crawl zone)
+    grid[0] = 8    # 8 mm (inside <=30 mm stop zone)
+    grid[1] = 45   # 45 mm (inside <=75 mm crawl zone)
     pts = grid_to_points(grid, rot="none")
     assert len(pts) == 2
     r0 = math.sqrt(pts[0][0] ** 2 + pts[0][1] ** 2 + pts[0][2] ** 2)
