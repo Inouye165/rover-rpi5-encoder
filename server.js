@@ -268,7 +268,7 @@ const EventEmitter = require('events');
 const normalDriveEvents = new EventEmitter();
 function handleDrivetrainRecoveryFault(status) {
   if (status && status.spinFailedExhausted === true) {
-    const isNavigating = Boolean(status.armed ||
+    const isNavigating = Boolean(
       autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' ||
       autonomyState.enabled || cmdSource === 'ROS_AUTONOMY');
     if (isNavigating && autonomyState.state !== 'FAULT') {
