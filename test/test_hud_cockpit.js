@@ -14,6 +14,13 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
+const {
+  FRONT_STOP_THRESHOLD_MM,
+  FRONT_CRAWL_THRESHOLD_MM,
+  DEFAULT_CRAWL_LINEAR_MPS,
+  evaluateFrontSafetyZone,
+  applyFrontSafetyZoneToVelocity
+} = require('../front_safety_zone');
 
 const PUB = path.join(__dirname, '..', 'public');
 const read = (f) => fs.readFileSync(path.join(PUB, f), 'utf8');
@@ -260,8 +267,217 @@ async function desktopTests() {
   assert.strictEqual(radarRes.lidarLive, false);
   assert(radarRes.nearest && radarRes.nearest.d > 0.15 && radarRes.nearest.d < 0.30, 'nearest distance must reflect close-in ToF obstacle');
 
+  console.log('Core 6: Front Safety Zone (<=50mm crawl, <=10mm stop) for autonomous and manual driving');
+  assert.strictEqual(FRONT_STOP_THRESHOLD_MM, 10);
+  assert.strictEqual(FRONT_CRAWL_THRESHOLD_MM, 50);
+  const nowMs = Date.now();
+  const makeTofState = (leftMm, rightMm) => ({
+    host_timestamp_ms: nowMs,
+    channels: [
+      { ch: 0, type: 'VL53L7CX', present: 1, init: 1, age_ms: 30, grid_mm: [rightMm, ...new Array(63).fill(-1)], min_mm: rightMm },
+      { ch: 1, type: 'VL53L7CX', present: 1, init: 1, age_ms: 30, grid_mm: [leftMm, ...new Array(63).fill(-1)], min_mm: leftMm }
+    ]
+  });
+  const mapping = { front_left_l7cx: 1, front_right_l7cx: 0 };
+
+  // > 50 mm -> CLEAR
+  const zClear = evaluateFrontSafetyZone(makeTofState(80, 120), mapping, { nowMs });
+  assert.strictEqual(zClear.state, 'CLEAR');
+  assert.strictEqual(zClear.minMm, 80);
+  const vClear = applyFrontSafetyZoneToVelocity(0.20, 0.50, zClear);
+  assert.strictEqual(vClear.linear, 0.20);
+  assert.strictEqual(vClear.angular, 0.50);
+  assert.strictEqual(vClear.clamped, false);
+
+  // <= 50 mm (e.g. 50 mm and 25 mm) -> CRAWL (slows forward driving to crawlSpeedMps = 0.03 m/s)
+  const zCrawl50 = evaluateFrontSafetyZone(makeTofState(50, 90), mapping, { nowMs });
+  assert.strictEqual(zCrawl50.state, 'CRAWL');
+  assert.strictEqual(zCrawl50.minMm, 50);
+  const vCrawl = applyFrontSafetyZoneToVelocity(0.20, 0.40, zCrawl50);
+  assert.strictEqual(vCrawl.linear, DEFAULT_CRAWL_LINEAR_MPS, 'forward speed in <=50mm zone must clamp to crawl speed');
+  assert(vCrawl.angular > 0 && vCrawl.angular < 0.40, 'turn rate scales proportionally with crawl speed');
+  assert.strictEqual(vCrawl.clamped, true);
+  assert.strictEqual(vCrawl.action, 'CRAWL');
+
+  // <= 10 mm (e.g. 10 mm and 0 mm) -> STOP (fully stops forward motion, allows reverse)
+  const zStop10 = evaluateFrontSafetyZone(makeTofState(65, 10), mapping, { nowMs });
+  assert.strictEqual(zStop10.state, 'STOP');
+  assert.strictEqual(zStop10.minMm, 10);
+  const vStopFwd = applyFrontSafetyZoneToVelocity(0.20, 0.15, zStop10);
+  assert.strictEqual(vStopFwd.linear, 0.0, 'forward motion must fully stop within 10mm');
+  assert.strictEqual(vStopFwd.angular, 0.0, 'angular motion must fully stop when forward blocked within 10mm');
+  assert.strictEqual(vStopFwd.clamped, true);
+  assert.strictEqual(vStopFwd.action, 'STOP');
+
+  const zStop0 = evaluateFrontSafetyZone(makeTofState(0, -1), mapping, { nowMs });
+  assert.strictEqual(zStop0.state, 'STOP', '0 mm contact reading must trigger STOP');
+  assert.strictEqual(zStop0.minMm, 0);
+
+  // Reverse motion must still be allowed in STOP zone so rover can back away
+  const vStopRev = applyFrontSafetyZoneToVelocity(-0.10, 0.0, zStop10);
+  assert.strictEqual(vStopRev.linear, -0.10, 'reverse motion must be allowed when stopped at front obstacle');
+  assert.strictEqual(vStopRev.action, 'REVERSE_ALLOWED');
+
+  // HUD client-side evaluateFrontZone + 8 mm close-in ToF radar point retention
+  const closeGrid = new Array(64).fill(-1);
+  closeGrid[27] = 8; // 8 mm (inside <=10mm stop zone)
+  const closeResp = {
+    stale: false,
+    mapping: { front_right_l7cx: 0, front_right_l7cx_rot: 'none' },
+    data: { channels: [{ ch: 0, type: 'VL53L7CX', present: 1, init: 1, age_ms: 25, grid_mm: closeGrid, min_mm: 8 }] }
+  };
+  const closePts = H.tofToRobotFrame(closeResp);
+  assert.strictEqual(closePts.length, 1, '8 mm (< 20 mm) ToF reading must not be dropped by radar projection');
+  const hudZone = H.evaluateFrontZone(closeResp);
+  assert.strictEqual(hudZone.state, 'STOP');
+  assert.strictEqual(hudZone.minMm, 8);
+
+  console.log('Core 7: Radar box proximity indicator (below radar circles, authoritative states, stale expiration, separation)');
+  // 1. Verify radar circles stay strictly outside the bottom indicator region (y >= 235 on 260px box)
+  const drawnArcs = [];
+  const drawnRects = [];
+  const trackCtx = {
+    fillRect(x, y, w, h) { drawnRects.push({ x, y, w, h }); },
+    strokeRect() {},
+    beginPath() {},
+    arc(cx, cy, r) { drawnArcs.push({ cx, cy, r }); },
+    stroke() {},
+    fill() {},
+    moveTo() {},
+    lineTo() {},
+    fillText() {}
+  };
+  H.state.tof = { points: [], t: 0 };
+  H.drawRadar(trackCtx, 260, { maxRange: 0.25 });
+  const maxCircleBottomY = Math.max(...drawnArcs.map(a => a.cy + a.r));
+  assert(maxCircleBottomY < 210, `radar outer circle bottom (${maxCircleBottomY}) must stay well above the bottom indicator strip (y=239..257)`);
+  // Only canvas background (260x260) and rover footprint box should be filled on desktop 260px radar (no zone boxes inside circles)
+  assert.strictEqual(drawnRects.length, 2, 'no crawl/stop zone rectangles may be drawn inside the radar circles');
+
+  // 2. Missing / unavailable / stale data -> Gray: PROXIMITY — OFFLINE
+  const zOfflineNull = evaluateFrontSafetyZone(null, mapping, { nowMs });
+  assert.strictEqual(zOfflineNull.state, 'OFFLINE');
+  assert.strictEqual(zOfflineNull.indicatorCode, 'OFFLINE');
+  assert.strictEqual(zOfflineNull.indicatorText, 'PROXIMITY — OFFLINE');
+  const zOfflineStale = evaluateFrontSafetyZone({ ...makeTofState(30, 30), host_timestamp_ms: nowMs - 5000 }, mapping, { nowMs });
+  assert.strictEqual(zOfflineStale.state, 'OFFLINE');
+  assert.strictEqual(zOfflineStale.indicatorText, 'PROXIMITY — OFFLINE');
+
+  H._handleMessage({ type: 'front_safety_zone', zone: zOfflineNull });
+  let ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'OFFLINE');
+  assert.strictEqual(ind.level, 'offline');
+  assert.strictEqual(ind.text, 'PROXIMITY — OFFLINE');
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent.trim(), 'PROXIMITY — OFFLINE');
+  assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-offline'));
+
+  // 3. Stationary crawl zone (11..50 mm, no motion reduced) -> Yellow: PROXIMITY — CRAWL ZONE
+  const zCrawlStationary = evaluateFrontSafetyZone(makeTofState(32, 90), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
+  assert.strictEqual(zCrawlStationary.state, 'CRAWL');
+  assert.strictEqual(zCrawlStationary.intervening, false);
+  assert.strictEqual(zCrawlStationary.indicatorCode, 'CRAWL_ZONE');
+  assert.strictEqual(zCrawlStationary.indicatorText, 'PROXIMITY — CRAWL ZONE');
+  H._handleMessage({ type: 'front_safety_zone', zone: zCrawlStationary });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'CRAWL_ZONE');
+  assert.strictEqual(ind.level, 'warn');
+  assert.strictEqual(ind.text, 'PROXIMITY — CRAWL ZONE');
+  assert.strictEqual(ind.slowDownOverride, false, 'stationary crawl zone must not claim active slowdown intervention');
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — CRAWL ZONE');
+  assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-warn'));
+
+  // 4. Active slowdown intervention (11..50 mm while forward motion > 0.03 m/s is reduced) -> Yellow: PROXIMITY — SLOWING
+  const zSlowing = evaluateFrontSafetyZone(makeTofState(32, 90), mapping, { nowMs, requestedLinearMps: 0.20, requestedAngularRadps: 0 });
+  assert.strictEqual(zSlowing.state, 'CRAWL');
+  assert.strictEqual(zSlowing.intervening, true);
+  assert.strictEqual(zSlowing.indicatorCode, 'SLOWING');
+  assert.strictEqual(zSlowing.indicatorText, 'PROXIMITY — SLOWING');
+  H._handleMessage({ type: 'front_safety_zone', zone: zSlowing });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'SLOWING');
+  assert.strictEqual(ind.level, 'warn');
+  assert.strictEqual(ind.text, 'PROXIMITY — SLOWING');
+  assert.strictEqual(ind.slowDownOverride, true);
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — SLOWING');
+
+  // 5. Stationary stop zone (<= 10 mm, no motion commanded) -> Red: PROXIMITY — STOP ZONE
+  const zStopStationary = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: 0, requestedAngularRadps: 0 });
+  assert.strictEqual(zStopStationary.state, 'STOP');
+  assert.strictEqual(zStopStationary.intervening, false);
+  assert.strictEqual(zStopStationary.indicatorCode, 'STOP_ZONE');
+  assert.strictEqual(zStopStationary.indicatorText, 'PROXIMITY — STOP ZONE');
+  H._handleMessage({ type: 'front_safety_zone', zone: zStopStationary });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'STOP_ZONE');
+  assert.strictEqual(ind.level, 'bad');
+  assert.strictEqual(ind.text, 'PROXIMITY — STOP ZONE');
+  assert.strictEqual(ind.brakeApplied, false, 'stationary stop zone must not claim active stop intervention');
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — STOP ZONE');
+  assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-bad'));
+
+  // 6. Active stop intervention (<= 10 mm while forward/in-place motion is blocked) -> Red: PROXIMITY — STOP
+  const zStopping = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: 0.18, requestedAngularRadps: 0 });
+  assert.strictEqual(zStopping.state, 'STOP');
+  assert.strictEqual(zStopping.intervening, true);
+  assert.strictEqual(zStopping.indicatorCode, 'STOP');
+  assert.strictEqual(zStopping.indicatorText, 'PROXIMITY — STOP');
+  H._handleMessage({ type: 'front_safety_zone', zone: zStopping });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'STOP');
+  assert.strictEqual(ind.level, 'bad');
+  assert.strictEqual(ind.text, 'PROXIMITY — STOP');
+  assert.strictEqual(ind.brakeApplied, true);
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — STOP');
+
+  // 7. Reverse escape in stop zone (vx < 0 allowed without restriction) -> Red: PROXIMITY — STOP ZONE (not claiming block)
+  const zReverseEscape = evaluateFrontSafetyZone(makeTofState(65, 7), mapping, { nowMs, requestedLinearMps: -0.12, requestedAngularRadps: 0 });
+  assert.strictEqual(zReverseEscape.state, 'STOP');
+  assert.strictEqual(zReverseEscape.intervening, false);
+  assert.strictEqual(zReverseEscape.effectiveLinearMps, -0.12);
+  assert.strictEqual(zReverseEscape.indicatorCode, 'STOP_ZONE');
+  assert.strictEqual(zReverseEscape.indicatorText, 'PROXIMITY — STOP ZONE');
+  H._handleMessage({ type: 'front_safety_zone', zone: zReverseEscape });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'STOP_ZONE');
+  assert.strictEqual(ind.text, 'PROXIMITY — STOP ZONE');
+
+  // 8. Recovery to clear (> 50 mm) -> Neutral: PROXIMITY — CLEAR, and unrelated motor-power / E-stop / dynamic-brake do not pollute it
+  const zRecovered = evaluateFrontSafetyZone(makeTofState(180, 220), mapping, { nowMs, requestedLinearMps: 0.20, requestedAngularRadps: 0 });
+  H.state.drive = { armed: false, mode: 4 }; // Disarmed + E-stop mode
+  H._handleMessage({
+    type: 'pid_diagnostic',
+    actuationState: 'BRAKE',
+    m1: { targetRadps: 0, measuredRadps: 0.4, finalPwm: 0, stictionState: 'BLOCKED', stictionCode: 3 }
+  });
+  H._handleMessage({ type: 'front_safety_zone', zone: zRecovered });
+  ind = H.evaluateRadarDriveIndicator(nowMs);
+  assert.strictEqual(ind.code, 'CLEAR');
+  assert.strictEqual(ind.level, 'clear');
+  assert.strictEqual(ind.text, 'PROXIMITY — CLEAR', 'unrelated motor power, E-stop, or dynamic brake must not overwrite proximity indicator');
+  assert.strictEqual(env.w.document.getElementById('hud-radar-drive-ind').textContent, 'PROXIMITY — CLEAR');
+  assert(env.w.document.getElementById('hud-radar-drive-ind').classList.contains('ind-clear'));
+
+  // 9. Stale telemetry expiration + WebSocket disconnect/reconnect handling
+  H._connect(); // Reconnect active WS after Desktop 10 closed the first socket
+  await sleep(20);
+  const activeWs = env.MockWS.instances[env.MockWS.instances.length - 1];
+  activeWs.serverSend({ type: 'front_safety_zone', zone: zStopping });
+  assert.strictEqual(H.evaluateRadarDriveIndicator().code, 'STOP');
+  // Simulate WS disconnect while in STOP intervention -> intervention drops immediately to STOP_ZONE
+  activeWs.close();
+  assert.strictEqual(H.evaluateRadarDriveIndicator().code, 'STOP_ZONE', 'WS disconnect must immediately clear active intervention claim');
+  // Advance clock past FRONT_ZONE_STALE_MS (2500 ms) -> expires old STOP_ZONE state to OFFLINE
+  const expiredInd = H.evaluateRadarDriveIndicator(Date.now() + H.FRONT_ZONE_STALE_MS + 200);
+  assert.strictEqual(expiredInd.code, 'OFFLINE', 'stale telemetry must expire to OFFLINE so old STOP states cannot remain live');
+  assert.strictEqual(expiredInd.level, 'offline');
+  assert.strictEqual(expiredInd.text, 'PROXIMITY — OFFLINE');
+  // Fresh update recovers from OFFLINE
+  H._handleMessage({ type: 'front_safety_zone', zone: zRecovered });
+  assert.strictEqual(H.evaluateRadarDriveIndicator().code, 'CLEAR');
+
   console.log('Desktop 11: top-bar prioritizes battery/plug/conn/auth before secondary buttons and right pane puts Drivetrain/Drive Controls above Autonomy');
   const htmlTxt = read('hud.html');
+  assert(htmlTxt.includes('id="hud-radar-drive-ind"'), 'radar box must contain #hud-radar-drive-ind indicator');
   const idxPlug = htmlTxt.indexOf('id="ups-plug-badge"');
   const idxBat = htmlTxt.indexOf('id="battery-badge"');
   const idxConn = htmlTxt.indexOf('id="conn-badge"');
@@ -317,6 +533,46 @@ async function mobileTests() {
   assert(styleTxt.includes('#stage.mode-split') && styleTxt.includes('.stick.v'), 'Rover 2 mobile CSS missing');
   assert(styleTxt.includes('#stkLWrap') && styleTxt.includes('#stkRWrap') && styleTxt.includes('display:contents'), 'landscape 3-column non-overlapping grid CSS missing');
   assert(!styleTxt.includes('ROVER2_MOBILE_CSS'), 'template placeholder left in page');
+
+  console.log('Mobile 3: canvas proximity indicator renders at all responsive sizes (<200 and >=200) without clipping or overlapping circles');
+  env.H._handleMessage({
+    type: 'front_safety_zone',
+    zone: {
+      state: 'CRAWL',
+      active: true,
+      sensorLive: true,
+      intervening: true,
+      indicatorCode: 'SLOWING',
+      indicatorLevel: 'warn',
+      indicatorText: 'PROXIMITY — SLOWING',
+      minMm: 28
+    }
+  });
+  for (const testSize of [88, 140, 200, 240]) {
+    const arcs = [];
+    const rects = [];
+    const texts = [];
+    const mCtx = {
+      fillRect(x, y, w, h) { rects.push({ x, y, w, h }); },
+      strokeRect() {},
+      beginPath() {},
+      arc(cx, cy, r) { arcs.push({ cx, cy, r }); },
+      stroke() {},
+      fill() {},
+      moveTo() {},
+      lineTo() {},
+      fillText(text, x, y, maxW) { texts.push({ text, x, y, maxW }); }
+    };
+    const r = env.H.drawRadar(mCtx, testSize, { maxRange: 0.50, color: 'range', pointSize: 2 });
+    assert.strictEqual(r.driveIndicator.text, 'PROXIMITY — SLOWING');
+    const indText = texts.find(t => t.text === 'PROXIMITY — SLOWING');
+    assert(indText, `mobile canvas indicator text must render at size=${testSize}px (must not disappear at >=200px)`);
+    assert(typeof indText.maxW === 'number' && indText.maxW > 0 && indText.maxW < testSize, `mobile canvas indicator must constrain maxWidth to prevent clipping at size=${testSize}px`);
+    const indBar = rects[rects.length - 1];
+    const outerCircleBottom = Math.max(...arcs.map(a => a.cy + a.r));
+    assert(indBar.y > outerCircleBottom, `indicator bar top (${indBar.y}) must be below outer radar circle (${outerCircleBottom}) at size=${testSize}px`);
+    assert(indBar.x >= 0 && (indBar.x + indBar.w) <= testSize && (indBar.y + indBar.h) <= testSize, `indicator bar must fit inside canvas bounds at size=${testSize}px`);
+  }
   env.dom.window.close();
 }
 

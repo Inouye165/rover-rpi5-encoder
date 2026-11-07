@@ -8,6 +8,14 @@ const { spawn } = require('child_process');
 const os = require('os');
 const { BatteryTrend } = require('./battery_trend');
 const { ManualDriveWatchdog } = require('./manual_drive_watchdog');
+const {
+  FRONT_STOP_THRESHOLD_MM,
+  FRONT_CRAWL_THRESHOLD_MM,
+  DEFAULT_CRAWL_LINEAR_MPS,
+  DEFAULT_CRAWL_ANGULAR_RADPS,
+  evaluateFrontSafetyZone,
+  applyFrontSafetyZoneToVelocity
+} = require('./front_safety_zone');
 const slamManager = require('./slam_manager');
 
 
@@ -287,6 +295,10 @@ let lastDeadmanPressedTime = Date.now();
 let reverseWaitStartTime = 0;
 let targetLinear = 0.0;
 let targetAngular = 0.0;
+let requestedLinear = 0.0;
+let requestedAngular = 0.0;
+let requestedCmdAtMs = 0;
+const REQUESTED_CMD_TTL_MS = 650;
 let measuredLinearVel = 0.0;
 let measuredAngularVel = 0.0;
 let driveCommandNeedsFlush = false;
@@ -327,13 +339,51 @@ let deadmanPressed = false;
 const manualDriveWatchdog = new ManualDriveWatchdog({
   timeoutMs: parseInt(process.env.MANUAL_DRIVE_KEEPALIVE_TIMEOUT_MS, 10) || 600
 });
+function clearRequestedMotionCommand() {
+  requestedLinear = 0.0;
+  requestedAngular = 0.0;
+  requestedCmdAtMs = 0;
+}
+
+function noteRequestedMotionCommand(lin, ang, now = Date.now()) {
+  const l = Number(lin) || 0;
+  const a = Number(ang) || 0;
+  if (Math.abs(l) > 1e-4 || Math.abs(a) > 1e-4) {
+    requestedLinear = l;
+    requestedAngular = a;
+    requestedCmdAtMs = now;
+  } else {
+    clearRequestedMotionCommand();
+  }
+}
+
+function getActiveRequestedVelocity(now = Date.now()) {
+  const isArmed = Boolean(latestNormalDriveStatus && latestNormalDriveStatus.armed);
+  if (!isArmed || cmdSource === 'NONE') {
+    return { linear: 0.0, angular: 0.0, active: false };
+  }
+  if (!requestedCmdAtMs || (now - requestedCmdAtMs) > REQUESTED_CMD_TTL_MS) {
+    return { linear: 0.0, angular: 0.0, active: false };
+  }
+  const active = Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4;
+  return {
+    linear: active ? requestedLinear : 0.0,
+    angular: active ? requestedAngular : 0.0,
+    active
+  };
+}
+
 function zeroManualDriveTarget(reason) {
   if (cmdSource !== 'GAMEPAD' && cmdSource !== 'BROWSER') return false;
-  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4;
+  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4 || Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4;
   targetLinear = 0.0;
   targetAngular = 0.0;
+  clearRequestedMotionCommand();
   cmdSource = 'NONE';
   deadmanPressed = false;
+  if (typeof refreshFrontSafetyZone === 'function') {
+    refreshFrontSafetyZone();
+  }
   if (wasMoving) {
     console.warn(`[Manual Drive Watchdog] ${reason} - manual target zeroed.`);
     broadcast({ type: 'manual_drive_watchdog', reason });
@@ -522,7 +572,8 @@ function getAutonomyStatusObject() {
     rejectedCount: autonomyState.rejectedCount,
     watchdogTimeouts: autonomyState.watchdogTimeouts,
     lastRejectionReason: autonomyState.lastRejectionReason,
-    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs
+    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs,
+    frontSafetyZone: latestFrontSafetyZone
   };
 }
 
@@ -554,8 +605,12 @@ function resetAutonomyToSafe(reason = 'Reset') {
   autonomyState.lastRejectionReason = isCmdTokenValid ? reason : 'Internal command configuration fault';
   if (cmdSource === 'ROS_AUTONOMY' || cmdSource === 'CALIBRATION_TEST' || cmdSource === 'AUTO_CALIB' || cmdSource === 'LIDAR_TEST' || cmdSource === 'BACKTRACK') {
     cmdSource = 'NONE';
+    clearRequestedMotionCommand();
   }
   sendZeroMotionPacket();
+  if (typeof refreshFrontSafetyZone === 'function') {
+    refreshFrontSafetyZone();
+  }
   broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
 }
 
@@ -876,6 +931,96 @@ function processLidarClearanceScan(scanData) {
 setInterval(pollLidarClearance, 100);
 
 // ────────────────────────────────────────────────────────────
+// Front ToF Obstacle Safety Zone Engine (<=50mm Crawl, <=10mm Stop)
+// ────────────────────────────────────────────────────────────
+const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
+const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
+const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
+const DEFAULT_TOF_MAPPING = {
+  front_left_l7cx: 1,
+  front_left_l7cx_rot: '90_ccw',
+  front_right_l7cx: 0,
+  front_right_l7cx_rot: '90_ccw',
+  rear_left_l7cx: 'auto',
+  rear_left_l7cx_rot: '90_ccw',
+  rear_right_l7cx: 'auto',
+  rear_right_l7cx_rot: '90_ccw',
+  cliff_fl: 'auto',
+  cliff_fr: 'auto',
+  cliff_rl: 'auto',
+  cliff_rr: 'auto',
+  aux_1: 'auto',
+  aux_2: 'auto'
+};
+
+function loadTofMapping() {
+  try {
+    if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
+      const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+      delete mapping.front_l7cx;
+      delete mapping.front_l7cx_rot;
+      delete mapping.rear_l7cx;
+      delete mapping.rear_l7cx_rot;
+      return mapping;
+    }
+  } catch (_) {}
+  return { ...DEFAULT_TOF_MAPPING };
+}
+
+let latestFrontSafetyZone = evaluateFrontSafetyZone(null, DEFAULT_TOF_MAPPING);
+
+function refreshFrontSafetyZone(preloadedData = null, preloadedMapping = null) {
+  const now = Date.now();
+  const mapping = preloadedMapping || loadTofMapping();
+  let data = preloadedData;
+  if (!data) {
+    try {
+      if (fs.existsSync(TOF_STATE_FILE_PATH)) {
+        data = JSON.parse(fs.readFileSync(TOF_STATE_FILE_PATH, 'utf8'));
+      }
+    } catch (_) {
+      data = null;
+    }
+  }
+
+  const prev = latestFrontSafetyZone || {};
+  const prevState = prev.state || 'OFFLINE';
+  const prevIndCode = prev.indicatorCode || 'OFFLINE';
+  const prevSensorLive = Boolean(prev.sensorLive);
+  const prevMinMm = prev.minMm !== undefined ? prev.minMm : null;
+  const crawlSpeedMps = parseFloat(process.env.FRONT_ZONE_CRAWL_MPS) || DEFAULT_CRAWL_LINEAR_MPS;
+  const crawlAngularRadps = parseFloat(process.env.FRONT_ZONE_CRAWL_RADPS) || DEFAULT_CRAWL_ANGULAR_RADPS;
+  const activeReq = getActiveRequestedVelocity(now);
+
+  latestFrontSafetyZone = evaluateFrontSafetyZone(data, mapping, {
+    nowMs: now,
+    stopThresholdMm: FRONT_STOP_THRESHOLD_MM,
+    crawlThresholdMm: FRONT_CRAWL_THRESHOLD_MM,
+    crawlSpeedMps,
+    crawlAngularRadps,
+    requestedLinearMps: activeReq.linear,
+    requestedAngularRadps: activeReq.angular
+  });
+
+  const changed = (
+    latestFrontSafetyZone.state !== prevState ||
+    latestFrontSafetyZone.indicatorCode !== prevIndCode ||
+    latestFrontSafetyZone.sensorLive !== prevSensorLive ||
+    (latestFrontSafetyZone.active && latestFrontSafetyZone.minMm !== prevMinMm)
+  );
+  if (changed) {
+    if (latestFrontSafetyZone.state !== prevState || latestFrontSafetyZone.indicatorCode !== prevIndCode) {
+      console.log(`[Front Safety Zone] ${prevState}/${prevIndCode} -> ${latestFrontSafetyZone.state}/${latestFrontSafetyZone.indicatorCode} (minMm=${latestFrontSafetyZone.minMm ?? 'none'} mm, sensor=${latestFrontSafetyZone.triggeredBy ?? 'none'})`);
+    }
+    broadcast({ type: 'front_safety_zone', zone: latestFrontSafetyZone });
+  }
+  return latestFrontSafetyZone;
+}
+
+setInterval(() => refreshFrontSafetyZone(), 100);
+
+// ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
 // ────────────────────────────────────────────────────────────
 function broadcast(data) {
@@ -1059,6 +1204,10 @@ function startDriveKeepaliveLoop() {
 
     const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
     const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';
+    const frontZone = refreshFrontSafetyZone();
+    const zoneTarget = applyFrontSafetyZoneToVelocity(targetLinear, targetAngular, frontZone);
+    const effTargetLinear = zoneTarget.linear;
+    const effTargetAngular = zoneTarget.angular;
 
     // Safety events bypass slew limiter and force immediate zero
     if (!isArmed || isMaintenance) {
@@ -1080,23 +1229,23 @@ function startDriveKeepaliveLoop() {
         const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
 
         // Linear Slew
-        if (limitedLinear !== targetLinear) {
+        if (limitedLinear !== effTargetLinear) {
           let rate = maxLinAccel;
-          if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
+          if ((effTargetLinear >= 0 && limitedLinear > effTargetLinear) || (effTargetLinear <= 0 && limitedLinear < effTargetLinear)) {
             rate = maxLinDecel;
-          } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
+          } else if ((effTargetLinear > 0 && limitedLinear < 0) || (effTargetLinear < 0 && limitedLinear > 0)) {
             rate = maxLinDecel;
           }
           const delta = rate * dt;
-          if (targetLinear > limitedLinear) {
-            limitedLinear = Math.min(targetLinear, limitedLinear + delta);
+          if (effTargetLinear > limitedLinear) {
+            limitedLinear = Math.min(effTargetLinear, limitedLinear + delta);
           } else {
-            limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+            limitedLinear = Math.max(effTargetLinear, limitedLinear - delta);
           }
         }
 
         // Snap to zero if stopping and already at low creep speed
-        if (targetLinear === 0.0 && targetAngular === 0.0) {
+        if (effTargetLinear === 0.0 && effTargetAngular === 0.0) {
           if (Math.abs(limitedAngular) <= 0.20 && Math.abs(limitedLinear) <= 0.08) {
             limitedLinear = 0.0;
             limitedAngular = 0.0;
@@ -1104,24 +1253,29 @@ function startDriveKeepaliveLoop() {
         }
 
         // Angular Slew
-        if (limitedAngular !== targetAngular) {
+        if (limitedAngular !== effTargetAngular) {
           let rate = maxAngAccel;
-          if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
+          if ((effTargetAngular >= 0 && limitedAngular > effTargetAngular) || (effTargetAngular <= 0 && limitedAngular < effTargetAngular)) {
             rate = maxAngDecel;
-          } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
+          } else if ((effTargetAngular > 0 && limitedAngular < 0) || (effTargetAngular < 0 && limitedAngular > 0)) {
             rate = maxAngDecel;
           }
           const delta = rate * dt;
-          if (targetAngular > limitedAngular) {
-            limitedAngular = Math.min(targetAngular, limitedAngular + delta);
+          if (effTargetAngular > limitedAngular) {
+            limitedAngular = Math.min(effTargetAngular, limitedAngular + delta);
           } else {
-            limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+            limitedAngular = Math.max(effTargetAngular, limitedAngular - delta);
           }
         }
+
+        // Immediate front-zone override: bypass slew delay when entering <=50mm CRAWL or <=10mm STOP
+        const zoneLimited = applyFrontSafetyZoneToVelocity(limitedLinear, limitedAngular, frontZone);
+        limitedLinear = zoneLimited.linear;
+        limitedAngular = zoneLimited.angular;
       }
     } else {
-      limitedLinear = targetLinear;
-      limitedAngular = targetAngular;
+      limitedLinear = effTargetLinear;
+      limitedAngular = effTargetAngular;
     }
 
     autonomyState.limitedLinear = limitedLinear;
@@ -1138,7 +1292,10 @@ function startDriveKeepaliveLoop() {
     const vx = Math.round(limitedLinear * 1000);
     const vy = 0;
     const vz = Math.round(limitedAngular * 1000);
-    const clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
+    let clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
+    if (frontZone && frontZone.state === 'STOP') {
+      clearanceMask &= ~0x01; // Clear forward clearance bit when within <=10mm stop zone
+    }
     
     sendBinaryCommand(FUNC_MOTION, [
       ...int16ToLE(vx),
@@ -2448,6 +2605,7 @@ wss.on('connection', (ws, req) => {
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
   ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
+  ws.send(JSON.stringify({ type: 'front_safety_zone', zone: refreshFrontSafetyZone() }));
   if (latestBatteryVoltage !== null) {
     ws.send(JSON.stringify({ type: 'battery', ...batteryPayload() }));
   }
@@ -2498,6 +2656,7 @@ wss.on('connection', (ws, req) => {
           autonomyState.lastRejectionReason = 'E-Stop triggered';
           targetLinear = 0.0;
           targetAngular = 0.0;
+          clearRequestedMotionCommand();
           cmdSource = 'NONE';
           latestNormalDriveStatus = { armed: false };
           broadcastAutoCalibStatus();
@@ -2518,6 +2677,7 @@ wss.on('connection', (ws, req) => {
         case 'disarm_normal_drive':
           targetLinear = 0.0;
           targetAngular = 0.0;
+          clearRequestedMotionCommand();
           latestNormalDriveStatus = { armed: false };
           broadcastAutoCalibStatus();
           resetAutonomyToSafe('Operator disarmed normal drive');
@@ -2647,14 +2807,23 @@ wss.on('connection', (ws, req) => {
               if (!backtracking && cmdSource !== 'CALIBRATION_TEST') {
                 const MAX_LINEAR = floorTesting ? 0.17 : 0.80;
                 const MAX_ANGULAR = floorTesting ? 0.90 : 3.00;
-                
-                targetLinear = throttle * MAX_LINEAR;
-                targetAngular = -turnScaled * MAX_ANGULAR;
+                const rawTargetLin = throttle * MAX_LINEAR;
+                const rawTargetAng = -turnScaled * MAX_ANGULAR;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
-                manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4));
+                noteRequestedMotionCommand(rawTargetLin, rawTargetAng);
+                const frontZone = refreshFrontSafetyZone();
+                const zoneGated = applyFrontSafetyZoneToVelocity(rawTargetLin, rawTargetAng, frontZone);
+
+                targetLinear = zoneGated.linear;
+                targetAngular = zoneGated.angular;
+                manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(rawTargetLin) > 1e-4 || Math.abs(rawTargetAng) > 1e-4));
+                if (zoneGated.action === 'STOP' && targetLinear === 0.0 && targetAngular === 0.0) {
+                  sendZeroMotionPacket();
+                }
                 startDriveKeepaliveLoop();
               }
             } else {
+              clearRequestedMotionCommand();
               if (backtracking) {
                 abortBacktrack('Deadman released');
               } else if (cmdSource === 'CALIBRATION_TEST') {
@@ -2667,6 +2836,7 @@ wss.on('connection', (ws, req) => {
                 targetAngular = 0.0;
                 cmdSource = 'NONE';
               }
+              refreshFrontSafetyZone();
             }
           }
           break;
@@ -4482,6 +4652,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
 app.post('/api/drive/disarm', (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
+  clearRequestedMotionCommand();
   cmdSource = 'NONE';
   latestNormalDriveStatus = { armed: false };
   // Propagate the updated armed state to calibration-status consumers immediately.
@@ -4663,52 +4834,19 @@ app.get('/api/system', async (req, res) => {
 });
 
 // --- ESP32-S3 TCA9548A (0x70) 8-Channel ToF Sensor Bench API (VL53L7CX 8x8 & VL53L4CD Cliff) ---
-const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
-const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
-const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
-const DEFAULT_TOF_MAPPING = {
-  front_left_l7cx: 1,
-  front_left_l7cx_rot: '90_ccw',
-  front_right_l7cx: 0,
-  front_right_l7cx_rot: '90_ccw',
-  rear_left_l7cx: 'auto',
-  rear_left_l7cx_rot: '90_ccw',
-  rear_right_l7cx: 'auto',
-  rear_right_l7cx_rot: '90_ccw',
-  cliff_fl: 'auto',
-  cliff_fr: 'auto',
-  cliff_rl: 'auto',
-  cliff_rr: 'auto',
-  aux_1: 'auto',
-  aux_2: 'auto'
-};
-
-function loadTofMapping() {
-  try {
-    if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
-      const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
-      delete mapping.front_l7cx;
-      delete mapping.front_l7cx_rot;
-      delete mapping.rear_l7cx;
-      delete mapping.rear_l7cx_rot;
-      return mapping;
-    }
-  } catch (_) {}
-  return { ...DEFAULT_TOF_MAPPING };
-}
-
 app.get('/api/tof-sensors', (req, res) => {
   const now = Date.now();
   const mapping = loadTofMapping();
   try {
     if (!fs.existsSync(TOF_STATE_FILE_PATH)) {
+      const frontSafetyZone = refreshFrontSafetyZone(null, mapping);
       return res.json({
         ok: true,
         connected: false,
         stale: true,
         hostAgeMs: null,
         mapping,
+        frontSafetyZone,
         data: null
       });
     }
@@ -4717,21 +4855,25 @@ app.get('/api/tof-sensors', (req, res) => {
     const hostTs = Number(data.host_timestamp_ms) || 0;
     const hostAgeMs = hostTs > 0 ? Math.max(0, now - hostTs) : null;
     const stale = hostAgeMs === null || hostAgeMs > 3000;
+    const frontSafetyZone = refreshFrontSafetyZone(data, mapping);
     return res.json({
       ok: true,
       connected: !stale,
       stale,
       hostAgeMs,
       mapping,
+      frontSafetyZone,
       data
     });
   } catch (err) {
+    const frontSafetyZone = refreshFrontSafetyZone(null, mapping);
     return res.json({
       ok: true,
       connected: false,
       stale: true,
       hostAgeMs: null,
       mapping,
+      frontSafetyZone,
       error: err.message,
       data: null
     });
@@ -5851,6 +5993,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     // Unconditional safe zeroing for any subsystem / shutdown
     targetLinear = 0.0;
     targetAngular = 0.0;
+    clearRequestedMotionCommand();
     autonomyState.rawLinear = 0.0;
     autonomyState.rawAngular = 0.0;
     autonomyState.clampedLinear = 0.0;
@@ -5859,7 +6002,8 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     autonomyState.limitedAngular = 0.0;
     autonomyState.lastCmdTime = performance.now();
     sendZeroMotionPacket();
-    return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+    const frontZone = refreshFrontSafetyZone();
+    return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state, frontSafetyZone: frontZone });
   }
 
   // 2. Non-zero command checks:
@@ -5940,11 +6084,11 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
   }
 
-  // Clamping
+  // Clamping + Front ToF Safety Zone Gate (<=50mm CRAWL, <=10mm STOP)
   const maxLin = parseFloat(process.env.AUTONOMY_MAX_LINEAR_MPS) || (floorTesting ? 0.17 : 0.80);
   const maxAng = parseFloat(process.env.AUTONOMY_MAX_ANGULAR_RADPS) || (floorTesting ? 0.90 : 3.00);
-  const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
-  const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
+  const baseClampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
+  const baseClampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
 
   if (cmdReqSource === 'ROS_AUTONOMY' || cmdReqSource === 'CALIBRATION_TEST') {
     if (autonomyState.state === 'READY_ARMED') {
@@ -5965,16 +6109,22 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     cmdSource = cmdReqSource;
   }
 
-  // Low-speed stop zero-bypass: bypass slew ramp when stopping from creep
-  if (isZeroCmd) {
-    const isLowSpeed = Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15;
+  noteRequestedMotionCommand(baseClampedLin, baseClampedAng);
+  const frontZone = refreshFrontSafetyZone();
+  const zoneGated = applyFrontSafetyZoneToVelocity(baseClampedLin, baseClampedAng, frontZone);
+  const clampedLin = zoneGated.linear;
+  const clampedAng = zoneGated.angular;
+
+  // Low-speed stop zero-bypass (or Front Safety Zone <=10mm STOP): bypass slew ramp immediately
+  if (isZeroCmd || (zoneGated.action === 'STOP' && clampedLin === 0.0 && clampedAng === 0.0)) {
+    const isLowSpeed = (Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15) || zoneGated.action === 'STOP';
     if (isLowSpeed) {
       targetLinear = 0.0;
       targetAngular = 0.0;
       limitedLinear = 0.0;
       limitedAngular = 0.0;
-      autonomyState.rawLinear = 0.0;
-      autonomyState.rawAngular = 0.0;
+      autonomyState.rawLinear = rawLin;
+      autonomyState.rawAngular = rawAng;
       autonomyState.clampedLinear = 0.0;
       autonomyState.clampedAngular = 0.0;
       autonomyState.limitedLinear = 0.0;
@@ -5982,7 +6132,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
       autonomyState.lastCmdTime = performance.now();
       watchdogFired = false;
       sendZeroMotionPacket();
-      return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+      return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state, frontSafetyZone: frontZone });
     }
   }
 
@@ -6002,7 +6152,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
   }
 
-  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
+  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state, frontSafetyZone: frontZone });
 });
 
 app.get('/api/encoders', (req, res) => {
@@ -6109,7 +6259,8 @@ app.get('/api/drive/status', (req, res) => {
     recording,
     pathLength: recordedPath.length,
     odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist },
-    pidTelemetry
+    pidTelemetry,
+    frontSafetyZone: latestFrontSafetyZone
   });
 });
 
@@ -7289,5 +7440,7 @@ module.exports = {
   batteryTrend,
   batteryPayload,
   collectSystemHealth,
-  getManualDriveTarget: () => ({ targetLinear, targetAngular, cmdSource })
+  refreshFrontSafetyZone,
+  getLatestFrontSafetyZone: () => latestFrontSafetyZone,
+  getManualDriveTarget: () => ({ targetLinear, targetAngular, requestedLinear, requestedAngular, cmdSource })
 };

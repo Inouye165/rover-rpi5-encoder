@@ -19,6 +19,11 @@
   const LIDAR_MIN_RANGE_M = 0.15;
   const MANUAL_MAX_LINEAR_MPS = 0.80;   // server.js manual limit (non floor-testing)
   const MANUAL_MAX_ANGULAR_RADPS = 3.00;
+  const FRONT_STOP_MM = 10;             // <= 10 mm in front of rover -> full forward stop
+  const FRONT_CRAWL_MM = 50;            // <= 50 mm in front of rover -> slow to crawl
+  const FRONT_CRAWL_LINEAR_MPS = 0.03;  // 30 mm/s crawl cap inside 50 mm zone
+  const FRONT_CRAWL_ANGULAR_RADPS = 0.35;
+  const FRONT_ZONE_STALE_MS = 2500;     // Expire stale proximity telemetry to OFFLINE
 
   // ────────────────────────────────────────────────────────────
   // Event bus + state store
@@ -48,6 +53,7 @@
     imu: null,
     imuEuler: null,
     drive: { armed: false },
+    pid: null,
     autonomy: null,
     localization: null,
     nav: null,
@@ -56,6 +62,23 @@
     lidarStatus: null,
     scan: { points: [], scanHz: null, t: 0, frameTimes: [] },
     tof: { points: [], t: 0 },
+    frontZone: {
+      state: 'OFFLINE',
+      active: false,
+      sensorLive: false,
+      intervening: false,
+      intervention: 'NONE',
+      indicatorCode: 'OFFLINE',
+      indicatorLevel: 'offline',
+      indicatorText: 'PROXIMITY — OFFLINE',
+      minMm: null,
+      leftMinMm: null,
+      rightMinMm: null,
+      stopThresholdMm: FRONT_STOP_MM,
+      crawlThresholdMm: FRONT_CRAWL_MM,
+      crawlSpeedMps: FRONT_CRAWL_LINEAR_MPS,
+      receivedAt: 0
+    },
     map: null,
     mapVersion: 0,
     lastWsMsg: 0,
@@ -160,6 +183,17 @@
       state.wsConnected = false;
       state.authOk = false;
       releaseAllDriveInputs();
+      if (state.frontZone && state.frontZone.intervening) {
+        const zState = state.frontZone.state;
+        state.frontZone = Object.assign({}, state.frontZone, {
+          intervening: false,
+          intervention: 'NONE',
+          action: zState === 'STOP' ? 'STOP_ZONE' : (zState === 'CRAWL' ? 'CRAWL_MONITOR' : 'NONE'),
+          indicatorCode: zState === 'STOP' ? 'STOP_ZONE' : (zState === 'CRAWL' ? 'CRAWL_ZONE' : state.frontZone.indicatorCode),
+          indicatorText: zState === 'STOP' ? 'PROXIMITY — STOP ZONE' : (zState === 'CRAWL' ? 'PROXIMITY — CRAWL ZONE' : state.frontZone.indicatorText)
+        });
+        emit('front_zone', state.frontZone);
+      }
       emit('connection', state);
       emit('auth', state);
       scheduleReconnect();
@@ -221,6 +255,43 @@
         state.drive = Object.assign({}, m, { receivedAt: Date.now() });
         emit('drive', state.drive);
         break;
+      case 'pid_diagnostic': {
+        const now = Date.now();
+        const wheels = [m.m1, m.m2, m.m3, m.m4].filter(Boolean);
+        const maxAbsPwm = wheels.reduce((mx, w) => Math.max(mx, Math.abs(w.finalPwm || 0)), 0);
+        const maxAbsTarget = wheels.reduce((mx, w) => Math.max(mx, Math.abs(w.targetRadps || 0)), 0);
+        const maxAbsMeas = wheels.reduce((mx, w) => Math.max(mx, Math.abs(w.measuredRadps || 0)), 0);
+        const anyBlocked = wheels.some(w => w.stictionState === 'BLOCKED' || w.stictionCode === 3);
+        const prevPid = state.pid || {};
+        let lastBrakeAt = prevPid.lastBrakeAt || 0;
+        if (m.actuationState === 'BRAKE') {
+          lastBrakeAt = now;
+        }
+        let zeroMotionPwmSince = prevPid.zeroMotionPwmSince || 0;
+        if (state.drive && state.drive.armed && maxAbsPwm >= 35 && maxAbsTarget >= 0.1 && maxAbsMeas < 0.05) {
+          if (!zeroMotionPwmSince) zeroMotionPwmSince = now;
+        } else {
+          zeroMotionPwmSince = 0;
+        }
+        const noMotorPowerDetected = Boolean(
+          state.drive && state.drive.armed && (
+            (anyBlocked && maxAbsMeas < 0.05) ||
+            (zeroMotionPwmSince > 0 && (now - zeroMotionPwmSince) >= 400)
+          )
+        );
+        state.pid = Object.assign({}, m, {
+          receivedAt: now,
+          maxAbsPwm,
+          maxAbsTarget,
+          maxAbsMeas,
+          anyBlocked,
+          lastBrakeAt,
+          zeroMotionPwmSince,
+          noMotorPowerDetected
+        });
+        emit('pid', state.pid);
+        break;
+      }
       case 'bno08x_imu':
         state.imu = Object.assign({}, m, { receivedAt: Date.now() });
         state.imuEuler = quatToEuler(m.orientation);
@@ -228,7 +299,17 @@
         break;
       case 'autonomy_status':
         state.autonomy = m.status || m;
+        if (state.autonomy && state.autonomy.frontSafetyZone) {
+          state.frontZone = evaluateFrontZone({ frontSafetyZone: state.autonomy.frontSafetyZone });
+          emit('front_zone', state.frontZone);
+        }
         emit('autonomy', state.autonomy);
+        break;
+      case 'front_safety_zone':
+        if (m.zone) {
+          state.frontZone = evaluateFrontZone({ frontSafetyZone: m.zone });
+          emit('front_zone', state.frontZone);
+        }
         break;
       case 'localization_status':
         if (m.localization) {
@@ -352,7 +433,7 @@
         let best = -1;
         for (let r = 0; r < 8; r++) {
           const d = ch.grid_mm[tofDisplayToSource(r * 8 + c, rot)];
-          if (d >= 20 && d <= 4000 && (best < 0 || d < best)) best = d;
+          if (typeof d === 'number' && d >= 0 && d <= 4000 && (best < 0 || d < best)) best = d;
         }
         if (best < 0) continue;
         const dm = best / 1000;
@@ -360,16 +441,134 @@
         const sx = dm * Math.cos(a), sy = dm * Math.sin(a);
         const x = m.x + sx * Math.cos(my) - sy * Math.sin(my);
         const y = m.y + sx * Math.sin(my) + sy * Math.cos(my);
-        out.push({ x, y, d: Math.hypot(x, y), slot });
+        out.push({ x, y, d: Math.hypot(x, y), rawMm: best, slot });
       }
     }
     return out;
   }
+
+  function evaluateFrontZone(resp, nowMs) {
+    const now = typeof nowMs === 'number' ? nowMs : Date.now();
+    const offlineBase = {
+      state: 'OFFLINE',
+      active: false,
+      sensorLive: false,
+      intervening: false,
+      intervention: 'NONE',
+      indicatorCode: 'OFFLINE',
+      indicatorLevel: 'offline',
+      indicatorText: 'PROXIMITY — OFFLINE',
+      minMm: null,
+      leftMinMm: null,
+      rightMinMm: null,
+      stopThresholdMm: FRONT_STOP_MM,
+      crawlThresholdMm: FRONT_CRAWL_MM,
+      crawlSpeedMps: FRONT_CRAWL_LINEAR_MPS,
+      receivedAt: now
+    };
+    if (resp && resp.frontSafetyZone && typeof resp.frontSafetyZone === 'object') {
+      const fz = resp.frontSafetyZone;
+      const isOff = fz.state === 'OFFLINE' || fz.sensorLive === false || (resp.stale === true);
+      if (isOff) {
+        return Object.assign({}, offlineBase, fz, {
+          state: 'OFFLINE',
+          active: false,
+          sensorLive: false,
+          intervening: false,
+          intervention: 'NONE',
+          indicatorCode: 'OFFLINE',
+          indicatorLevel: 'offline',
+          indicatorText: 'PROXIMITY — OFFLINE',
+          receivedAt: now
+        });
+      }
+      return Object.assign({
+        stopThresholdMm: FRONT_STOP_MM,
+        crawlThresholdMm: FRONT_CRAWL_MM,
+        crawlSpeedMps: FRONT_CRAWL_LINEAR_MPS,
+        sensorLive: true
+      }, fz, { receivedAt: now });
+    }
+    const data = resp && resp.data;
+    if (!resp || resp.stale || !data || !Array.isArray(data.channels)) return offlineBase;
+    const mapping = resp.mapping || {};
+    const slotMins = {};
+    let anySensorLive = false;
+    for (const slot of Object.keys(TOF_MOUNTS)) {
+      const chIdx = mapping[slot];
+      if (typeof chIdx !== 'number') continue;
+      const ch = data.channels.find(c => c && c.ch === chIdx);
+      if (!ch || !ch.present || !ch.init || !(ch.age_ms <= 1000)) continue;
+      anySensorLive = true;
+      let best = null;
+      if (Array.isArray(ch.grid_mm)) {
+        for (let i = 0; i < ch.grid_mm.length; i++) {
+          const d = ch.grid_mm[i];
+          if (typeof d === 'number' && isFinite(d) && d >= 0 && d <= 4000) {
+            if (best === null || d < best) best = d;
+          }
+        }
+      }
+      if (best === null && typeof ch.min_mm === 'number' && ch.min_mm >= 0 && ch.min_mm <= 4000) {
+        best = ch.min_mm;
+      }
+      slotMins[slot] = best;
+    }
+    if (!anySensorLive) return offlineBase;
+    const leftMinMm = slotMins.front_left_l7cx !== undefined ? slotMins.front_left_l7cx : null;
+    const rightMinMm = slotMins.front_right_l7cx !== undefined ? slotMins.front_right_l7cx : null;
+    let minMm = null;
+    if (leftMinMm !== null && rightMinMm !== null) minMm = Math.min(leftMinMm, rightMinMm);
+    else if (leftMinMm !== null) minMm = leftMinMm;
+    else if (rightMinMm !== null) minMm = rightMinMm;
+
+    let zState = 'CLEAR';
+    let indCode = 'CLEAR';
+    let indLevel = 'clear';
+    let indText = 'PROXIMITY — CLEAR';
+    if (minMm !== null && minMm <= FRONT_STOP_MM) {
+      zState = 'STOP';
+      indCode = 'STOP_ZONE';
+      indLevel = 'bad';
+      indText = 'PROXIMITY — STOP ZONE';
+    } else if (minMm !== null && minMm <= FRONT_CRAWL_MM) {
+      zState = 'CRAWL';
+      indCode = 'CRAWL_ZONE';
+      indLevel = 'warn';
+      indText = 'PROXIMITY — CRAWL ZONE';
+    }
+
+    return {
+      state: zState,
+      active: zState !== 'CLEAR',
+      sensorLive: true,
+      intervening: false,
+      intervention: 'NONE',
+      indicatorCode: indCode,
+      indicatorLevel: indLevel,
+      indicatorText: indText,
+      minMm,
+      leftMinMm,
+      rightMinMm,
+      stopThresholdMm: FRONT_STOP_MM,
+      crawlThresholdMm: FRONT_CRAWL_MM,
+      crawlSpeedMps: FRONT_CRAWL_LINEAR_MPS,
+      receivedAt: now
+    };
+  }
+
   async function pollTofSensors() {
     const r = await api('/api/tof-sensors', { timeoutMs: 1500 });
-    if (!r.ok || !r.data) return false;
+    if (!r.ok || !r.data) {
+      if (state.frontZone && state.frontZone.receivedAt && (Date.now() - state.frontZone.receivedAt) > FRONT_ZONE_STALE_MS) {
+        emit('front_zone', state.frontZone);
+      }
+      return false;
+    }
     state.tof = { points: tofToRobotFrame(r.data), t: Date.now() };
+    state.frontZone = evaluateFrontZone(r.data);
     emit('tof', state.tof);
+    emit('front_zone', state.frontZone);
     return true;
   }
 
@@ -549,8 +748,8 @@
   function driveTick() {
     const v = currentDriveVector();
     const thr = Math.min(1, drive.throttle * v.boost);
-    const x = clamp(v.x * thr, -1, 1);
-    const y = clamp(v.y * thr, -1, 1);
+    let x = clamp(v.x * thr, -1, 1);
+    let y = clamp(v.y * thr, -1, 1);
     const nonZero = Math.abs(x) > 0.001 || Math.abs(y) > 0.001;
     let sent = { x: 0, y: 0 };
     if (nonZero) {
@@ -561,6 +760,12 @@
       } else if (!state.drive || !state.drive.armed) {
         hint('Drivetrain DISARMED — click ARM first');
       } else {
+        const fz = state.frontZone;
+        if (fz && fz.state === 'STOP' && y >= -0.001) {
+          hint(`🛑 FRONT STOP (${fz.minMm} mm ≤ ${FRONT_STOP_MM} mm) — forward stopped (reverse allowed)`);
+        } else if (fz && fz.state === 'CRAWL' && y > 0.001) {
+          hint(`⚠️ FRONT CRAWL (${fz.minMm} mm ≤ ${FRONT_CRAWL_MM} mm) — slowed to crawl`);
+        }
         wsSend({ type: 'joystick', x, y, keepalive: true });
         drive.zeroFramesLeft = JOY_ZERO_FRAMES;
         sent = { x, y };
@@ -573,7 +778,7 @@
     emit('drive_cmd', { x: sent.x, y: sent.y, rawX: v.x, rawY: v.y, src: v.src });
   }
 
-  // Estimated commanded velocity (mirrors server.js joystick shaping) for display only.
+  // Estimated commanded velocity (mirrors server.js joystick shaping + front safety zone) for display only.
   function estimateCommandedVelocity(x, y) {
     const throttle = Math.abs(y) < 0.10 ? 0 : Math.sign(y) * Math.pow(Math.abs(y), 2.0);
     let turn = 0;
@@ -581,7 +786,26 @@
       const n = (Math.abs(x) - 0.10) / 0.90;
       turn = Math.sign(x) * (0.35 + Math.pow(n, 1.5) * 0.65);
     }
-    return { linear: throttle * MANUAL_MAX_LINEAR_MPS, angular: -turn * MANUAL_MAX_ANGULAR_RADPS };
+    let linear = throttle * MANUAL_MAX_LINEAR_MPS;
+    let angular = -turn * MANUAL_MAX_ANGULAR_RADPS;
+    const fz = state.frontZone;
+    if (fz && fz.state === 'STOP') {
+      if (linear >= -1e-4) {
+        linear = 0;
+        angular = 0;
+      } else {
+        angular = clamp(angular, -FRONT_CRAWL_ANGULAR_RADPS, FRONT_CRAWL_ANGULAR_RADPS);
+      }
+    } else if (fz && fz.state === 'CRAWL') {
+      if (linear > FRONT_CRAWL_LINEAR_MPS) {
+        const scale = FRONT_CRAWL_LINEAR_MPS / linear;
+        linear = FRONT_CRAWL_LINEAR_MPS;
+        angular = clamp(angular * scale, -FRONT_CRAWL_ANGULAR_RADPS, FRONT_CRAWL_ANGULAR_RADPS);
+      } else if (Math.abs(linear) <= 1e-4 && Math.abs(angular) > FRONT_CRAWL_ANGULAR_RADPS) {
+        angular = clamp(angular, -FRONT_CRAWL_ANGULAR_RADPS, FRONT_CRAWL_ANGULAR_RADPS);
+      }
+    }
+    return { linear, angular };
   }
 
   // ────────────────────────────────────────────────────────────
@@ -967,7 +1191,93 @@
   }
 
   // ────────────────────────────────────────────────────────────
-  // Radar renderer (Rover 2 obstacle radar look, LiDAR only)
+  // Radar Proximity Indicator (authoritative server frontSafetyZone)
+  // ────────────────────────────────────────────────────────────
+  function evaluateRadarDriveIndicator(nowMs) {
+    const now = typeof nowMs === 'number' ? nowMs : Date.now();
+    const fz = state.frontZone || null;
+
+    const isStaleByAge = Boolean(
+      fz && (
+        (typeof fz.receivedAt === 'number' && fz.receivedAt > 0 && (now - fz.receivedAt) > FRONT_ZONE_STALE_MS) ||
+        (typeof fz.hostAgeMs === 'number' && fz.hostAgeMs > FRONT_ZONE_STALE_MS)
+      )
+    );
+    const isOffline = Boolean(
+      !fz ||
+      fz.stale === true ||
+      fz.sensorLive === false ||
+      fz.state === 'OFFLINE' ||
+      fz.indicatorCode === 'OFFLINE' ||
+      isStaleByAge
+    );
+
+    if (isOffline) {
+      return {
+        code: 'OFFLINE',
+        level: 'offline',
+        text: 'PROXIMITY — OFFLINE',
+        shortText: 'PROXIMITY — OFFLINE',
+        state: 'OFFLINE',
+        sensorLive: false,
+        intervening: false,
+        slowDownOverride: false,
+        brakeApplied: false,
+        zoneActive: false,
+        minMm: null
+      };
+    }
+
+    const zState = fz.state || 'CLEAR';
+    const intervening = Boolean(
+      fz.intervening === true ||
+      fz.indicatorCode === 'SLOWING' ||
+      fz.indicatorCode === 'STOP'
+    );
+
+    let code = 'CLEAR';
+    let level = 'clear';
+    let text = 'PROXIMITY — CLEAR';
+
+    if (zState === 'STOP' || fz.indicatorCode === 'STOP' || fz.indicatorCode === 'STOP_ZONE') {
+      if (intervening) {
+        code = 'STOP';
+        level = 'bad';
+        text = 'PROXIMITY — STOP';
+      } else {
+        code = 'STOP_ZONE';
+        level = 'bad';
+        text = 'PROXIMITY — STOP ZONE';
+      }
+    } else if (zState === 'CRAWL' || fz.indicatorCode === 'SLOWING' || fz.indicatorCode === 'CRAWL_ZONE') {
+      if (intervening) {
+        code = 'SLOWING';
+        level = 'warn';
+        text = 'PROXIMITY — SLOWING';
+      } else {
+        code = 'CRAWL_ZONE';
+        level = 'warn';
+        text = 'PROXIMITY — CRAWL ZONE';
+      }
+    }
+
+    return {
+      code,
+      level,
+      text,
+      shortText: text,
+      state: zState,
+      sensorLive: true,
+      intervening,
+      slowDownOverride: code === 'SLOWING',
+      brakeApplied: code === 'STOP',
+      zoneActive: zState === 'CRAWL' || zState === 'STOP',
+      minMm: isNum(fz.minMm) ? fz.minMm : null
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Radar renderer (Rover 2 obstacle radar look, LiDAR + Front ToF)
   // ────────────────────────────────────────────────────────────
   function radarRings(maxR) {
     if (maxR <= 0.3) return [0.1, 0.2, 0.25];
@@ -983,8 +1293,11 @@
     const maxR = (opts && opts.maxRange) || 3.0;
     const colorMode = (opts && opts.color) || 'range';
     const ptSize = (opts && opts.pointSize) || 2.4;
-    const cx = size / 2, cy = size / 2;
-    const outer = size * 0.377;
+    const cx = size / 2;
+    // Shift radar circles slightly above vertical center so the bottom margin of the radar box
+    // (outside the outer radar circle) has dedicated clearance for the override/brake/power indicator.
+    const cy = Math.round(size * 0.445);
+    const outer = size * 0.335;
     const scale = outer / maxR;
     ctx.fillStyle = '#030508';
     ctx.fillRect(0, 0, size, size);
@@ -998,17 +1311,22 @@
     });
     ctx.strokeStyle = 'rgba(0, 255, 204, 0.15)';
     ctx.beginPath();
-    ctx.moveTo(cx, cy - outer - 4); ctx.lineTo(cx, cy + outer + 4);
-    ctx.moveTo(cx - outer - 4, cy); ctx.lineTo(cx + outer + 4, cy);
+    ctx.moveTo(cx, cy - outer - 3); ctx.lineTo(cx, cy + outer + 3);
+    ctx.moveTo(cx - outer - 3, cy); ctx.lineTo(cx + outer + 3, cy);
     ctx.stroke();
     if (size >= 200) {
       ctx.fillStyle = 'rgba(95, 122, 145, 0.75)'; ctx.font = '8px Segoe UI, sans-serif';
       ctx.textAlign = 'left'; ctx.fillText('LEFT', 6, cy - 3);
       ctx.textAlign = 'right'; ctx.fillText('RIGHT', size - 6, cy - 3);
-      ctx.textAlign = 'center'; ctx.fillText('FWD', cx, 26); ctx.fillText('REAR', cx, size - 16);
+      ctx.textAlign = 'center';
+      ctx.fillText('FWD', cx, Math.max(12, Math.round(cy - outer - 5)));
+      ctx.fillText('REAR', cx, Math.round(cy + outer + 11));
       ctx.textAlign = 'left';
     }
     const rw = Math.max(6, 0.34 * scale), rl = Math.max(8, 0.30 * scale);
+    const fz = state.frontZone || { state: 'CLEAR', minMm: null };
+    const driveIndicator = evaluateRadarDriveIndicator();
+
     ctx.strokeStyle = 'rgba(0, 255, 204, 0.45)'; ctx.fillStyle = 'rgba(0, 255, 204, 0.08)';
     ctx.fillRect(cx - rw / 2, cy - rl / 2, rw, rl); ctx.strokeRect(cx - rw / 2, cy - rl / 2, rw, rl);
     ctx.fillStyle = '#00ffcc'; ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, 2 * Math.PI); ctx.fill();
@@ -1042,7 +1360,52 @@
         ctx.fillRect(cx - p.y * scale - tsz / 2, cy - p.x * scale - tsz / 2, tsz, tsz);
       }
     }
-    return { live: Boolean(lidarLive || tofLive), lidarLive, tofLive, nearest };
+    // On mobile/canvas radar views without the DOM #hud-radar-drive-ind bar (or when explicitly
+    // requested via opts.drawIndicatorOnCanvas), render the proximity indicator strip in the
+    // dedicated bottom margin below the radar circles at all responsive sizes (<200 and >=200).
+    const hasDomInd = Boolean(global.document && global.document.getElementById && global.document.getElementById('hud-radar-drive-ind'));
+    const drawOnCanvas = (opts && typeof opts.drawIndicatorOnCanvas === 'boolean') ? opts.drawIndicatorOnCanvas : !hasDomInd;
+    if (drawOnCanvas) {
+      const barH = Math.max(14, Math.min(20, Math.round(size * 0.08)));
+      const padX = Math.max(3, Math.round(size * 0.02));
+      const padBottom = Math.max(2, Math.round(size * 0.012));
+      const barY = size - barH - padBottom;
+      const barX = padX;
+      const barW = Math.max(40, size - padX * 2);
+      if (driveIndicator.level === 'bad') {
+        ctx.fillStyle = 'rgba(255, 42, 75, 0.30)';
+        ctx.strokeStyle = '#ff2a4b';
+      } else if (driveIndicator.level === 'warn') {
+        ctx.fillStyle = 'rgba(255, 170, 0, 0.25)';
+        ctx.strokeStyle = '#ffaa00';
+      } else if (driveIndicator.level === 'clear') {
+        ctx.fillStyle = 'rgba(16, 28, 42, 0.85)';
+        ctx.strokeStyle = 'rgba(0, 255, 204, 0.35)';
+      } else {
+        ctx.fillStyle = 'rgba(20, 27, 36, 0.78)';
+        ctx.strokeStyle = 'rgba(115, 134, 153, 0.45)';
+      }
+      ctx.fillRect(barX, barY, barW, barH);
+      ctx.strokeRect(barX, barY, barW, barH);
+      ctx.fillStyle = driveIndicator.level === 'bad' ? '#ffccd5' : (
+        driveIndicator.level === 'warn' ? '#ffdd55' : (
+          driveIndicator.level === 'clear' ? '#b8d4e8' : '#7f93a6'
+        )
+      );
+      const fontPx = Math.max(8, Math.min(10, Math.round(size * 0.048)));
+      ctx.font = `bold ${fontPx}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(driveIndicator.text, cx, Math.round(barY + barH * 0.70), barW - 6);
+      ctx.textAlign = 'left';
+    }
+    return {
+      live: Boolean(lidarLive || tofLive),
+      lidarLive,
+      tofLive,
+      nearest,
+      frontZone: fz,
+      driveIndicator
+    };
   }
 
   // ────────────────────────────────────────────────────────────
@@ -1118,14 +1481,15 @@
 
   global.RoverHUD = {
     TOKEN_KEY, JOY_SEND_HZ, LIDAR_MIN_RANGE_M,
+    FRONT_STOP_MM, FRONT_CRAWL_MM, FRONT_CRAWL_LINEAR_MPS, FRONT_CRAWL_ANGULAR_RADPS, FRONT_ZONE_STALE_MS,
     state, on, emit, start, api,
     getToken, setToken, wsSend,
-    getPose, quatToEuler, normAngle, toPath, lidarPointsToRobotFrame, tofToRobotFrame, tofDisplayToSource,
+    getPose, quatToEuler, normAngle, toPath, lidarPointsToRobotFrame, tofToRobotFrame, tofDisplayToSource, evaluateFrontZone, evaluateRadarDriveIndicator,
     setThrottle, getThrottle, setDriveInput, clearDriveInput, releaseAllDriveInputs, estimateCommandedVelocity,
     emergencyStop, arm, disarm,
     planPath, dispatchGoal, cancelNav, initHome, homeGoal, relativeGoal, parseMissionScript, previewMission,
     createMapView, worldToCanvas, canvasToWorld, drawMap, updateTrail, drawRadar,
     tempColor, formatMinutes, batteryView,
-    _driveTick: driveTick, _handleMessage: handleMessage
+    _driveTick: driveTick, _handleMessage: handleMessage, _connect: connect
   };
 })(typeof window !== 'undefined' ? window : globalThis);

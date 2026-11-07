@@ -210,15 +210,26 @@
   });
   function sizeRadar() {
     const r = radar.getBoundingClientRect();
-    radarSize = Math.max(80, Math.round(Math.min(r.width, r.height)));
+    const dim = Math.round(Math.min(r.width || 0, r.height || 0));
+    radarSize = dim >= 80 ? dim : 140;
     radar.width = radarSize; radar.height = radarSize;
   }
   window.addEventListener('resize', sizeRadar);
   setTimeout(sizeRadar, 60);
   setInterval(() => {
     const curRange = radarRanges[radarRangeIdx];
-    const res = H.drawRadar(rctx, radarSize, { maxRange: curRange, color: 'range', pointSize: 2 });
-    if (res && res.live && res.nearest) {
+    const res = H.drawRadar(rctx, radarSize, { maxRange: curRange, color: 'range', pointSize: 2, drawIndicatorOnCanvas: true });
+    const fz = res && res.frontZone;
+    const dInd = res && res.driveIndicator;
+    if (dInd && dInd.code === 'STOP') {
+      setText('hMin', `🛑 PROXIMITY — STOP (${fz.minMm} mm)`);
+    } else if (dInd && dInd.code === 'STOP_ZONE') {
+      setText('hMin', `🛑 STOP ZONE ${fz.minMm} mm (≤10mm)`);
+    } else if (dInd && dInd.code === 'SLOWING') {
+      setText('hMin', `⚠️ PROXIMITY — SLOWING (${fz.minMm} mm)`);
+    } else if (dInd && dInd.code === 'CRAWL_ZONE') {
+      setText('hMin', `⚠️ CRAWL ZONE ${fz.minMm} mm (≤50mm)`);
+    } else if (res && res.live && res.nearest) {
       const tag = res.lidarLive ? 'LIDAR' : 'TOF';
       setText('hMin', `${tag} ${res.nearest.d.toFixed(2)} m (${(res.nearest.d / 0.0254).toFixed(1)} in)`);
     } else {

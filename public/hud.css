@@ -145,6 +145,29 @@ canvas#lidar-canvas {
   display: block; width: 100%; border-radius: 4px; background: #030508;
   border: 1px solid rgba(0, 255, 204, 0.15);
 }
+.radar-drive-ind {
+  position: absolute; bottom: 3px; left: 5px; right: 5px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; font-size: 9.5px; font-family: monospace; font-weight: 800;
+  letter-spacing: 0.35px; pointer-events: none; box-sizing: border-box;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px;
+}
+.radar-drive-ind.ind-clear,
+.radar-drive-ind.ind-ok {
+  background: rgba(16, 28, 42, 0.85); border: 1px solid rgba(0, 255, 204, 0.35); color: #b8d4e8;
+}
+.radar-drive-ind.ind-warn {
+  background: rgba(255, 170, 0, 0.25); border: 1px solid #ffaa00; color: #ffdd55;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.35);
+}
+.radar-drive-ind.ind-bad {
+  background: rgba(255, 42, 75, 0.30); border: 1px solid #ff2a4b; color: #ffccd5;
+  box-shadow: 0 0 10px rgba(255, 42, 75, 0.45);
+}
+.radar-drive-ind.ind-offline,
+.radar-drive-ind.ind-nopwr {
+  background: rgba(20, 27, 36, 0.78); border: 1px solid rgba(115, 134, 153, 0.45); color: #7f93a6;
+}
 
 /* AI Overlay Canvas */
 #ai-canvas {

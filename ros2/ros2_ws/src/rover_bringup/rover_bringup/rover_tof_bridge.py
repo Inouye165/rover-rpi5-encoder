@@ -45,7 +45,7 @@ def display_to_source_index(z_disp, rot):
     return z_disp
 
 
-def grid_to_points(grid_mm, rot, range_min_m=0.02, range_max_m=4.0):
+def grid_to_points(grid_mm, rot, range_min_m=0.0, range_max_m=4.0):
     """Convert a raw 64-zone grid (mm, -1 = no target) into (x, y, z) points in
     the sensor frame (x forward, y left, z up). Returns a list of tuples."""
     pts = []
@@ -95,7 +95,7 @@ class RoverTofBridgeNode(Node):
         default_url = os.environ.get("ROVER_SERVER_URL", "http://127.0.0.1:3000")
         self.declare_parameter("server_url", default_url)
         self.declare_parameter("poll_rate_hz", 10.0)
-        self.declare_parameter("range_min_m", 0.02)
+        self.declare_parameter("range_min_m", 0.0)
         self.declare_parameter("range_max_m", 4.0)
         self.declare_parameter("max_age_ms", 1000)
         self.url = self.get_parameter("server_url").value.rstrip("/") + "/api/tof-sensors"

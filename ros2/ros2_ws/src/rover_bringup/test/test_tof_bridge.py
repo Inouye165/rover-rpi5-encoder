@@ -126,6 +126,18 @@ def test_grid_to_points_respects_range_bounds():
     assert math.isclose(r0, 0.25, rel_tol=1e-6)
 
 
+def test_grid_to_points_preserves_close_stop_and_crawl_zone_readings_by_default():
+    grid = [-1] * 64
+    grid[0] = 8    # 8 mm (inside <=10 mm stop zone)
+    grid[1] = 45   # 45 mm (inside <=50 mm crawl zone)
+    pts = grid_to_points(grid, rot="none")
+    assert len(pts) == 2
+    r0 = math.sqrt(pts[0][0] ** 2 + pts[0][1] ** 2 + pts[0][2] ** 2)
+    r1 = math.sqrt(pts[1][0] ** 2 + pts[1][1] ** 2 + pts[1][2] ** 2)
+    assert math.isclose(r0, 0.008, rel_tol=1e-6)
+    assert math.isclose(r1, 0.045, rel_tol=1e-6)
+
+
 def test_build_pointcloud2_packs_xyz_float32():
     pts = [(0.25, 0.05, -0.02), (0.80, -0.10, 0.04)]
     msg = build_pointcloud2(pts, "tof_front_left_link", 123, 456000)

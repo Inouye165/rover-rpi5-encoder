@@ -274,6 +274,17 @@
   // ── Radar ──────────────────────────────────────────────────
   const radarCanvas = $('lidar-canvas');
   const radarCtx = radarCanvas.getContext('2d');
+  function refreshRadarDriveIndicator(ind) {
+    const el = $('hud-radar-drive-ind');
+    if (!el) return;
+    const d = ind || H.evaluateRadarDriveIndicator();
+    if (el.textContent !== d.text) el.textContent = d.text;
+    el.title = (typeof d.minMm === 'number' && isFinite(d.minMm)) ? `${d.text} (${d.minMm} mm)` : d.text;
+    el.classList.remove('ind-clear', 'ind-warn', 'ind-bad', 'ind-offline', 'ind-ok', 'ind-nopwr');
+    el.classList.add(`ind-${d.level || 'offline'}`);
+  }
+  H.on('front_zone', () => refreshRadarDriveIndicator());
+  H.on('connection', () => refreshRadarDriveIndicator());
   function redrawRadar() {
     const rBox = radarCanvas.getBoundingClientRect && radarCanvas.getBoundingClientRect();
     const rSize = (rBox && rBox.width > 80) ? Math.round(rBox.width) : 260;
@@ -284,21 +295,37 @@
     const res = H.drawRadar(radarCtx, rSize, {
       maxRange: parseFloat($('sel-radar-range').value),
       color: $('sel-radar-color').value,
-      pointSize: parseFloat($('sel-radar-ptsize').value)
+      pointSize: parseFloat($('sel-radar-ptsize').value),
+      drawIndicatorOnCanvas: false
     });
+    refreshRadarDriveIndicator(res && res.driveIndicator);
     const sc = H.state.scan;
     const tf = H.state.tof;
     const ls = H.state.lidarStatus;
     const badge = $('stat-radar-badge');
     if (res && res.live) {
-      if (res.lidarLive && res.tofLive) {
+      const fz = res.frontZone;
+      const dInd = res.driveIndicator;
+      if (dInd && dInd.code === 'STOP') {
+        badge.textContent = `🛑 STOP (${fz.minMm}mm)`; badge.style.color = '#ff2a4b';
+      } else if (dInd && dInd.code === 'STOP_ZONE') {
+        badge.textContent = `🛑 STOP ZONE (${fz.minMm}mm)`; badge.style.color = '#ff2a4b';
+      } else if (dInd && dInd.code === 'SLOWING') {
+        badge.textContent = `⚠️ SLOWING (${fz.minMm}mm)`; badge.style.color = '#ffaa00';
+      } else if (dInd && dInd.code === 'CRAWL_ZONE') {
+        badge.textContent = `⚠️ CRAWL ZONE (${fz.minMm}mm)`; badge.style.color = '#ffaa00';
+      } else if (res.lidarLive && res.tofLive) {
         badge.textContent = 'LIDAR + TOF LIVE'; badge.style.color = '#00ff88';
-        setText('hud-lidar-stat', '360° LIDAR + TOF: LIVE');
       } else if (res.lidarLive) {
         badge.textContent = '360° LIDAR LIVE'; badge.style.color = '#00ff88';
-        setText('hud-lidar-stat', '360° LIDAR: LIVE');
       } else {
         badge.textContent = 'FRONT TOF LIVE'; badge.style.color = '#ff44ee';
+      }
+      if (res.lidarLive && res.tofLive) {
+        setText('hud-lidar-stat', '360° LIDAR + TOF: LIVE');
+      } else if (res.lidarLive) {
+        setText('hud-lidar-stat', '360° LIDAR: LIVE');
+      } else {
         setText('hud-lidar-stat', 'FRONT TOF: LIVE (LIDAR OFF)');
       }
       setText('hud-nearest-stat', res.nearest ? `NEAREST: ${res.nearest.d.toFixed(2)} m` : 'NEAREST: --');
@@ -317,6 +344,7 @@
     setText('disp-lidar-hz', isNum(sc.scanHz) && res && res.lidarLive ? `${sc.scanHz.toFixed(1)} Hz` : '-- Hz');
   }
   ['sel-radar-range', 'sel-radar-color', 'sel-radar-ptsize'].forEach(id => $(id).addEventListener('change', redrawRadar));
+  ['drive', 'pid', 'front_zone', 'serial', 'connection', 'estop'].forEach(evt => H.on(evt, () => refreshRadarDriveIndicator()));
   setInterval(redrawRadar, 150);
   H.on('lidar_status', (ls) => {
     setText('disp-lidar-dev', ls.model || 'RPLiDAR C1');
