@@ -33,10 +33,12 @@ Because the post-session code & firmware audit fixes were committed while Rover 
 
 ## 2. Time-of-Flight (`TCA9548A` + `VL53L7CX` / `VL53L4CD`) Tasks
 
-- [x] **2A. Measure Exact Physical Lateral Separation for Front-Corner `VL53L7CX` Sensors**:
-  - Measured 125 mm lateral separation symmetrically centered across the front (`y = ±0.0625 m`), angled `±8°` outward.
+- [x] **2A. Measure Exact Physical Lateral Separation & Front Proximity Safety Zone**:
+  - Measured 125 mm lateral separation symmetrically centered across the front (`y = ±0.0625 m`), retaining existing `±8°` outward angles.
   - Updated both [`foundation.launch.py`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/ros2/ros2_ws/src/rover_bringup/launch/foundation.launch.py) and `TOF_MOUNTS` in [`public/hud-core.js`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/public/hud-core.js).
-  - Forward position (`x = +0.14 m`) and height (`z = +0.08 m`) remain unverified placeholder measurements until physically measured.
+  - Forward position (`x = +0.14 m`) and height (`z = +0.08 m`) remain unverified placeholder measurements; further physical alignment calibration deferred as unnecessary for the current proximity task.
+  - Implemented authoritative Front Obstacle Safety Zone: yellow/crawl at $\le 75\text{ mm}$, red/stop at $\le 30\text{ mm}$, with reverse escape preserved.
+  - Operator verified actual wheel slowdown and stop response on a raised platform with spinning wheels (floor-driving stopping distance not tested). Proximity indicator and sensor-spacing task complete.
 
 - [ ] **2B. Decide Physical Role & Mapping for `CH 2` (`VL53L4CD`)**:
   - `CH 2` (`VL53L4CD`, `0x29`, `MODEL=0xEBAA`) is initialized and live in `/api/tof-sensors` and `http://10.0.0.246:3000/sensors.html`, but intentionally unassigned (`unassigned`) and excluded from ROS 2 / HUD Radar.

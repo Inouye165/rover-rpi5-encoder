@@ -28,7 +28,7 @@
 
 ---
 
-## 2. ROS 2 & HUD Radar Integration Summary (2026-11-05)
+## 2. ROS 2 & HUD Radar Integration Summary (2026-11-05 – 2026-11-07)
 
 ### A. ROS 2 Bridge (`rover_tof_bridge.py` & `foundation.launch.py`)
 - **[`rover_tof_bridge.py`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/ros2/ros2_ws/src/rover_bringup/rover_bringup/rover_tof_bridge.py)** polls `http://127.0.0.1:3000/api/tof-sensors` at `10 Hz` using a persistent `requests.Session()` and publishes:
@@ -47,6 +47,18 @@
   - **`0.5 m (20 in)`** — rings at `10cm`, `25cm`, `50cm`
   - **`1.0 m (3.3 ft)`** — rings at `0.25m`, `0.5m`, `1m`
   - Plus existing `2 m`, `3 m`, `5 m`, `8 m` ranges.
+
+### C. Front Obstacle Safety Zone & Operator Acceptance (`front_safety_zone.js`, `server.js`)
+- **Authoritative Safety Thresholds**:
+  - **Above 75 mm**: Normal operation (`CLEAR`).
+  - **Above 30 mm through 75 mm**: Yellow warning, forward crawl speed restriction (`0.03 m/s`).
+  - **0 through 30 mm**: Red warning, stops all forward and in-place motion (`0.0 m/s`).
+  - Reverse escape (`vx < 0`) is always preserved to allow backing away from obstacles.
+- **Operator Verification (2026-11-07)**:
+  - Ron physically verified actual wheel response on a raised platform with wheels spinning: slowdown occurs at $\le 75\text{ mm}$ and full stop occurs at $\le 30\text{ mm}$, with reverse motion preserved.
+  - Floor-driving stopping distance under rover momentum was not tested.
+  - Front sensor lateral spacing corrected to 125 mm (`y = ±0.0625 m`), retaining existing $\pm 8^\circ$ angles.
+  - Further physical alignment calibration deferred as unnecessary for the current proximity task. Remaining mounting placeholders ($x = +0.14\text{ m}$, $z = +0.08\text{ m}$) remain identified. Task closed out as complete.
 
 ---
 
