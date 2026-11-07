@@ -400,11 +400,11 @@
     return out;
   }
 
-  // Front-corner VL53L7CX 8x8 ToF sensors (mount offsets are assumed placeholders, keep in
-  // sync with foundation.launch.py): robot frame x forward, y left, mounts angled 8 deg outward.
+  // Front-corner VL53L7CX 8x8 ToF sensors: 125 mm measured lateral separation, centered symmetrically (y = ±0.0625 m),
+  // angled ±8° outward. Note: forward position x (+0.14 m) and height z (+0.08 m) remain unverified measurements.
   const TOF_MOUNTS = {
-    front_left_l7cx:  { x: 0.14, y:  0.08, yawDeg:  8 },
-    front_right_l7cx: { x: 0.14, y: -0.08, yawDeg: -8 },
+    front_left_l7cx:  { x: 0.14, y:  0.0625, yawDeg:  8 },
+    front_right_l7cx: { x: 0.14, y: -0.0625, yawDeg: -8 },
   };
   function tofDisplayToSource(z, rot) {
     const r = Math.floor(z / 8), c = z % 8;
@@ -1482,6 +1482,7 @@
   global.RoverHUD = {
     TOKEN_KEY, JOY_SEND_HZ, LIDAR_MIN_RANGE_M,
     FRONT_STOP_MM, FRONT_CRAWL_MM, FRONT_CRAWL_LINEAR_MPS, FRONT_CRAWL_ANGULAR_RADPS, FRONT_ZONE_STALE_MS,
+    TOF_MOUNTS,
     state, on, emit, start, api,
     getToken, setToken, wsSend,
     getPose, quatToEuler, normAngle, toPath, lidarPointsToRobotFrame, tofToRobotFrame, tofDisplayToSource, evaluateFrontZone, evaluateRadarDriveIndicator,

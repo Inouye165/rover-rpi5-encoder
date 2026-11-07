@@ -56,8 +56,8 @@ With `base_link` at the physical center of the rover (`+X` forward, `+Y` left, `
 | `odom` | `base_link` | Dynamic (`rover_encoder_odometry`) | Dynamic | Calibrated effective wheel diameter `0.06695 m` (`1974.1667` ticks/rev). |
 | `base_link` | `laser_frame` | `(+0.03175, 0.0, +0.17145)` | `(0, 0, 0)` | RPLiDAR C1 optical center (`17.15 cm` above `base_link`). |
 | `base_link` | `imu_link` | `(-0.0254, -0.0254, +0.14605)` | `(0, 0, 0)` | Adafruit BNO08x IMU (`SH2_GAME_ROTATION_VECTOR_NON_MAGNETIC`). |
-| `base_link` | `tof_front_left_link` | `(+0.14, +0.08, +0.08)` *(placeholder)* | `(0, 0, +0.139626 rad [+8°])` | Front-Left `VL53L7CX` 8×8 (`CH 1`), angled $+8^\circ$ outward. |
-| `base_link` | `tof_front_right_link` | `(+0.14, -0.08, +0.08)` *(placeholder)* | `(0, 0, -0.139626 rad [-8°])` | Front-Right `VL53L7CX` 8×8 (`CH 0`), angled $-8^\circ$ outward. |
+| `base_link` | `tof_front_left_link` | `(+0.14, +0.0625, +0.08)` *(x, z unverified)* | `(0, 0, +0.139626 rad [+8°])` | Front-Left `VL53L7CX` 8×8 (`CH 1`), 125 mm separation, angled $+8^\circ$ outward. |
+| `base_link` | `tof_front_right_link` | `(+0.14, -0.0625, +0.08)` *(x, z unverified)* | `(0, 0, -0.139626 rad [-8°])` | Front-Right `VL53L7CX` 8×8 (`CH 0`), 125 mm separation, angled $-8^\circ$ outward. |
 
 ---
 

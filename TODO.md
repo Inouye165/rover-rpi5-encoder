@@ -33,11 +33,10 @@ Because the post-session code & firmware audit fixes were committed while Rover 
 
 ## 2. Time-of-Flight (`TCA9548A` + `VL53L7CX` / `VL53L4CD`) Tasks
 
-- [ ] **2A. Measure Exact Physical Mount Offsets for Front-Corner `VL53L7CX` Sensors**:
-  - Currently, `base_link -> tof_front_left_link` and `base_link -> tof_front_right_link` use placeholder offsets (`x = +0.14 m`, `y = ±0.08 m`, `z = +0.08 m`, `yaw = ±8°` [`±0.139626 rad`]).
-  - Measure the exact physical `(x, y, z)` distance from `base_link` (chassis center) to each front corner sensor lens and update both:
-    - [`foundation.launch.py`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/ros2/ros2_ws/src/rover_bringup/launch/foundation.launch.py)
-    - `TOF_MOUNTS` in [`public/hud-core.js`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/public/hud-core.js)
+- [x] **2A. Measure Exact Physical Lateral Separation for Front-Corner `VL53L7CX` Sensors**:
+  - Measured 125 mm lateral separation symmetrically centered across the front (`y = ±0.0625 m`), angled `±8°` outward.
+  - Updated both [`foundation.launch.py`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/ros2/ros2_ws/src/rover_bringup/launch/foundation.launch.py) and `TOF_MOUNTS` in [`public/hud-core.js`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/public/hud-core.js).
+  - Forward position (`x = +0.14 m`) and height (`z = +0.08 m`) remain unverified placeholder measurements until physically measured.
 
 - [ ] **2B. Decide Physical Role & Mapping for `CH 2` (`VL53L4CD`)**:
   - `CH 2` (`VL53L4CD`, `0x29`, `MODEL=0xEBAA`) is initialized and live in `/api/tof-sensors` and `http://10.0.0.246:3000/sensors.html`, but intentionally unassigned (`unassigned`) and excluded from ROS 2 / HUD Radar.

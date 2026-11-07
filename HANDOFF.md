@@ -35,9 +35,9 @@
   - `/tof/front_left/points` (`sensor_msgs/msg/PointCloud2`) & `/tof/front_left/range` (`sensor_msgs/msg/Range`, frame `tof_front_left_link`)
   - `/tof/front_right/points` (`sensor_msgs/msg/PointCloud2`) & `/tof/front_right/range` (`sensor_msgs/msg/Range`, frame `tof_front_right_link`)
 - **[`foundation.launch.py`](file:///c:/Users/Ron/electronic_projects/yahboom-encoder/ros2/ros2_ws/src/rover_bringup/launch/foundation.launch.py)** publishes static TFs from `base_link`:
-  - `base_link -> tof_front_left_link`: `x = +0.14 m, y = +0.08 m, z = +0.08 m, yaw = +0.139626 rad (+8°)`
-  - `base_link -> tof_front_right_link`: `x = +0.14 m, y = -0.08 m, z = +0.08 m, yaw = -0.139626 rad (-8°)`
-  *(Note: `x=0.14, y=±0.08, z=0.08` are initial placeholders; update both `foundation.launch.py` and `TOF_MOUNTS` in `public/hud-core.js` once physically measured with a ruler.)*
+  - `base_link -> tof_front_left_link`: `x = +0.14 m, y = +0.0625 m, z = +0.08 m, yaw = +0.13962634 rad (+8°)`
+  - `base_link -> tof_front_right_link`: `x = +0.14 m, y = -0.0625 m, z = +0.08 m, yaw = -0.13962634 rad (-8°)`
+  *(Note: Lateral separation physically measured at 125 mm [y = ±0.0625 m, ±8° outward]; forward position x = +0.14 m and height z = +0.08 m remain unverified placeholder measurements.)*
 
 ### B. Cockpit HUD Radar Overlay & Micro-Zoom (`public/hud-core.js`, `public/hud.html`, `public/hud-mobile.html`)
 - `tofToRobotFrame()` projects the closest valid zone in each of the 8 display columns per front `VL53L7CX` sensor into `base_link` coordinates (`x` forward, `y` left).

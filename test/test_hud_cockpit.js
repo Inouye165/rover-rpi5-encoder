@@ -237,6 +237,54 @@ async function desktopTests() {
   assert.strictEqual(H.batteryView(null).pct, null);
 
   console.log('Core 5: ToF 8x8 -> robot frame + radar live/nearest with micro zoom');
+  // Verify front ToF mount geometry: 125 mm lateral separation (y = ±0.0625 m), angled ±8° outward
+  assert(H.TOF_MOUNTS, 'RoverHUD must expose TOF_MOUNTS');
+  assert.strictEqual(H.TOF_MOUNTS.front_left_l7cx.y, 0.0625, 'front_left_l7cx lateral position must be y = +0.0625 m');
+  assert.strictEqual(H.TOF_MOUNTS.front_right_l7cx.y, -0.0625, 'front_right_l7cx lateral position must be y = -0.0625 m');
+  assert.strictEqual(H.TOF_MOUNTS.front_left_l7cx.yawDeg, 8, 'front_left_l7cx angle must be +8 deg outward');
+  assert.strictEqual(H.TOF_MOUNTS.front_right_l7cx.yawDeg, -8, 'front_right_l7cx angle must be -8 deg outward');
+  assert.strictEqual(H.TOF_MOUNTS.front_left_l7cx.x, 0.14, 'front_left_l7cx unverified forward position x = +0.14 m preserved');
+  assert.strictEqual(H.TOF_MOUNTS.front_right_l7cx.x, 0.14, 'front_right_l7cx unverified forward position x = +0.14 m preserved');
+  const lateralSepMm = Math.round((H.TOF_MOUNTS.front_left_l7cx.y - H.TOF_MOUNTS.front_right_l7cx.y) * 1000);
+  assert.strictEqual(lateralSepMm, 125, 'lateral separation between front ToF sensors must be exactly 125 mm');
+
+  // Verify projection symmetry for both sensors in the same rover coordinate system
+  const makeColumnGrid = (col, distMm) => {
+    const g = new Array(64).fill(-1);
+    // col 0..7 across row 3 (e.g. index 3*8 + col)
+    g[3 * 8 + col] = distMm;
+    return g;
+  };
+
+  const dualPayload = {
+    stale: false,
+    mapping: {
+      front_left_l7cx: 1,
+      front_left_l7cx_rot: 'none',
+      front_right_l7cx: 0,
+      front_right_l7cx_rot: 'none'
+    },
+    data: {
+      channels: [
+        // Symmetrical ray: col 4 on right sensor mirrors col 3 on left sensor
+        { ch: 0, type: 'VL53L7CX', present: 1, init: 1, age_ms: 30, grid_mm: makeColumnGrid(4, 100) },
+        { ch: 1, type: 'VL53L7CX', present: 1, init: 1, age_ms: 30, grid_mm: makeColumnGrid(3, 100) },
+        { ch: 2, type: 'VL53L4CD', present: 1, init: 1, age_ms: 30, dist_mm: 150 }
+      ]
+    }
+  };
+
+  const dualPts = H.tofToRobotFrame(dualPayload);
+  assert.strictEqual(dualPts.length, 2, 'dual 8x8 ToF readings must produce 2 points (one per sensor); single-zone CH 2 ignored');
+  const ptRight = dualPts.find(p => p.slot === 'front_right_l7cx');
+  const ptLeft = dualPts.find(p => p.slot === 'front_left_l7cx');
+  assert(ptRight && ptLeft, 'both front_left and front_right points must be present');
+  assert(ptRight.x > 0.14 && ptRight.y < 0, 'front-right point must project forward (+x) and right (-y)');
+  assert(ptLeft.x > 0.14 && ptLeft.y > 0, 'front-left point must project forward (+x) and left (+y)');
+  assert(Math.abs(ptLeft.x - ptRight.x) < 1e-4, 'symmetrical obstacles must produce identical forward x coordinates');
+  assert(Math.abs(ptLeft.y - (-ptRight.y)) < 1e-4, 'symmetrical obstacles must produce mirror-symmetric y coordinates');
+  assert(Math.abs(ptLeft.d - ptRight.d) < 1e-4, 'symmetrical obstacles must produce identical radial distances from base_link');
+
   const grid64 = new Array(64).fill(-1);
   grid64[27] = 100; // 0.10 m ahead of front-right ToF sensor
   const tofPayload = {
