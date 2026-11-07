@@ -9,11 +9,14 @@ import re
 
 EXPECTED_ROS_NODES = [
     "/base_link_to_laser_frame_publisher",
+    "/base_link_to_tof_front_left_publisher",
+    "/base_link_to_tof_front_right_publisher",
     "/foxglove_bridge",
     "/rover_cmd_vel_bridge",
     "/rover_encoder_odometry",
     "/rover_lidar_bridge",
     "/rover_system_health",
+    "/rover_tof_bridge",
 ]
 
 EXPECTED_PARAMS = {
@@ -350,7 +353,7 @@ def main():
 
     print("\n=== 4. Rebuilding ROS 2 Workspace inside Container ===")
     if not args.skip_ros_build:
-        colcon_cmd = "sudo docker exec rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && cd /ros2_ws && colcon build --packages-select rover_bringup'"
+        colcon_cmd = "sudo docker exec -u 0 rover-ros2 bash -c 'source /opt/ros/jazzy/setup.bash && cd /ros2_ws && colcon build --packages-select rover_bringup'"
         exit_code, out, err = exec_remote(client, colcon_cmd, password)
         if exit_code != 0:
             print(f"ERROR: colcon build failed inside container:\n{err}", file=sys.stderr)

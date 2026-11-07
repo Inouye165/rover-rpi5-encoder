@@ -1,155 +1,97 @@
-# Rover ROS 2 — Phase 2: LiDAR /scan Bridge
+# Rover 1 — Containerized ROS 2 Jazzy & Nav2 Stack (`ros2/`)
 
-This directory houses the containerized ROS 2 Jazzy environment for the Yahboom Pi 5 Rover.
+This directory houses the containerized **ROS 2 Jazzy** and **Nav2** environment (`rover-ros2`) for **Rover 1** on the Raspberry Pi 5 (`ron@10.0.0.246:/home/ron/yahboom-encoder/ros2`).
 
 ---
 
-## Architecture
+## 1. Hardware Isolation & Ownership Architecture
 
-### Hardware Ownership
-
-> **ROS 2 does NOT own or open the LiDAR serial device.**
+> **The `rover-ros2` Docker container has NO `/dev` mounts and never opens serial ports directly.**
 >
-> The physical RPLIDAR C1 (`/dev/rover-lidar`) is owned exclusively by the host
-> `rover-lidar.service` systemd unit.  The Docker container has **no `/dev`
-> mounts** and cannot access any serial device.  This design ensures that the
-> sidecar remains the single authoritative owner of the LiDAR, preventing
-> concurrent-access failures and keeping the ROS layer fully restartable without
-> touching hardware.
+> - `/dev/rover-esp32` (`1a86:7523` Maker-ESP32-Pro) is owned exclusively by `rover-server.service` (`:3000`).
+> - `/dev/rover-lidar` (`10c4:ea60` RPLiDAR C1) is owned exclusively by `rover-lidar.service` (`:3002`).
+> - `/dev/ttyAMA0` (Lonely Binary ESP32-S3 + `TCA9548A` ToF mux) is owned exclusively by `esp32s3-status-led.service` (`/tmp/esp32s3_tof_state.json` → `:3000/api/tof-sensors`).
+>
+> All ROS 2 bridge nodes communicate with the host exclusively via localhost HTTP APIs (`ROVER_SERVER_URL=http://127.0.0.1:3000`, `ROVER_LIDAR_URL=http://127.0.0.1:3002`).
 
-### Phase 2 Node Graph
-
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Host (Raspberry Pi 5)                                                     │
+│                                                                            │
+│  rover-server.service (:3000)  ◄──► /dev/rover-esp32 (Maker-ESP32-Pro)     │
+│  esp32s3-status-led.service    ◄──► /dev/ttyAMA0     (ESP32-S3 + ToF Mux)  │
+│  rover-lidar.service  (:3002)  ◄──► /dev/rover-lidar (RPLiDAR C1)          │
+│            │                                  │                            │
+│            └──────────────┬───────────────────┘                            │
+│                           ▼  HTTP (localhost :3000 / :3002)                │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Docker container: rover-ros2 (ROS 2 Jazzy, network_mode: host)      │  │
+│  │  Entrypoint: ros2 launch rover_bringup bringup.launch.py             │  │
+│  │                                                                      │  │
+│  │  1. foundation.launch.py (11 nodes):                                 │  │
+│  │     - rover_system_health      ──► /diagnostics                      │  │
+│  │     - rover_lidar_bridge       ──► /scan (LaserScan, laser_frame)    │  │
+│  │     - rover_tof_bridge         ──► /tof/front_{left,right}/{points,range} │
+│  │     - rover_encoder_odometry   ──► /odom + TF (odom -> base_link)    │  │
+│  │     - rover_imu_bridge         ──► /imu/data, /imu/game_rotation_vector │
+│  │     - rover_cmd_vel_bridge     ◄── /cmd_vel (POST /api/cmd_vel)      │  │
+│  │     - rover_nav_bridge (:3010) ◄─► Nav2 Actions, AMCL, HOME Guard    │  │
+│  │     - foxglove_bridge (:8765)  ──► Foxglove WebSocket                │  │
+│  │     - 4x static_transform_publisher:                                 │  │
+│  │         base_link -> laser_frame          (0.03175, 0.0, 0.17145)    │  │
+│  │         base_link -> imu_link             (-0.0254, -0.0254, 0.14605)│  │
+│  │         base_link -> tof_front_left_link  (0.14, +0.08, 0.08, +8°)   │  │
+│  │         base_link -> tof_front_right_link (0.14, -0.08, 0.08, -8°)   │  │
+│  │                                                                      │  │
+│  │  2. navigation.launch.py:                                            │  │
+│  │     - map_server, amcl, planner_server (Smac2D),                     │  │
+│  │       controller_server (RotationShim + DWB), bt_navigator,          │  │
+│  │       velocity_smoother, collision_monitor (PolygonSlow/PolygonStop) │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Host (Raspberry Pi 5)                                      │
-│                                                             │
-│  rover-lidar.service (/dev/rover-lidar → RPLIDAR C1)        │
-│    └─► rplidar_sidecar.py  HTTP :3002                       │
-│                │                                            │
-│                │  GET /scan  (JSON, ~7 Hz)                  │
-│                ▼                                            │
-│  ┌─────────────────────────────────────────────────┐        │
-│  │  Docker container: rover-ros2 (ROS 2 Jazzy)     │        │
-│  │                                                 │        │
-│  │  rover_system_health ──► /diagnostics           │        │
-│  │                                                 │        │
-│  │  rover_lidar_bridge  ──► /scan                  │        │
-│  │    (sensor_msgs/msg/LaserScan)                  │        │
-│  └─────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Sidecar-to-ROS Data Flow
-
-| Sidecar field    | Type            | Conversion                     | ROS field             |
-|------------------|-----------------|--------------------------------|-----------------------|
-| `angleDeg`       | float [0, 360)  | × π/180 → radians, 1° bins     | `ranges[bin_index]`   |
-| `distanceMm`     | int mm          | ÷ 1000 → metres                | `ranges[i]`           |
-| `quality`        | int 0-47        | cast to float                  | `intensities[i]`      |
-| `timestamp`      | ISO-8601 UTC    | `calendar.timegm()` → sec/ns   | `header.stamp`        |
-| `sequence`       | int             | compared to last published seq | (staleness gate)      |
-| `scanHz`         | float           | `1/scanHz` → scan_time         | `scan_time`           |
-
-**Missing angular bins** (the sidecar may return sparse points) are filled with
-`float('inf')` per [REP-117](https://ros.org/reps/rep-0117.html), never fabricated.
-
-### Configurable ROS Parameters (rover_lidar_bridge)
-
-| Parameter         | Default                      | Description                                   |
-|-------------------|------------------------------|-----------------------------------------------|
-| `lidar_url`       | `$ROVER_LIDAR_URL` or `:3002`| HTTP base URL of the LiDAR sidecar            |
-| `frame_id`        | `laser_frame`                | TF frame ID in the LaserScan header           |
-| `poll_rate_hz`    | `10.0`                       | Polling frequency (Hz)                        |
-| `range_min_m`     | `0.10`                       | Minimum valid range (metres)                  |
-| `range_max_m`     | `12.0`                       | Maximum valid range (metres)                  |
-| `angle_offset_deg`| `0.0`                        | Rotation correction for physical mounting (°) |
-| `reverse_scan`    | `False`                      | Publish CW instead of CCW (invert scan)       |
 
 ---
 
-## Environment Setup
+## 2. Bridge Node Reference
 
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
+### A. `rover_lidar_bridge` (`/scan`)
+Polls `GET ${ROVER_LIDAR_URL}/scan` (`:3002`) at `10 Hz` and publishes `sensor_msgs/msg/LaserScan` in `laser_frame` (`360` 1-degree bins, missing bins set to `float('inf')` per REP-117).
 
-2. Make the scripts executable:
-   ```bash
-   chmod +x scripts/*.sh
-   ```
+### B. `rover_tof_bridge` (`/tof/front_left/*`, `/tof/front_right/*`)
+Polls `GET ${ROVER_SERVER_URL}/api/tof-sensors` (`:3000`) at `10 Hz` via a persistent `requests.Session()` and publishes:
+- `/tof/front_left/points` (`sensor_msgs/msg/PointCloud2`) & `/tof/front_left/range` (`sensor_msgs/msg/Range`, `tof_front_left_link`, $+8^\circ$ outward yaw)
+- `/tof/front_right/points` (`sensor_msgs/msg/PointCloud2`) & `/tof/front_right/range` (`sensor_msgs/msg/Range`, `tof_front_right_link`, $-8^\circ$ outward yaw)
+*(Only explicitly mapped `front_left_l7cx` and `front_right_l7cx` 8×8 channels are published; `CH 2` `VL53L4CD` is intentionally excluded until physically mounted/mapped.)*
+
+### C. `rover_encoder_odometry` (`/odom` & `odom -> base_link` TF)
+Polls wheel encoder telemetry from `rover-server` using calibrated effective wheel diameter **`0.06695 m`** (`1974.1667` ticks/rev) and effective differential track width **`0.3408575433 m`**.
+
+### D. `rover_imu_bridge` (`/imu/data` & `/imu/game_rotation_vector`)
+Publishes BNO08x non-magnetic orientation (`SH2_GAME_ROTATION_VECTOR_NON_MAGNETIC`, report `0x08`) and calibrated gyro rates in `imu_link`.
+
+### E. `rover_cmd_vel_bridge` (`/cmd_vel` $\to$ `POST /api/cmd_vel`)
+Forwards `collision_monitor`-approved `/cmd_vel` commands to `rover-server.service` (which enforces arming state, mode gates, and the `500 ms` autonomy watchdog).
+
+### F. `rover_nav_bridge` (HTTP `:3010`)
+Provides the HTTP bridge between `server.js` (`:3000`) and ROS 2 / Nav2:
+- Guarded cold-start HOME scan-to-map validation (`>= 75%` wall overlap required before injecting `/initialpose`).
+- Non-blocking `ComputePathToPose` path previews (`~17 ms` end-to-end) and `NavigateToPose` goal dispatch/cancel.
 
 ---
 
-## Usage
-
-| Script                    | Description                                              |
-|---------------------------|----------------------------------------------------------|
-| `./scripts/build.sh`      | Build Docker image and compile the ROS 2 workspace       |
-| `./scripts/up.sh`         | Pre-checks → start container → post-checks               |
-| `./scripts/down.sh`       | Stop the container                                       |
-| `./scripts/shell.sh`      | Open an interactive ROS 2 shell inside the container     |
-| `./scripts/doctor.sh`     | Phase 2 diagnostic audit (hardware isolation + /scan)    |
-
----
-
-## Launch Commands
-
-The container automatically runs:
+## 3. Container Management & Validation Commands
 
 ```bash
-ros2 launch rover_bringup foundation.launch.py
+# Build workspace inside container and restart rover-ros2
+cd /home/ron/yahboom-encoder/ros2
+docker exec rover-ros2 bash -lc "cd /ros2_ws && colcon build --packages-select rover_bringup"
+docker compose restart rover-ros2
+
+# Verify active nodes inside rover-ros2
+docker exec rover-ros2 bash -lc "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list"
+
+# Verify Front ToF topics and static TF frames
+docker exec rover-ros2 bash -lc "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic list | grep tof"
+docker exec rover-ros2 bash -lc "source /opt/ros/jazzy/setup.bash && source /ros2_ws/install/setup.bash && ros2 run tf2_ros tf2_echo base_link tof_front_left_link"
 ```
-
-This brings up **two nodes**:
-- `rover_system_health` — publishes `/diagnostics` (Phase 1)
-- `rover_lidar_bridge` — publishes `/scan` as `sensor_msgs/msg/LaserScan` (Phase 2)
-
-To launch manually inside the container shell:
-
-```bash
-# Inside: ./scripts/shell.sh
-source /opt/ros/jazzy/setup.bash
-source /ros2_ws/install/setup.bash
-ros2 launch rover_bringup foundation.launch.py
-```
-
----
-
-## Validation Commands
-
-Run these inside the container (`./scripts/shell.sh`) or via `docker exec`:
-
-```bash
-# List running nodes
-ros2 node list
-# Expected: /rover_system_health  /rover_lidar_bridge
-
-# List topics
-ros2 topic list
-# Expected: /diagnostics  /scan  (no /odom or /cmd_vel)
-
-# Verify /scan message type
-ros2 topic type /scan
-# Expected: sensor_msgs/msg/LaserScan
-
-# Receive one scan
-ros2 topic echo /scan --once
-
-# Check publish rate
-ros2 topic hz /scan
-# Expected: ~7–10 Hz
-
-# Run the Phase 2 doctor (on the Pi host)
-./scripts/doctor.sh
-```
-
----
-
-## Safety Guarantees
-
-- No motor commands: `/cmd_vel` and `/odom` are **not published**.
-- No SLAM or Nav2 is launched.
-- `restart: "no"` in `compose.yaml` — container does not auto-restart.
-- No `/dev` mounts — serial devices are never visible inside the container.
-- The host `rover-lidar.service` remains the sole owner of `/dev/rover-lidar`.

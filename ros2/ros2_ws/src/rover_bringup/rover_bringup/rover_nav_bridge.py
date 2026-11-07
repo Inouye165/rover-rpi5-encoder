@@ -3,7 +3,7 @@
 # rover_nav_bridge.py - Lightweight Nav2 HTTP Navigation Bridge Node
 # Provides clean HTTP endpoints on port 3005 for Cockpit:
 #   - GET  /api/nav/map       -> Static map metadata & occupancy pixels
-#   - POST /api/nav/plan      -> Disarmed Smac2D collision-free path preview
+#   - POST /api/nav/plan      -> Disarmed Navfn collision-free path preview with exact endpoint fidelity
 #   - POST /api/nav/dispatch  -> NavigateToPose action dispatch
 #   - POST /api/nav/cancel    -> Goal cancellation & safe stop
 #   - GET  /api/nav/status    -> Active goal, global path & local DWB trajectory
@@ -18,6 +18,7 @@ import threading
 import yaml
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+import uuid
 
 import rclpy
 from rclpy.node import Node
@@ -32,6 +33,10 @@ from std_srvs.srv import Empty
 from nav_msgs.msg import Path
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
+try:
+    import tf2_ros
+except ImportError:
+    tf2_ros = None
 
 DEFAULT_PORT = 3005
 ODOM_API_URL = "http://127.0.0.1:3003/api/odom"
@@ -49,8 +54,23 @@ class RoverNavBridge(Node):
         self.latest_global_plan = []
         self.latest_local_plan = []
         self.active_goal_handle = None
+        self.active_goal_id = None
+        self.active_goal_generation = 0
         self.active_goal_status = "IDLE"
         self.active_target = None
+        self.active_goal_error_code = None
+        self.active_goal_error_msg = ""
+        self.last_success_tf_pose = None
+        if tf2_ros is not None:
+            try:
+                self.tf_buffer = tf2_ros.Buffer()
+                self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+            except Exception:
+                self.tf_buffer = None
+                self.tf_listener = None
+        else:
+            self.tf_buffer = None
+            self.tf_listener = None
 
         self.sub_plan = self.create_subscription(Path, '/plan', self._plan_cb, 10)
         self.sub_local_plan = self.create_subscription(Path, '/local_plan', self._local_plan_cb, 10)
@@ -113,8 +133,8 @@ class RoverNavBridge(Node):
             "qw": qw
         }
 
-    def validate_scan_against_home(self, timeout_sec=5.0, min_overlap=0.75, max_age_sec=0.75):
-        """Compares live LiDAR scan against map assuming rover is at saved HOME pose."""
+    def validate_scan_against_home(self, timeout_sec=5.0, min_overlap=0.75, max_age_sec=0.75, home_dict=None):
+        """Compares live LiDAR scan against map assuming rover is at saved HOME pose (or custom pose)."""
         t0 = time.time()
         while self.latest_scan is None and (time.time() - t0) < timeout_sec:
             time.sleep(0.1)
@@ -130,13 +150,13 @@ class RoverNavBridge(Node):
             }
 
         map_dict = self._load_map()
-        home_dict = self._get_home_dict()
+        target_home = home_dict if home_dict is not None else self._get_home_dict()
         now_sec = time.time()
 
         return validate_laserscan_msg(
             scan_msg=self.latest_scan,
             map_dict=map_dict,
-            home_dict=home_dict,
+            home_dict=target_home,
             now_sec=now_sec,
             max_age_sec=max_age_sec,
             min_overlap=min_overlap
@@ -336,7 +356,7 @@ class RoverNavBridge(Node):
         goal.goal.pose.position.y = float(target_y)
         goal.goal.pose.orientation.z = math.sin(target_yaw / 2.0)
         goal.goal.pose.orientation.w = math.cos(target_yaw / 2.0)
-        goal.planner_id = 'Smac2D'
+        goal.planner_id = 'Navfn'
 
         t_send_goal_start = time.perf_counter()
         future = self.compute_path_client.send_goal_async(goal)
@@ -345,7 +365,7 @@ class RoverNavBridge(Node):
             time.sleep(0.001)
 
         if not future.done() or not future.result().accepted:
-            return {"ok": False, "error": "Plan goal was rejected or timed out by Smac2D planner"}
+            return {"ok": False, "error": "Plan goal was rejected or timed out by Navfn planner"}
         t_goal_accept_end = time.perf_counter()
 
         handle = future.result()
@@ -395,12 +415,52 @@ class RoverNavBridge(Node):
             "timing_bridge": timing_bridge
         }
 
-    def dispatch_goal(self, target_x, target_y, target_yaw):
+
+    def get_current_tf_pose(self):
+        if not getattr(self, 'tf_buffer', None):
+            return None
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            siny_cosp = 2.0 * (rot.w * rot.z + rot.x * rot.y)
+            cosy_cosp = 1.0 - 2.0 * (rot.y * rot.y + rot.z * rot.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            return {
+                "x": round(tr.x, 6),
+                "y": round(tr.y, 6),
+                "z": round(tr.z, 6),
+                "yaw_rad": round(yaw, 6),
+                "yaw_deg": round(math.degrees(yaw), 2),
+                "stamp_sec": round(t.header.stamp.sec + t.header.stamp.nanosec * 1e-9, 4)
+            }
+        except Exception:
+            return None
+
+    def dispatch_goal(self, target_x, target_y, target_yaw, goal_id=None, behavior_tree=None, goal_checker=None):
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             return {"ok": False, "error": "/navigate_to_pose action server unavailable"}
 
-        # Cancel any previous goal
-        self.cancel_goal()
+        # Advance generation for the new dispatch
+        self.active_goal_generation += 1
+        current_gen = self.active_goal_generation
+        new_goal_id = str(goal_id) if goal_id else f"goal_{int(time.time()*1000)}_{current_gen}"
+
+        # Cleanly cancel any previous active handle without leaking CANCELLED status into new_goal_id
+        if self.active_goal_handle is not None:
+            try:
+                self.active_goal_handle.cancel_goal_async()
+            except Exception:
+                pass
+            self.active_goal_handle = None
+
+        self.active_goal_id = new_goal_id
+        self.active_goal_status = "DISPATCHING"
+        self.active_target = {"x": target_x, "y": target_y, "yaw": target_yaw}
+
+        # If position_goal_checker is requested and no explicit BT provided, select position-only BT
+        if goal_checker == "position_goal_checker" and not behavior_tree:
+            behavior_tree = "/ros2_ws/src/rover_bringup/behavior_trees/navigate_to_pose_position_only.xml"
 
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -410,6 +470,8 @@ class RoverNavBridge(Node):
         goal.pose.pose.position.y = float(target_y)
         goal.pose.pose.orientation.z = math.sin(target_yaw / 2.0)
         goal.pose.pose.orientation.w = math.cos(target_yaw / 2.0)
+        if behavior_tree:
+            goal.behavior_tree = str(behavior_tree)
 
         future = self.nav_client.send_goal_async(goal)
         t0 = time.time()
@@ -417,31 +479,69 @@ class RoverNavBridge(Node):
             time.sleep(0.02)
 
         if not future.done() or not future.result().accepted:
-            return {"ok": False, "error": "Goal was rejected by /navigate_to_pose action server"}
+            if self.active_goal_generation == current_gen:
+                self.active_goal_status = "REJECTED"
+                self.active_goal_handle = None
+            return {
+                "ok": False,
+                "error": "Goal was rejected by /navigate_to_pose action server",
+                "goal_id": new_goal_id,
+                "generation": current_gen
+            }
+
+        if self.active_goal_generation != current_gen:
+            # Superseded by newer dispatch
+            return {
+                "ok": False,
+                "error": "Superseded by newer dispatch",
+                "goal_id": new_goal_id,
+                "generation": current_gen
+            }
 
         self.active_goal_handle = future.result()
         self.active_goal_status = "EXECUTING"
-        self.active_target = {"x": target_x, "y": target_y, "yaw": target_yaw}
+        self.active_goal_error_code = None
+        self.active_goal_error_msg = ""
 
-        def _on_done(f):
+        def _on_done(f, gen=current_gen, gid=new_goal_id):
+            if self.active_goal_generation != gen:
+                # Stale completion from an earlier goal generation; ignore!
+                return
             try:
                 res = f.result()
                 status = res.status
+                action_result = getattr(res, 'result', None)
+                err_code = getattr(action_result, 'error_code', None)
+                err_msg = getattr(action_result, 'error_msg', "")
+                self.active_goal_error_code = int(err_code) if err_code is not None else None
+                self.active_goal_error_msg = str(err_msg) if err_msg else ""
+
                 # action_msgs/msg/GoalStatus: 4=STATUS_SUCCEEDED, 5=STATUS_CANCELED, 6=STATUS_ABORTED
                 if status == 4:
                     self.active_goal_status = "SUCCEEDED"
+                    self.last_success_tf_pose = self.get_current_tf_pose()
                 elif status == 5:
                     self.active_goal_status = "CANCELLED"
+                elif status == 6:
+                    self.active_goal_status = "ABORTED"
                 else:
                     self.active_goal_status = f"STOPPED_STATUS_{status}"
-            except Exception:
+            except Exception as e:
                 self.active_goal_status = "FINISHED"
+                self.active_goal_error_code = None
+                self.active_goal_error_msg = str(e)
             self.active_goal_handle = None
 
         res_fut = self.active_goal_handle.get_result_async()
         res_fut.add_done_callback(_on_done)
 
-        return {"ok": True, "status": "EXECUTING", "target": self.active_target}
+        return {
+            "ok": True,
+            "status": "EXECUTING",
+            "goal_id": self.active_goal_id,
+            "generation": current_gen,
+            "target": self.active_target
+        }
 
     def request_nomotion_update(self, timeout_sec=1.5):
         """Requests an instantaneous AMCL no-motion particle filter update."""
@@ -459,8 +559,28 @@ class RoverNavBridge(Node):
         except Exception as err:
             return {"ok": False, "error": f"Error calling nomotion service: {err}"}
 
-    def cancel_goal(self):
+    def cancel_goal(self, target_goal_id=None):
         cancelled = False
+        if target_goal_id and self.active_goal_id and self.active_goal_id != target_goal_id:
+            return {
+                "ok": True,
+                "status": self.active_goal_status,
+                "cancelled": False,
+                "ignored": "goal_id_mismatch",
+                "goal_id": self.active_goal_id
+            }
+
+        if self.active_goal_status in ("SUCCEEDED", "ABORTED", "FAILED"):
+            return {
+                "ok": True,
+                "status": self.active_goal_status,
+                "cancelled": False,
+                "ignored": "already_terminal",
+                "goal_id": self.active_goal_id,
+                "generation": self.active_goal_generation
+            }
+
+        cancelled_id = self.active_goal_id
         if self.active_goal_handle is not None:
             try:
                 self.active_goal_handle.cancel_goal_async()
@@ -478,7 +598,13 @@ class RoverNavBridge(Node):
 
         self.active_goal_status = "CANCELLED"
         self.latest_local_plan = []
-        return {"ok": True, "status": "CANCELLED", "cancelled": cancelled}
+        return {
+            "ok": True,
+            "status": "CANCELLED",
+            "cancelled": cancelled,
+            "goal_id": cancelled_id,
+            "generation": self.active_goal_generation
+        }
 
 
 bridge_node = None
@@ -530,18 +656,37 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
                     return
             self._send_json(404, {"ok": False, "error": "Home pose file not found"})
 
-        elif self.path == '/api/nav/validate_home':
-            val_res = bridge_node.validate_scan_against_home()
+        elif self.path.startswith('/api/nav/validate_home'):
+            import urllib.parse
+            query_str = self.path.split('?', 1)[1] if '?' in self.path else ''
+            params = urllib.parse.parse_qs(query_str) if query_str else {}
+            custom_home = None
+            if params:
+                home_base = bridge_node._get_home_dict().copy()
+                if 'x' in params:
+                    home_base['x'] = float(params['x'][0])
+                if 'y' in params:
+                    home_base['y'] = float(params['y'][0])
+                if 'yaw_deg' in params:
+                    home_base['yaw_deg'] = float(params['yaw_deg'][0])
+                    home_base['yaw_rad'] = math.radians(home_base['yaw_deg'])
+                elif 'yaw_rad' in params:
+                    home_base['yaw_rad'] = float(params['yaw_rad'][0])
+                    home_base['yaw_deg'] = math.degrees(home_base['yaw_rad'])
+                custom_home = home_base
+            val_res = bridge_node.validate_scan_against_home(home_dict=custom_home)
             self._send_json(200, val_res)
 
         elif self.path == '/api/nav/status':
             # Query odometry node for current AMCL pose to compute distance remaining
             cur_x, cur_y = 0.0, 0.0
+            nav_status = None
             try:
                 r = requests.get(ODOM_API_URL, timeout=0.25).json()
                 loc = r.get('localization', {}).get('pose', {})
                 cur_x = loc.get('x', 0.0)
                 cur_y = loc.get('y', 0.0)
+                nav_status = r.get('navigation')
             except Exception:
                 pass
 
@@ -549,13 +694,40 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             if bridge_node.active_target:
                 dist_rem = math.hypot(bridge_node.active_target['x'] - cur_x, bridge_node.active_target['y'] - cur_y)
 
+            action_server_ready = False
+            try:
+                action_server_ready = bool(bridge_node.nav_client.server_is_ready())
+            except Exception:
+                pass
+
+            nodes_dict = nav_status.get('nodes', {}) if (nav_status and isinstance(nav_status.get('nodes'), dict)) else {}
+            req_nodes = ['controller_server', 'planner_server', 'bt_navigator', 'collision_monitor']
+            all_active = all(nodes_dict.get(n) == 'active' for n in req_nodes) and len(nodes_dict) >= len(req_nodes)
+            bt_active = (nodes_dict.get('bt_navigator') == 'active')
+
+            if all_active and nav_status:
+                nav_status['ready'] = True
+                nav_status['state'] = 'ACTIVE'
+                nav_status['details'] = 'All required navigation and collision-protection nodes active'
+
+            ready_to_accept_goals = bool(action_server_ready and bt_active and all_active)
+
             data = {
                 "ok": True,
                 "status": bridge_node.active_goal_status,
+                "goal_id": getattr(bridge_node, 'active_goal_id', None),
+                "generation": getattr(bridge_node, 'active_goal_generation', 0),
                 "target": bridge_node.active_target,
                 "distance_remaining_m": round(dist_rem, 3),
+                "tf_pose": bridge_node.get_current_tf_pose(),
+                "success_tf_pose": getattr(bridge_node, 'last_success_tf_pose', None),
                 "global_path": bridge_node.latest_global_plan,
-                "local_path": bridge_node.latest_local_plan
+                "local_path": bridge_node.latest_local_plan,
+                "error_code": getattr(bridge_node, 'active_goal_error_code', None),
+                "error_msg": getattr(bridge_node, 'active_goal_error_msg', ""),
+                "navigation": nav_status,
+                "action_server_ready": action_server_ready,
+                "ready_to_accept_goals": ready_to_accept_goals
             }
             self._send_json(200, data)
         else:
@@ -599,8 +771,11 @@ class NavHTTPHandler(BaseHTTPRequestHandler):
             tx = float(req_json.get('target_x', 2.154))
             ty = float(req_json.get('target_y', -0.235))
             tyaw = float(req_json.get('target_yaw', -0.073))
+            gid = req_json.get('goal_id')
+            bt = req_json.get('behavior_tree')
+            gc = req_json.get('goal_checker')
 
-            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw)
+            dispatch_res = bridge_node.dispatch_goal(tx, ty, tyaw, goal_id=gid, behavior_tree=bt, goal_checker=gc)
             self._send_json(200 if dispatch_res.get('ok') else 400, dispatch_res)
 
         elif self.path == '/api/nav/cancel':

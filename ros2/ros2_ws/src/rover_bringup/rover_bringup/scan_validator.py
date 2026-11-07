@@ -190,7 +190,7 @@ def validate_laserscan_msg(
     # Extract map data
     w = map_dict.get("width", 0)
     h = map_dict.get("height", 0)
-    res = float(map_dict.get("resolution", 0.05))
+    map_res = float(map_dict.get("resolution", 0.05))
     origin = map_dict.get("origin", [0.0, 0.0, 0.0])
     ox, oy = float(origin[0]), float(origin[1])
 
@@ -214,14 +214,14 @@ def validate_laserscan_msg(
     hy = float(home_dict.get("y", -0.045221))
     hyaw_rad = float(home_dict.get("yaw_rad", math.radians(float(home_dict.get("yaw_deg", -5.047)))))
 
-    return validate_scan_to_map(
+    val_res = validate_scan_to_map(
         ranges=ranges,
         angle_min=angle_min,
         angle_increment=angle_increment,
         map_pixels=map_pixels,
         map_width=w,
         map_height=h,
-        map_resolution=res,
+        map_resolution=map_res,
         map_origin_x=ox,
         map_origin_y=oy,
         home_x=hx,
@@ -231,3 +231,89 @@ def validate_laserscan_msg(
         min_overlap=min_overlap,
         min_beams=min_beams
     )
+    if val_res.get("ok") or val_res.get("total_valid", 0) >= min_beams:
+        val_res["estimated_pose"] = estimate_scan_to_map_pose(
+            ranges=ranges,
+            angle_min=angle_min,
+            angle_increment=angle_increment,
+            map_pixels=map_pixels,
+            map_width=w,
+            map_height=h,
+            map_resolution=map_res,
+            map_origin_x=ox,
+            map_origin_y=oy,
+            center_x=hx,
+            center_y=hy,
+            center_yaw_rad=hyaw_rad,
+            window_size=3
+        )
+    return val_res
+
+
+def estimate_scan_to_map_pose(
+    ranges,
+    angle_min,
+    angle_increment,
+    map_pixels,
+    map_width,
+    map_height,
+    map_resolution,
+    map_origin_x,
+    map_origin_y,
+    center_x,
+    center_y,
+    center_yaw_rad,
+    search_radius_m=0.06,
+    step_m=0.015,
+    base_to_laser=(0.03175, 0.0, 0.0),
+    window_size=3
+):
+    """
+    Evaluates scan overlap on a local 2D grid around (center_x, center_y) to find
+    the peak scan-to-map position estimate.
+    """
+    best_x = center_x
+    best_y = center_y
+    best_overlap = -1.0
+    best_res = None
+
+    dx_range = np.arange(-search_radius_m, search_radius_m + 1e-4, step_m)
+    dy_range = np.arange(-search_radius_m, search_radius_m + 1e-4, step_m)
+
+    for dx in dx_range:
+        for dy in dy_range:
+            cand_x = center_x + dx
+            cand_y = center_y + dy
+            res = validate_scan_to_map(
+                ranges=ranges,
+                angle_min=angle_min,
+                angle_increment=angle_increment,
+                map_pixels=map_pixels,
+                map_width=map_width,
+                map_height=map_height,
+                map_resolution=map_resolution,
+                map_origin_x=map_origin_x,
+                map_origin_y=map_origin_y,
+                home_x=cand_x,
+                home_y=cand_y,
+                home_yaw_rad=center_yaw_rad,
+                base_to_laser=base_to_laser,
+                window_size=window_size
+            )
+            ov = res.get("overlap", 0.0)
+            if ov > best_overlap:
+                best_overlap = ov
+                best_x = cand_x
+                best_y = cand_y
+                best_res = res
+
+    return {
+        "x": round(float(best_x), 4),
+        "y": round(float(best_y), 4),
+        "yaw_rad": round(float(center_yaw_rad), 4),
+        "yaw_deg": round(float(math.degrees(center_yaw_rad)), 2),
+        "overlap": round(float(best_overlap), 4),
+        "error_to_center_m": round(float(math.hypot(best_x - center_x, best_y - center_y)), 4),
+        "hits": best_res.get("hits", 0) if best_res else 0,
+        "total_valid": best_res.get("total_valid", 0) if best_res else 0
+    }

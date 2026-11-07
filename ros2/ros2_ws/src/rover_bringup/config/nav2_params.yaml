@@ -74,7 +74,7 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker", "position_goal_checker"]
     controller_plugins: ["FollowPath"]
 
     progress_checker:
@@ -88,6 +88,11 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.04
       yaw_goal_tolerance: 0.087
+
+    position_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::PositionGoalChecker"
+      xy_goal_tolerance: 0.04
 
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
@@ -104,11 +109,11 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.15
+      max_vel_x: 0.20
       max_vel_y: 0.0
       max_vel_theta: 0.50
       min_speed_xy: 0.0
-      max_speed_xy: 0.15
+      max_speed_xy: 0.20
       min_speed_theta: 0.1
       acc_lim_x: 1.2
       acc_lim_y: 0.0
@@ -146,7 +151,12 @@ planner_server:
   ros__parameters:
     expected_planner_frequency: 1.0
     use_sim_time: false
-    planner_plugins: ["Smac2D", "Navfn"]
+    planner_plugins: ["Navfn", "Smac2D"]
+    Navfn:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.0
+      use_astar: false
+      allow_unknown: true
     Smac2D:
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.5
@@ -162,11 +172,6 @@ planner_server:
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
-    Navfn:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
-      use_astar: false
-      allow_unknown: true
 
 local_costmap:
   local_costmap:
@@ -291,8 +296,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.50]
-    min_velocity: [-0.15, 0.0, -0.50]
+    max_velocity: [0.20, 0.0, 0.50]
+    min_velocity: [-0.20, 0.0, -0.50]
     max_accel: [1.0, 0.0, 1.5]
     max_decel: [-1.0, 0.0, -1.5]
     odom_topic: "/odom"

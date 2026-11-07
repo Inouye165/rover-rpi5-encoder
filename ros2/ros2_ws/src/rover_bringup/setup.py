@@ -6,6 +6,7 @@ package_name = 'rover_bringup'
 
 launch_files = [f for f in glob('launch/*.launch.py') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
 config_files = [f for f in glob('config/*') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
+bt_files = [f for f in glob('behavior_trees/*') if os.path.isfile(f) and not os.path.basename(f).startswith('.')]
 
 setup(
     name=package_name,
@@ -17,6 +18,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), launch_files),
         (os.path.join('share', package_name, 'config'), config_files),
+        (os.path.join('share', package_name, 'behavior_trees'), bt_files),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +31,7 @@ setup(
         'console_scripts': [
             'rover_system_health = rover_bringup.rover_system_health:main',
             'rover_lidar_bridge = rover_bringup.rover_lidar_bridge:main',
+            'rover_tof_bridge = rover_bringup.rover_tof_bridge:main',
             'rover_encoder_odometry = rover_bringup.rover_encoder_odometry:main',
             'rover_cmd_vel_bridge = rover_bringup.rover_cmd_vel_bridge:main',
             'rover_imu_bridge = rover_bringup.rover_imu_bridge:main',

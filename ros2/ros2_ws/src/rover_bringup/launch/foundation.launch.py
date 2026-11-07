@@ -29,6 +29,39 @@ def generate_launch_description():
         ),
         Node(
             package='rover_bringup',
+            executable='rover_tof_bridge',
+            name='rover_tof_bridge',
+            output='screen',
+        ),
+        # Front-corner VL53L7CX mounts: 125 mm measured lateral separation,
+        # centered symmetrically (y = ±0.0625 m), angled ±8° outward.
+        # Note: forward position x (+0.14 m) and height z (+0.08 m) remain unverified measurements.
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='base_link_to_tof_front_left_publisher',
+            output='screen',
+            arguments=[
+                '--x', '0.14', '--y', '0.0625', '--z', '0.08',
+                '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.13962634',
+                '--frame-id', 'base_link',
+                '--child-frame-id', 'tof_front_left_link',
+            ],
+        ),
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='base_link_to_tof_front_right_publisher',
+            output='screen',
+            arguments=[
+                '--x', '0.14', '--y', '-0.0625', '--z', '0.08',
+                '--roll', '0.0', '--pitch', '0.0', '--yaw', '-0.13962634',
+                '--frame-id', 'base_link',
+                '--child-frame-id', 'tof_front_right_link',
+            ],
+        ),
+        Node(
+            package='rover_bringup',
             executable='rover_encoder_odometry',
             name='rover_encoder_odometry',
             output='screen',

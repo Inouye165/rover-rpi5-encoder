@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Rover 1 — 8-Channel ToF Sensor Bench (VL53L7CX 8x8 &amp; VL53L4CD Cliff)</title>
+  <style>
+    :root {
+      --bg-dark: #070b10;
+      --bg-card: #0d1520;
+      --bg-card-alt: #111c2a;
+      --border: #1e3248;
+      --accent: #00ffcc;
+      --accent-blue: #38bdf8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --muted: #8ba2b5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg-dark);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+    }
+    header.top-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 16px;
+      background: #0a1018;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .title-group h1 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0.6px;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    .subtitle-pill {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+    .header-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+    .dot.err { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+    button.btn, a.btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      background: rgba(0, 255, 204, 0.1);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    button.btn:hover, a.btn:hover {
+      background: rgba(0, 255, 204, 0.22);
+    }
+    a.btn-secondary {
+      border-color: var(--border);
+      background: var(--bg-card);
+      color: var(--text);
+    }
+    main.container {
+      max-width: 1560px;
+      margin: 0 auto;
+      padding: 14px 16px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #162436;
+      padding-bottom: 6px;
+    }
+    .section-header h2 {
+      margin: 0;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--accent-blue);
+    }
+    .section-header span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* 8-Channel Multiplexer Strip */
+    .mux-strip {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 1280px) {
+      .mux-strip { grid-template-columns: repeat(4, 1fr); }
+    }
+    @media (max-width: 680px) {
+      .mux-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+    .mux-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .mux-pill.active-l7 {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 12px rgba(0, 255, 204, 0.08);
+    }
+    .mux-pill.active-l4 {
+      border-color: var(--accent-blue);
+      box-shadow: inset 0 0 12px rgba(56, 189, 248, 0.08);
+    }
+    .mux-pill-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .mux-ch-tag {
+      color: var(--text);
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .mux-type-badge {
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      background: #172334;
+      color: var(--muted);
+    }
+    .mux-type-badge.l7 { background: rgba(0, 255, 204, 0.16); color: var(--accent); }
+    .mux-type-badge.l4 { background: rgba(56, 189, 248, 0.16); color: var(--accent-blue); }
+    .mux-dist {
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      margin: 2px 0;
+    }
+    .mux-dist.empty {
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .mux-meta {
+      font-size: 10px;
+      color: var(--muted);
+      font-family: monospace;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* Wide-field 8x8 VL53L7CX Grid */
+    .wide-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    @media (max-width: 1100px) {
+      .wide-grid { grid-template-columns: 1fr; }
+    }
+    .sensor-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .sensor-card.online {
+      border-color: rgba(0, 255, 204, 0.55);
+    }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-title-block h3 {
+      margin: 0;
+      font-size: 15px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-title-block p {
+      margin: 2px 0 0;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .card-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .ch-select-wrap,
+    .rot-select-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    select.ch-select {
+      background: #081018;
+      color: var(--accent);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    select.rot-select {
+      background: #081018;
+      color: #38bdf8;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .summary-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .metric-box {
+      background: var(--bg-card-alt);
+      border: 1px solid #182a3e;
+      border-radius: 8px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+    }
+    .metric-val {
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+      margin-top: 2px;
+    }
+    .metric-val.primary { color: var(--accent); }
+    .metric-sub {
+      font-size: 11px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 8x8 Matrix */
+    .matrix-8x8 {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 4px;
+      background: #060a0f;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #152334;
+    }
+    .zone-cell {
+      aspect-ratio: 1.25 / 1;
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: monospace;
+      font-size: 12px;
+      font-weight: 700;
+      background: #0f172a;
+      color: #475569;
+      border: 1px solid rgba(255,255,255,0.04);
+      font-variant-numeric: tabular-nums;
+      user-select: none;
+    }
+    .zone-cell.center-zone {
+      outline: 1px dashed rgba(255, 255, 255, 0.35);
+    }
+    .zone-cell span.u {
+      font-size: 9px;
+      font-weight: 400;
+      opacity: 0.8;
+    }
+
+    /* Cliff Sensors Grid (4x VL53L4CD) */
+    .cliff-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    @media (max-width: 1200px) {
+      .cliff-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .cliff-grid { grid-template-columns: 1fr; }
+    }
+    .cliff-readout {
+      background: var(--bg-card-alt);
+      border: 1px solid #182a3e;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .cliff-big-mm {
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--accent-blue);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+    }
+    .cliff-big-mm.offline {
+      color: #475569;
+      font-size: 20px;
+    }
+    .cliff-sub-units {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .bar-track {
+      height: 10px;
+      background: #081018;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #182a3e;
+    }
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ef4444 0%, #f59e0b 25%, #22c55e 60%, #38bdf8 100%);
+      transition: width 0.15s ease-out;
+    }
+    .cliff-meta-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: monospace;
+    }
+    .legend-bar {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: var(--muted);
+      align-items: center;
+    }
+    .legend-swatch {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .swatch-box {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="top-bar">
+    <div class="title-group">
+      <h1>📡 Rover 1 — ToF Sensor Testing Bench</h1>
+      <span class="subtitle-pill">Bench Mode · Not Wired to Nav2</span>
+    </div>
+    <div class="header-controls">
+      <div class="badge" title="Lonely Binary ESP32-S3 N16R8 UART link over /dev/ttyAMA0">
+        <span class="dot" id="dot-esp"></span>
+        <span id="txt-esp">ESP32-S3: Connecting...</span>
+      </div>
+      <div class="badge" title="TCA9548A I2C Multiplexer at 0x70 on SDA=GPIO8, SCL=GPIO9">
+        <span class="dot" id="dot-mux"></span>
+        <span id="txt-mux">MUX 0x70: --</span>
+      </div>
+      <div class="badge">
+        <span id="txt-active-count">Active Sensors: 0 / 8</span>
+      </div>
+      <button class="btn" id="btn-rescan" title="Force TCA9548A multiplexer re-scan and sensor re-initialization across CH 0..7">
+        🔄 Re-Scan Multiplexer
+      </button>
+      <a href="/" class="btn btn-secondary">⬅ Ground Control HUD</a>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- All 8 Multiplexer Channels Live Strip -->
+    <section>
+      <div class="section-header">
+        <h2>1. TCA9548A I2C Multiplexer (`0x70`) — All 8 Hardware Channels (`CH 0` – `CH 7`)</h2>
+        <span>Plug sensors in one at a time on any channel `SD0/SC0`–`SD7/SC7` (auto-detects `VL53L7CX` 8×8 vs `VL53L4CD` every 2.5s)</span>
+      </div>
+      <div class="mux-strip" id="mux-strip-container"></div>
+    </section>
+
+    <!-- 4x VL53L7CX Wide-Field 8x8 Obstacle Sensors -->
+    <section>
+      <div class="section-header">
+        <h2>2. Wide-Field 8×8 Distance Sensors (`4 × VL53L7CX` — Front-Left, Front-Right, Rear-Left, Rear-Right)</h2>
+        <div class="legend-bar">
+          <span>Zone Color (mm):</span>
+          <span class="legend-swatch"><span class="swatch-box" style="background:#991b1b;"></span>&lt;120mm</span>
+          <span class="legend-swatch"><span class="swatch-box" style="background:#b45309;"></span>120–300mm</span>
+          <span class="legend-swatch"><span class="swatch-box" style="background:#15803d;"></span>300–800mm</span>
+          <span class="legend-swatch"><span class="swatch-box" style="background:#0369a1;"></span>800–2000mm</span>
+          <span class="legend-swatch"><span class="swatch-box" style="background:#1e293b;"></span>No Target</span>
+        </div>
+      </div>
+      <div class="wide-grid" id="wide-sensors-container"></div>
+    </section>
+
+    <!-- 4x VL53L4CD Narrow-Field Downward Cliff Sensors -->
+    <section>
+      <div class="section-header">
+        <h2>3. Downward-Facing Narrow-Field Cliff Sensors (`4 × VL53L4CD` — FL, FR, RL, RR)</h2>
+        <span>Single-zone high-speed Time-of-Flight distance (`1 mm` – `1300 mm`)</span>
+      </div>
+      <div class="cliff-grid" id="cliff-sensors-container"></div>
+    </section>
+
+    <!-- 2x Spare Multiplexer Channels (Channels 7 & 8 of the 8-channel mux) -->
+    <section>
+      <div class="section-header">
+        <h2>4. Additional Multiplexer Channels (`2 × Aux / Spare Slots` — Channels 7 &amp; 8 of 8)</h2>
+        <span>Available for side/auxiliary ToF sensors so all 8 multiplexer channels can be tested simultaneously</span>
+      </div>
+      <div class="cliff-grid" id="aux-sensors-container" style="grid-template-columns: repeat(2, 1fr);"></div>
+    </section>
+
+  </main>
+
+  <script>
+    const WIDE_SLOTS = [
+      { key: 'front_left_l7cx',  title: 'Front-Left Wide-Field 8×8',  subtitle: 'Mux CH 1 (0x29) · VL53L7CX · Front-Left Obstacle Array',  preferredCh: 1 },
+      { key: 'front_right_l7cx', title: 'Front-Right Wide-Field 8×8', subtitle: 'Mux CH 0 (0x29) · VL53L7CX · Front-Right Obstacle Array', preferredCh: 0 },
+      { key: 'rear_left_l7cx',   title: 'Rear-Left Wide-Field 8×8',   subtitle: 'VL53L7CX · Rear-Left Obstacle Array (Auto / Unassigned)', preferredCh: 'auto' },
+      { key: 'rear_right_l7cx',  title: 'Rear-Right Wide-Field 8×8',  subtitle: 'VL53L7CX · Rear-Right Obstacle Array (Auto / Unassigned)', preferredCh: 'auto' }
+    ];
+
+    const CLIFF_SLOTS = [
+      { key: 'cliff_fl', title: 'Cliff 1 — Front-Left',  subtitle: 'VL53L4CD · Downward Narrow-Field', preferredIdx: 0 },
+      { key: 'cliff_fr', title: 'Cliff 2 — Front-Right', subtitle: 'VL53L4CD · Downward Narrow-Field', preferredIdx: 1 },
+      { key: 'cliff_rl', title: 'Cliff 3 — Rear-Left',   subtitle: 'VL53L4CD · Downward Narrow-Field', preferredIdx: 2 },
+      { key: 'cliff_rr', title: 'Cliff 4 — Rear-Right',  subtitle: 'VL53L4CD · Downward Narrow-Field', preferredIdx: 3 }
+    ];
+
+    const AUX_SLOTS = [
+      { key: 'aux_1', title: 'Aux Slot 7 — Mux Channel', subtitle: 'VL53L4CD / VL53L7CX · Spare Channel A', preferredIdx: 0 },
+      { key: 'aux_2', title: 'Aux Slot 8 — Mux Channel', subtitle: 'VL53L4CD / VL53L7CX · Spare Channel B', preferredIdx: 1 }
+    ];
+
+    let currentMapping = {
+      front_left_l7cx: 1,
+      front_left_l7cx_rot: '90_ccw',
+      front_right_l7cx: 0,
+      front_right_l7cx_rot: '90_ccw',
+      rear_left_l7cx: 'auto',
+      rear_left_l7cx_rot: '90_ccw',
+      rear_right_l7cx: 'auto',
+      rear_right_l7cx_rot: '90_ccw',
+      cliff_fl: 'auto',
+      cliff_fr: 'auto',
+      cliff_rl: 'auto',
+      cliff_rr: 'auto',
+      aux_1: 'auto',
+      aux_2: 'auto'
+    };
+
+    function fmtCmIn(mm) {
+      if (mm === null || mm === undefined || mm < 0) return '-- cm · -- in';
+      const cm = (mm / 10).toFixed(1);
+      const inches = (mm / 25.4).toFixed(1);
+      return `${cm} cm · ${inches} in`;
+    }
+
+    function zoneColorStyle(mm) {
+      if (mm === null || mm === undefined || mm < 0) {
+        return 'background:#0f172a; color:#475569;';
+      }
+      if (mm < 120) {
+        return 'background:#991b1b; color:#ffffff; border-color:#f87171;';
+      }
+      if (mm < 300) {
+        return 'background:#b45309; color:#ffffff; border-color:#fbbf24;';
+      }
+      if (mm < 800) {
+        return 'background:#15803d; color:#ffffff; border-color:#4ade80;';
+      }
+      if (mm < 1800) {
+        return 'background:#0369a1; color:#ffffff; border-color:#38bdf8;';
+      }
+      return 'background:#1e3a8a; color:#e0f2fe; border-color:#60a5fa;';
+    }
+
+    function buildInitialDom() {
+      // 1. 8-channel strip
+      const stripEl = document.getElementById('mux-strip-container');
+      stripEl.innerHTML = '';
+      for (let ch = 0; ch < 8; ch++) {
+        const maskHex = '0x' + (1 << ch).toString(16).toUpperCase().padStart(2, '0');
+        const div = document.createElement('div');
+        div.className = 'mux-pill';
+        div.id = `mux-pill-${ch}`;
+        div.innerHTML = `
+          <div class="mux-pill-top">
+            <span class="mux-ch-tag">CH ${ch} (${maskHex})</span>
+            <span class="mux-type-badge" id="mux-type-${ch}">EMPTY</span>
+          </div>
+          <div class="mux-dist empty" id="mux-dist-${ch}">Not Connected</div>
+          <div class="mux-meta">
+            <span id="mux-sub-${ch}">0x29: --</span>
+            <span id="mux-frames-${ch}">0 frames</span>
+          </div>
+        `;
+        stripEl.appendChild(div);
+      }
+
+      // 2. Wide-field 8x8 cards
+      const wideContainer = document.getElementById('wide-sensors-container');
+      wideContainer.innerHTML = '';
+      for (const slot of WIDE_SLOTS) {
+        const card = document.createElement('div');
+        card.className = 'sensor-card';
+        card.id = `card-${slot.key}`;
+        let cellsHtml = '';
+        const centerSet = new Set([27, 28, 35, 36]);
+        for (let z = 0; z < 64; z++) {
+          const isCenter = centerSet.has(z) ? 'center-zone' : '';
+          cellsHtml += `<div class="zone-cell ${isCenter}" id="cell-${slot.key}-${z}">--</div>`;
+        }
+        const initialRot = currentMapping[`${slot.key}_rot`] || localStorage.getItem(`rot_${slot.key}`) || '90_ccw';
+        card.innerHTML = `
+          <div class="card-head">
+            <div class="card-title-block">
+              <h3>
+                <span class="dot" id="dot-${slot.key}"></span>
+                ${slot.title}
+              </h3>
+              <p id="sub-${slot.key}">${slot.subtitle}</p>
+            </div>
+            <div class="card-controls">
+              <div class="ch-select-wrap">
+                <label for="sel-${slot.key}">Mux Channel:</label>
+                <select class="ch-select" id="sel-${slot.key}" data-slot="${slot.key}">
+                  <option value="auto">Auto (${slot.preferredCh !== undefined && slot.preferredCh !== 'auto' ? 'Default CH ' + slot.preferredCh : 'Unassigned'})</option>
+                  <option value="0">CH 0</option>
+                  <option value="1">CH 1</option>
+                  <option value="2">CH 2</option>
+                  <option value="3">CH 3</option>
+                  <option value="4">CH 4</option>
+                  <option value="5">CH 5</option>
+                  <option value="6">CH 6</option>
+                  <option value="7">CH 7</option>
+                </select>
+              </div>
+              <div class="rot-select-wrap">
+                <label for="rot-${slot.key}">Rotation:</label>
+                <select class="rot-select" id="rot-${slot.key}" data-slot="${slot.key}">
+                  <option value="90_ccw"${initialRot === '90_ccw' ? ' selected' : ''}>90° CCW (Rover 1 Calibrated)</option>
+                  <option value="90_ccw_noflip"${initialRot === '90_ccw_noflip' ? ' selected' : ''}>90° CCW (Unmirrored)</option>
+                  <option value="0"${initialRot === '0' ? ' selected' : ''}>0° (Raw)</option>
+                  <option value="90_cw"${initialRot === '90_cw' ? ' selected' : ''}>90° CW</option>
+                  <option value="180"${initialRot === '180' ? ' selected' : ''}>180°</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="summary-metrics">
+            <div class="metric-box">
+              <div class="metric-label">Closest Distance (Min)</div>
+              <div class="metric-val primary" id="min-mm-${slot.key}">-- mm</div>
+              <div class="metric-sub" id="min-sub-${slot.key}">-- cm · -- in</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">Center 2×2 Distance</div>
+              <div class="metric-val" id="ctr-mm-${slot.key}">-- mm</div>
+              <div class="metric-sub" id="ctr-sub-${slot.key}">-- cm · -- in</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-label">Mean / Valid Zones</div>
+              <div class="metric-val" id="mean-mm-${slot.key}">-- mm</div>
+              <div class="metric-sub" id="meta-${slot.key}">0/64 zones · --°C</div>
+            </div>
+          </div>
+
+          <div class="matrix-8x8" id="matrix-${slot.key}">
+            ${cellsHtml}
+          </div>
+        `;
+        wideContainer.appendChild(card);
+      }
+
+      // 3. Cliff sensor cards
+      const cliffContainer = document.getElementById('cliff-sensors-container');
+      cliffContainer.innerHTML = '';
+      for (const slot of CLIFF_SLOTS) {
+        cliffContainer.appendChild(createSingleZoneCard(slot, `Auto (VL53L4CD #${slot.preferredIdx + 1})`));
+      }
+
+      // 4. Aux sensor cards
+      const auxContainer = document.getElementById('aux-sensors-container');
+      auxContainer.innerHTML = '';
+      for (const slot of AUX_SLOTS) {
+        auxContainer.appendChild(createSingleZoneCard(slot, `Auto (Spare #${slot.preferredIdx + 1})`));
+      }
+
+      // Bind channel dropdown changes
+      document.querySelectorAll('select.ch-select').forEach((sel) => {
+        sel.addEventListener('change', async (e) => {
+          const slotKey = e.target.getAttribute('data-slot');
+          const val = e.target.value;
+          currentMapping[slotKey] = val === 'auto' ? 'auto' : Number(val);
+          try {
+            await fetch('/api/tof-sensors/mapping', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ [slotKey]: val })
+            });
+          } catch (_) {}
+        });
+      });
+
+      // Bind rotation dropdown changes
+      document.querySelectorAll('select.rot-select').forEach((sel) => {
+        sel.addEventListener('change', async (e) => {
+          const slotKey = e.target.getAttribute('data-slot');
+          const val = e.target.value;
+          currentMapping[`${slotKey}_rot`] = val;
+          localStorage.setItem(`rot_${slotKey}`, val);
+          try {
+            await fetch('/api/tof-sensors/mapping', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ [`${slotKey}_rot`]: val })
+            });
+          } catch (_) {}
+        });
+      });
+    }
+
+    function createSingleZoneCard(slot, autoLabel) {
+      const card = document.createElement('div');
+      card.className = 'sensor-card';
+      card.id = `card-${slot.key}`;
+      card.innerHTML = `
+        <div class="card-head">
+          <div class="card-title-block">
+            <h3>
+              <span class="dot" id="dot-${slot.key}"></span>
+              ${slot.title}
+            </h3>
+            <p id="sub-${slot.key}">${slot.subtitle}</p>
+          </div>
+          <div class="ch-select-wrap">
+            <select class="ch-select" id="sel-${slot.key}" data-slot="${slot.key}">
+              <option value="auto">${autoLabel}</option>
+              <option value="0">CH 0</option>
+              <option value="1">CH 1</option>
+              <option value="2">CH 2</option>
+              <option value="3">CH 3</option>
+              <option value="4">CH 4</option>
+              <option value="5">CH 5</option>
+              <option value="6">CH 6</option>
+              <option value="7">CH 7</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="cliff-readout">
+          <div class="cliff-big-mm offline" id="dist-mm-${slot.key}">Not Connected</div>
+          <div class="cliff-sub-units" id="dist-sub-${slot.key}">Plug sensor into multiplexer</div>
+        </div>
+
+        <div class="bar-track">
+          <div class="bar-fill" id="bar-${slot.key}"></div>
+        </div>
+
+        <div class="cliff-meta-row">
+          <span id="status-${slot.key}">STATUS: WAITING</span>
+          <span id="sig-${slot.key}">SIG: -- kcps</span>
+        </div>
+      `;
+      return card;
+    }
+
+    function resolveChannelForSlot(slot, channels, usedChannels) {
+      const cfg = currentMapping[slot.key];
+      if (cfg !== undefined && cfg !== 'auto' && Number.isInteger(Number(cfg))) {
+        const chObj = channels.find(c => c.ch === Number(cfg));
+        if (chObj) usedChannels.add(chObj.ch);
+        return chObj || null;
+      }
+
+      if (slot.preferredCh !== undefined && slot.preferredCh !== 'auto') {
+        const chObj = channels.find(c => c.ch === slot.preferredCh && !usedChannels.has(c.ch));
+        if (chObj) {
+          usedChannels.add(chObj.ch);
+          return chObj;
+        }
+      }
+
+      if (slot.key.includes('l7cx')) {
+        const l7List = channels.filter(c => c.present && c.type === 'VL53L7CX' && !usedChannels.has(c.ch));
+        const chosen = l7List[0] || null;
+        if (chosen) usedChannels.add(chosen.ch);
+        return chosen;
+      }
+
+      if (slot.key.startsWith('cliff_')) {
+        const l4List = channels.filter(c => c.present && c.type === 'VL53L4CD');
+        const chosen = l4List[slot.preferredIdx] || null;
+        if (chosen) usedChannels.add(chosen.ch);
+        return chosen;
+      }
+
+      // Aux slots pick any remaining active sensor not yet displayed in the primary slots
+      const remaining = channels.filter(c => c.present && !usedChannels.has(c.ch));
+      const chosen = remaining[0] || null;
+      if (chosen) usedChannels.add(chosen.ch);
+      return chosen;
+    }
+
+    function renderWideSlot(slot, chData) {
+      const card = document.getElementById(`card-${slot.key}`);
+      const dot = document.getElementById(`dot-${slot.key}`);
+      const sub = document.getElementById(`sub-${slot.key}`);
+      const minMmEl = document.getElementById(`min-mm-${slot.key}`);
+      const minSubEl = document.getElementById(`min-sub-${slot.key}`);
+      const ctrMmEl = document.getElementById(`ctr-mm-${slot.key}`);
+      const ctrSubEl = document.getElementById(`ctr-sub-${slot.key}`);
+      const meanMmEl = document.getElementById(`mean-mm-${slot.key}`);
+      const metaEl = document.getElementById(`meta-${slot.key}`);
+
+      if (!chData || !chData.present || !chData.init) {
+        card.className = 'sensor-card';
+        dot.className = 'dot';
+        sub.textContent = `${slot.subtitle} · Waiting for VL53L7CX`;
+        minMmEl.textContent = '-- mm';
+        minSubEl.textContent = '-- cm · -- in';
+        ctrMmEl.textContent = '-- mm';
+        ctrSubEl.textContent = '-- cm · -- in';
+        meanMmEl.textContent = '-- mm';
+        metaEl.textContent = '0/64 zones · --°C';
+        for (let z = 0; z < 64; z++) {
+          const cell = document.getElementById(`cell-${slot.key}-${z}`);
+          cell.style.cssText = zoneColorStyle(-1);
+          cell.textContent = '--';
+        }
+        return;
+      }
+
+      card.className = 'sensor-card online';
+      dot.className = 'dot ok';
+      const rot = currentMapping[`${slot.key}_rot`] || localStorage.getItem(`rot_${slot.key}`) || '90_ccw';
+      const rotLabels = {
+        '90_ccw': '90° CCW (Calibrated)',
+        '90_ccw_noflip': '90° CCW (Unmirrored)',
+        '0': '0° (Raw)',
+        '90_cw': '90° CW',
+        '180': '180°'
+      };
+      const rotLabel = rotLabels[rot] || '90° CCW';
+      sub.textContent = `Mux CH ${chData.ch} (0x29) · ${chData.type} · Frame #${chData.frames} (age ${chData.age_ms} ms) · [${rotLabel}]`;
+
+      const minMm = chData.min_mm;
+      const ctrMm = chData.center_mm;
+      const meanMm = chData.mean_mm;
+
+      minMmEl.textContent = minMm >= 0 ? `${minMm} mm` : 'No Target';
+      minSubEl.textContent = fmtCmIn(minMm);
+
+      ctrMmEl.textContent = ctrMm >= 0 ? `${ctrMm} mm` : '-- mm';
+      ctrSubEl.textContent = fmtCmIn(ctrMm);
+
+      meanMmEl.textContent = meanMm >= 0 ? `${meanMm} mm` : '-- mm';
+      metaEl.textContent = `${chData.valid_zones || 0}/64 zones · ${chData.temp_c ?? '--'}°C`;
+
+      const grid = Array.isArray(chData.grid_mm) ? chData.grid_mm : [];
+      for (let zDisp = 0; zDisp < 64; zDisp++) {
+        const rDisp = Math.floor(zDisp / 8);
+        const cDisp = zDisp % 8;
+        let zSrc;
+        if (rot === '90_ccw') {
+          // 90° CCW (Rover 1 Chassis Mount):
+          // Vertical mapping: sensor col = 7 - rDisp (verified: up and down is correct)
+          // Horizontal mapping: sensor row = 7 - cDisp (flipped: left is left, right is right)
+          zSrc = ((7 - cDisp) * 8) + (7 - rDisp);
+        } else if (rot === '90_ccw_noflip') {
+          // 90° CCW without horizontal mirror: sensor row = cDisp, sensor col = 7 - rDisp
+          zSrc = (cDisp * 8) + (7 - rDisp);
+        } else if (rot === '90_cw') {
+          // 90° clockwise: sensor row = 7 - cDisp, sensor col = rDisp
+          zSrc = ((7 - cDisp) * 8) + rDisp;
+        } else if (rot === '180') {
+          // 180°
+          zSrc = 63 - zDisp;
+        } else {
+          // 0° (Raw)
+          zSrc = zDisp;
+        }
+        const cell = document.getElementById(`cell-${slot.key}-${zDisp}`);
+        const d = grid[zSrc] !== undefined ? grid[zSrc] : -1;
+        cell.style.cssText = zoneColorStyle(d);
+        cell.innerHTML = d >= 0 ? `${d}<span class="u">mm</span>` : '--';
+        cell.title = `Display [r${rDisp}, c${cDisp}] · Sensor Zone #${zSrc} (r${Math.floor(zSrc / 8)}, c${zSrc % 8}): ${d >= 0 ? d + ' mm' : 'No Target'}`;
+      }
+    }
+
+    function renderSingleZoneSlot(slot, chData) {
+      const card = document.getElementById(`card-${slot.key}`);
+      const dot = document.getElementById(`dot-${slot.key}`);
+      const sub = document.getElementById(`sub-${slot.key}`);
+      const distMmEl = document.getElementById(`dist-mm-${slot.key}`);
+      const distSubEl = document.getElementById(`dist-sub-${slot.key}`);
+      const barEl = document.getElementById(`bar-${slot.key}`);
+      const statusEl = document.getElementById(`status-${slot.key}`);
+      const sigEl = document.getElementById(`sig-${slot.key}`);
+
+      if (!chData || !chData.present || !chData.init) {
+        card.className = 'sensor-card';
+        dot.className = 'dot';
+        sub.textContent = `${slot.subtitle} · Not Connected`;
+        distMmEl.className = 'cliff-big-mm offline';
+        distMmEl.textContent = 'Not Connected';
+        distSubEl.textContent = 'Connect sensor to multiplexer';
+        barEl.style.width = '0%';
+        statusEl.textContent = 'STATUS: OFFLINE';
+        sigEl.textContent = 'SIG: --';
+        return;
+      }
+
+      card.className = 'sensor-card online';
+      dot.className = 'dot ok';
+      sub.textContent = `Mux CH ${chData.ch} (0x29) · ${chData.type} · Frame #${chData.frames}`;
+
+      const d = chData.type === 'VL53L7CX' ? chData.center_mm : chData.dist_mm;
+      if (d !== undefined && d >= 0) {
+        distMmEl.className = 'cliff-big-mm';
+        distMmEl.textContent = `${d} mm`;
+        distSubEl.textContent = fmtCmIn(d);
+        const pct = Math.max(2, Math.min(100, (d / 1200) * 100));
+        barEl.style.width = `${pct.toFixed(1)}%`;
+      } else {
+        distMmEl.className = 'cliff-big-mm offline';
+        distMmEl.textContent = 'Out of Range';
+        distSubEl.textContent = '-- cm · -- in';
+        barEl.style.width = '0%';
+      }
+
+      if (chData.type === 'VL53L4CD') {
+        const st = chData.status;
+        const stLabel = st === 0 ? 'VALID (0)' : `STATUS ${st}`;
+        statusEl.textContent = `RANGE: ${stLabel} (±${chData.sigma_mm ?? '--'}mm)`;
+        sigEl.textContent = `SIG: ${chData.signal_kcps ?? '--'} kcps`;
+      } else {
+        statusEl.textContent = `8×8 MIN: ${chData.min_mm ?? '--'} mm`;
+        sigEl.textContent = `ZONES: ${chData.valid_zones ?? 0}/64`;
+      }
+    }
+
+    async function pollTofSensors() {
+      try {
+        const res = await fetch('/api/tof-sensors', { cache: 'no-store' });
+        const payload = await res.json();
+
+        const dotEsp = document.getElementById('dot-esp');
+        const txtEsp = document.getElementById('txt-esp');
+        const dotMux = document.getElementById('dot-mux');
+        const txtMux = document.getElementById('txt-mux');
+        const txtActive = document.getElementById('txt-active-count');
+
+        if (payload.mapping) {
+          currentMapping = { ...currentMapping, ...payload.mapping };
+          for (const [k, v] of Object.entries(currentMapping)) {
+            const sel = document.getElementById(`sel-${k}`);
+            if (sel && document.activeElement !== sel) {
+              sel.value = String(v);
+            }
+            if (k.endsWith('_rot')) {
+              const slotBase = k.replace('_rot', '');
+              const rotSel = document.getElementById(`rot-${slotBase}`);
+              if (rotSel && document.activeElement !== rotSel) {
+                rotSel.value = String(v);
+              }
+            }
+          }
+        }
+
+        if (!payload.ok || !payload.data) {
+          dotEsp.className = 'dot err';
+          txtEsp.textContent = 'ESP32-S3: Waiting for data...';
+          dotMux.className = 'dot err';
+          txtMux.textContent = 'MUX 0x70: --';
+          return;
+        }
+
+        const data = payload.data;
+        const channels = Array.isArray(data.channels) ? data.channels : [];
+
+        dotEsp.className = payload.connected ? 'dot ok' : 'dot warn';
+        txtEsp.textContent = `ESP32-S3: ${data.fw || 'ONLINE'} (${payload.hostAgeMs ?? '--'} ms)`;
+
+        dotMux.className = data.mux_ok ? 'dot ok' : 'dot err';
+        txtMux.textContent = data.mux_ok ? `MUX 0x70: OK (${Math.round((data.i2c_hz || 400000)/1000)} kHz)` : 'MUX 0x70: OFFLINE';
+
+        const activeCount = channels.filter(c => c.present).length;
+        txtActive.textContent = `Active Sensors: ${activeCount} / 8`;
+
+        // Update 8-channel strip
+        for (let ch = 0; ch < 8; ch++) {
+          const c = channels.find(item => item.ch === ch) || { ch, present: 0, type: 'NONE', frames: 0 };
+          const pill = document.getElementById(`mux-pill-${ch}`);
+          const typeBadge = document.getElementById(`mux-type-${ch}`);
+          const distEl = document.getElementById(`mux-dist-${ch}`);
+          const subEl = document.getElementById(`mux-sub-${ch}`);
+          const framesEl = document.getElementById(`mux-frames-${ch}`);
+
+          if (!c.present) {
+            pill.className = 'mux-pill';
+            typeBadge.className = 'mux-type-badge';
+            typeBadge.textContent = 'EMPTY';
+            distEl.className = 'mux-dist empty';
+            distEl.textContent = 'Empty';
+            subEl.textContent = '0x29: none';
+            framesEl.textContent = '0 frames';
+          } else if (c.type === 'VL53L7CX') {
+            pill.className = 'mux-pill active-l7';
+            typeBadge.className = 'mux-type-badge l7';
+            typeBadge.textContent = 'VL53L7CX 8×8';
+            const d = c.min_mm !== undefined && c.min_mm >= 0 ? `${c.min_mm} mm` : 'Ranging...';
+            distEl.className = 'mux-dist';
+            distEl.textContent = d;
+            subEl.textContent = `Ctr: ${c.center_mm >= 0 ? c.center_mm + 'mm' : '--'} (${c.valid_zones || 0}/64)`;
+            framesEl.textContent = `#${c.frames || 0}`;
+          } else if (c.type === 'VL53L4CD') {
+            pill.className = 'mux-pill active-l4';
+            typeBadge.className = 'mux-type-badge l4';
+            typeBadge.textContent = 'VL53L4CD';
+            const d = c.dist_mm !== undefined && c.dist_mm >= 0 ? `${c.dist_mm} mm` : 'Ranging...';
+            distEl.className = 'mux-dist';
+            distEl.textContent = d;
+            subEl.textContent = fmtCmIn(c.dist_mm);
+            framesEl.textContent = `#${c.frames || 0}`;
+          } else {
+            pill.className = 'mux-pill';
+            typeBadge.className = 'mux-type-badge';
+            typeBadge.textContent = c.type || '0x29';
+            distEl.className = 'mux-dist empty';
+            distEl.textContent = c.fail ? 'Init Error' : 'Initializing...';
+            subEl.textContent = '0x29: present';
+            framesEl.textContent = `#${c.frames || 0}`;
+          }
+        }
+
+        const usedChannels = new Set();
+        for (const slot of WIDE_SLOTS) {
+          const chData = resolveChannelForSlot(slot, channels, usedChannels);
+          renderWideSlot(slot, chData);
+        }
+        for (const slot of CLIFF_SLOTS) {
+          const chData = resolveChannelForSlot(slot, channels, usedChannels);
+          renderSingleZoneSlot(slot, chData);
+        }
+        for (const slot of AUX_SLOTS) {
+          const chData = resolveChannelForSlot(slot, channels, usedChannels);
+          renderSingleZoneSlot(slot, chData);
+        }
+      } catch (_) {}
+    }
+
+    document.getElementById('btn-rescan').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-rescan');
+      btn.textContent = '⏳ Scanning CH 0–7...';
+      try {
+        await fetch('/api/tof-sensors/rescan', { method: 'POST' });
+      } catch (_) {}
+      setTimeout(() => {
+        btn.textContent = '🔄 Re-Scan Multiplexer';
+      }, 1500);
+    });
+
+    buildInitialDom();
+    pollTofSensors();
+    setInterval(pollTofSensors, 250);
+  </script>
+</body>
+</html>

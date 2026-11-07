@@ -21,25 +21,71 @@ def test_launch_description():
     ld = launch_module.generate_launch_description()
     assert isinstance(ld, LaunchDescription)
 
-    # Phase 3 + Foxglove + cmd_vel + IMU static TF: 7 entities
+    # Phase 3 + Foxglove + cmd_vel + IMU static TF + ToF bridge & 2 ToF static TFs + IMU bridge + nav bridge: 12 entities
     entities = ld.entities
-    assert len(entities) == 8, f"Expected 7 entities in launch, found {len(entities)}"
+    assert len(entities) == 12, f"Expected 12 entities in launch, found {len(entities)}"
 
     nodes = [e for e in entities if isinstance(e, Node)]
     node_executables = {e.node_executable for e in nodes}
 
     assert 'rover_system_health' in node_executables, "rover_system_health must be in launch"
     assert 'rover_lidar_bridge' in node_executables, "rover_lidar_bridge must be in launch"
+    assert 'rover_tof_bridge' in node_executables, "rover_tof_bridge must be in launch"
     assert 'rover_encoder_odometry' in node_executables, "rover_encoder_odometry must be in launch"
     assert 'rover_cmd_vel_bridge' in node_executables, "rover_cmd_vel_bridge must be in launch"
+    assert 'rover_imu_bridge' in node_executables, "rover_imu_bridge must be in launch"
+    assert 'rover_nav_bridge' in node_executables, "rover_nav_bridge must be in launch"
     assert 'static_transform_publisher' in node_executables, "static_transform_publisher must be in launch"
     assert 'foxglove_bridge' in node_executables, "foxglove_bridge must be in launch"
 
-    # Static TF nodes check
+    # Static TF nodes check (laser_frame, imu_link, tof_front_left_link, tof_front_right_link)
     tf_nodes = [n for n in nodes if n.node_executable == 'static_transform_publisher']
-    assert len(tf_nodes) == 2, f"Expected 2 static_transform_publisher nodes, found {len(tf_nodes)}"
+    assert len(tf_nodes) == 4, f"Expected 4 static_transform_publisher nodes, found {len(tf_nodes)}"
     for n in tf_nodes:
         assert n.node_package == 'tf2_ros'
+
+    def parse_node_args(node):
+        raw_args = getattr(node, '_Node__arguments', []) or getattr(node, 'node_arguments', [])
+        parsed = []
+        for a in raw_args:
+            if isinstance(a, (list, tuple)) and len(a) > 0 and hasattr(a[0], 'text'):
+                parsed.append(a[0].text)
+            elif hasattr(a, 'text'):
+                parsed.append(a.text)
+            else:
+                parsed.append(str(a))
+        return parsed
+
+    # Check ToF static TF arguments (125 mm lateral separation, centered symmetrically at y = ±0.0625 m)
+    left_tof_node = next(n for n in tf_nodes if (getattr(n, '_Node__node_name', '') or getattr(n, 'name', '')) == 'base_link_to_tof_front_left_publisher')
+    right_tof_node = next(n for n in tf_nodes if (getattr(n, '_Node__node_name', '') or getattr(n, 'name', '')) == 'base_link_to_tof_front_right_publisher')
+
+    left_args = parse_node_args(left_tof_node)
+    right_args = parse_node_args(right_tof_node)
+
+    assert '--y' in left_args
+    left_y_idx = left_args.index('--y') + 1
+    assert float(left_args[left_y_idx]) == 0.0625, f"Front left ToF y should be 0.0625 m, got {left_args[left_y_idx]}"
+
+    assert '--y' in right_args
+    right_y_idx = right_args.index('--y') + 1
+    assert float(right_args[right_y_idx]) == -0.0625, f"Front right ToF y should be -0.0625 m, got {right_args[right_y_idx]}"
+
+    # Verify 125 mm separation and symmetry
+    sep_m = float(left_args[left_y_idx]) - float(right_args[right_y_idx])
+    assert abs(sep_m - 0.125) < 1e-6, f"Expected 125 mm (0.125 m) lateral separation, got {sep_m}"
+
+    # Verify forward position x=0.14 m and height z=0.08 m preserved
+    left_x_idx = left_args.index('--x') + 1
+    assert float(left_args[left_x_idx]) == 0.14
+    left_z_idx = left_args.index('--z') + 1
+    assert float(left_args[left_z_idx]) == 0.08
+
+    # Verify outward angles ±8 deg (±0.13962634 rad)
+    left_yaw_idx = left_args.index('--yaw') + 1
+    assert abs(float(left_args[left_yaw_idx]) - 0.13962634) < 1e-6
+    right_yaw_idx = right_args.index('--yaw') + 1
+    assert abs(float(right_args[right_yaw_idx]) - (-0.13962634)) < 1e-6
 
     # Foxglove bridge safety & read-only parameters check
     foxglove_node = [n for n in nodes if n.node_executable == 'foxglove_bridge'][0]

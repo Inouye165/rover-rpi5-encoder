@@ -5,6 +5,17 @@ const { SerialPort } = require('serialport');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const os = require('os');
+const { BatteryTrend } = require('./battery_trend');
+const { ManualDriveWatchdog } = require('./manual_drive_watchdog');
+const {
+  FRONT_STOP_THRESHOLD_MM,
+  FRONT_CRAWL_THRESHOLD_MM,
+  DEFAULT_CRAWL_LINEAR_MPS,
+  DEFAULT_CRAWL_ANGULAR_RADPS,
+  evaluateFrontSafetyZone,
+  applyFrontSafetyZoneToVelocity
+} = require('./front_safety_zone');
 const slamManager = require('./slam_manager');
 
 
@@ -36,13 +47,14 @@ try {
 const PORT = process.env.PORT || 3000;
 const ROVER_INTERNAL_CMD_HOST = process.env.ROVER_INTERNAL_CMD_HOST || '127.0.0.1';
 const ROVER_INTERNAL_CMD_PORT = parseInt(process.env.ROVER_INTERNAL_CMD_PORT) || 3010;
-
+const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 
 function triggerNav2Cancel() {
   try {
+    const bridgeUrl = new URL(ROVER_NAV_BRIDGE_URL);
     const cancelReq = http.request({
-      hostname: '127.0.0.1',
-      port: 3005,
+      hostname: bridgeUrl.hostname || '127.0.0.1',
+      port: bridgeUrl.port || 3005,
       path: '/api/nav/cancel',
       method: 'POST',
       timeout: 500
@@ -138,6 +150,17 @@ let latestPidTelemetry = null;
 let pidPacketCount = 0;
 
 // ESP32 reset reason enumerations
+// Authoritative 7-state enum mapping exactly matching ChassisSupervisor.h SpinRecoveryState
+const SPIN_RECOVERY_STATES = [
+  'IDLE',                    // 0 = SPIN_RECOVERY_IDLE
+  'MONITORING_INITIAL',      // 1 = SPIN_RECOVERY_MONITORING_INITIAL
+  'SETTLE_1',                // 2 = SPIN_RECOVERY_SETTLE_1
+  'TWITCH_PULSE',            // 3 = SPIN_RECOVERY_TWITCH_PULSE
+  'SETTLE_2',                // 4 = SPIN_RECOVERY_SETTLE_2
+  'RETRY',                   // 5 = SPIN_RECOVERY_RETRY
+  'FAILED_LATCHED'           // 6 = SPIN_RECOVERY_FAILED_LATCHED
+];
+
 const ESP_RESET_REASONS = {
   0: 'UNKNOWN',
   1: 'POWERON_RESET',
@@ -190,6 +213,20 @@ const internalCmdApp    = express();
 const internalCmdServer = http.createServer(internalCmdApp);
 
 app.use(express.json());
+
+// Default UI: Rover 2-style HUD cockpit (public/hud.html). The legacy engineering cockpit
+// stays reachable at /index.html. Set COCKPIT_DEFAULT_UI=legacy to serve it at "/" instead.
+const COCKPIT_DEFAULT_UI = (process.env.COCKPIT_DEFAULT_UI || 'hud').toLowerCase();
+app.get('/', (req, res, next) => {
+  if (COCKPIT_DEFAULT_UI === 'legacy') return next();
+  const hudPath = path.join(__dirname, 'public', 'hud.html');
+  if (!fs.existsSync(hudPath)) return next();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(hudPath);
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
   maxAge: 0,
@@ -229,6 +266,28 @@ const MAX_POSITION_SPEED = 60;
 // Phase 4 Coordinated Normal Drive State
 const EventEmitter = require('events');
 const normalDriveEvents = new EventEmitter();
+function handleDrivetrainRecoveryFault(status) {
+  if (status && status.spinFailedExhausted === true) {
+    const isNavigating = Boolean(status.armed ||
+      autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' ||
+      autonomyState.enabled || cmdSource === 'ROS_AUTONOMY');
+    if (isNavigating && autonomyState.state !== 'FAULT') {
+      console.error('[Autonomy Safety] CRITICAL: Drivetrain recovery exhausted! Cancelling Nav2 goal, locking FAULT state, and disarming.');
+      triggerNav2Cancel();
+      resetAutonomyToSafe('Drivetrain recovery exhausted (spin/motion stall)');
+      autonomyState.state = 'FAULT';
+      autonomyState.lastRejectionReason = 'Drivetrain recovery exhausted (spin/motion stall)';
+      if (serialPort && serialPort.isOpen) {
+        const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
+        serialPort.write(disarmPkt);
+        broadcast({ type: 'raw_serial_out', data: `[Autonomy Safety] Recovery exhausted: disarm command sent` });
+      }
+      broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
+    }
+  }
+}
+normalDriveEvents.on('status', handleDrivetrainRecoveryFault);
+
 let normalDriveStatusSeq = 0;
 let latestNormalDriveStatus = null;
 let latestFaultFlags = 0;
@@ -236,6 +295,10 @@ let lastDeadmanPressedTime = Date.now();
 let reverseWaitStartTime = 0;
 let targetLinear = 0.0;
 let targetAngular = 0.0;
+let requestedLinear = 0.0;
+let requestedAngular = 0.0;
+let requestedCmdAtMs = 0;
+const REQUESTED_CMD_TTL_MS = 650;
 let measuredLinearVel = 0.0;
 let measuredAngularVel = 0.0;
 let driveCommandNeedsFlush = false;
@@ -271,6 +334,63 @@ let floorTesting = false; // default to safe floor testing limits on startup
 let cmdSource = 'NONE';
 let deadmanPressed = false;
 
+// Manual-drive watchdog: zero BROWSER/GAMEPAD targets when the commanding socket closes, or
+// when a client that opted in with `keepalive: true` stops streaming joystick frames.
+const manualDriveWatchdog = new ManualDriveWatchdog({
+  timeoutMs: parseInt(process.env.MANUAL_DRIVE_KEEPALIVE_TIMEOUT_MS, 10) || 600
+});
+function clearRequestedMotionCommand() {
+  requestedLinear = 0.0;
+  requestedAngular = 0.0;
+  requestedCmdAtMs = 0;
+}
+
+function noteRequestedMotionCommand(lin, ang, now = Date.now()) {
+  const l = Number(lin) || 0;
+  const a = Number(ang) || 0;
+  if (Math.abs(l) > 1e-4 || Math.abs(a) > 1e-4) {
+    requestedLinear = l;
+    requestedAngular = a;
+    requestedCmdAtMs = now;
+  } else {
+    clearRequestedMotionCommand();
+  }
+}
+
+function getActiveRequestedVelocity(now = Date.now()) {
+  const isArmed = Boolean(latestNormalDriveStatus && latestNormalDriveStatus.armed);
+  if (!isArmed || cmdSource === 'NONE') {
+    return { linear: 0.0, angular: 0.0, active: false };
+  }
+  if (!requestedCmdAtMs || (now - requestedCmdAtMs) > REQUESTED_CMD_TTL_MS) {
+    return { linear: 0.0, angular: 0.0, active: false };
+  }
+  const active = Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4;
+  return {
+    linear: active ? requestedLinear : 0.0,
+    angular: active ? requestedAngular : 0.0,
+    active
+  };
+}
+
+function zeroManualDriveTarget(reason) {
+  if (cmdSource !== 'GAMEPAD' && cmdSource !== 'BROWSER') return false;
+  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4 || Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4;
+  targetLinear = 0.0;
+  targetAngular = 0.0;
+  clearRequestedMotionCommand();
+  cmdSource = 'NONE';
+  deadmanPressed = false;
+  if (typeof refreshFrontSafetyZone === 'function') {
+    refreshFrontSafetyZone();
+  }
+  if (wasMoving) {
+    console.warn(`[Manual Drive Watchdog] ${reason} - manual target zeroed.`);
+    broadcast({ type: 'manual_drive_watchdog', reason });
+  }
+  return wasMoving;
+}
+
 // ROS 2 Autonomy Command State & Safety Machine
 let autonomyGeneration = 1;
 let zeroHandshakeCount = 0;
@@ -280,6 +400,13 @@ let limitedAngular = 0.0;
 let watchdogFired = false;
 let reqRateWindowStart = Date.now();
 let reqRateCount = 0;
+
+const REQUIRED_NAV_LIFECYCLE_NODES = [
+  'controller_server',
+  'planner_server',
+  'bt_navigator',
+  'collision_monitor'
+];
 
 let navigationState = {
   ready: false,
@@ -291,10 +418,23 @@ let lastDispatchedNav = null;
 
 function updateNavigationState(nav) {
   if (!nav || typeof nav !== 'object') return;
-  navigationState.ready = Boolean(nav.ready);
-  navigationState.state = nav.state || 'UNKNOWN';
-  navigationState.details = nav.details || '';
-  navigationState.nodes = nav.nodes || {};
+  const nodes = (nav.nodes && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : (navigationState.nodes || {});
+  
+  // Consistency check: response fields cannot report ready=false/inactive while simultaneously listing all required nodes active and action-ready
+  const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+  const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+  const actionReady = (nav.action_server_ready !== false && nav.actionServerReady !== false);
+
+  if (allNodesActive && actionReady) {
+    navigationState.ready = true;
+    navigationState.state = 'ACTIVE';
+    navigationState.details = 'All required navigation and collision-protection nodes active';
+  } else {
+    navigationState.ready = false;
+    navigationState.state = (nav.state && nav.state !== 'ACTIVE') ? nav.state : (inactiveNodes.length > 0 ? 'INACTIVE' : 'UNKNOWN');
+    navigationState.details = (inactiveNodes.length > 0 ? `Required navigation lifecycle nodes inactive: ${inactiveNodes.join(', ')}` : (nav.details || 'Navigation not ready'));
+  }
+  navigationState.nodes = nodes;
 }
 
 let localizationState = {
@@ -357,7 +497,7 @@ function updateLocalizationState(loc) {
 
   // Fail-Safe: If rover was actively navigating and localization becomes lost:
   if (wasLocalized && !localizationState.localized) {
-    if (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY') {
+    if (cmdSource !== 'CALIBRATION_TEST' && (autonomyState.state === 'ACTIVE' || autonomyState.state === 'READY_ARMED' || cmdSource === 'ROS_AUTONOMY')) {
       console.error('[Localization Safety] CRITICAL: Localization lost during autonomous navigation! Triggering fail-safe disarm.');
       abortAutonomyDueToLocalizationLost('Localization lost during autonomous navigation');
     }
@@ -432,7 +572,8 @@ function getAutonomyStatusObject() {
     rejectedCount: autonomyState.rejectedCount,
     watchdogTimeouts: autonomyState.watchdogTimeouts,
     lastRejectionReason: autonomyState.lastRejectionReason,
-    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs
+    watchdogTimeoutMs: autonomyState.watchdogTimeoutMs,
+    frontSafetyZone: latestFrontSafetyZone
   };
 }
 
@@ -464,8 +605,12 @@ function resetAutonomyToSafe(reason = 'Reset') {
   autonomyState.lastRejectionReason = isCmdTokenValid ? reason : 'Internal command configuration fault';
   if (cmdSource === 'ROS_AUTONOMY' || cmdSource === 'CALIBRATION_TEST' || cmdSource === 'AUTO_CALIB' || cmdSource === 'LIDAR_TEST' || cmdSource === 'BACKTRACK') {
     cmdSource = 'NONE';
+    clearRequestedMotionCommand();
   }
   sendZeroMotionPacket();
+  if (typeof refreshFrontSafetyZone === 'function') {
+    refreshFrontSafetyZone();
+  }
   broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
 }
 
@@ -786,6 +931,96 @@ function processLidarClearanceScan(scanData) {
 setInterval(pollLidarClearance, 100);
 
 // ────────────────────────────────────────────────────────────
+// Front ToF Obstacle Safety Zone Engine (<=75mm Crawl, <=30mm Stop)
+// ────────────────────────────────────────────────────────────
+const TOF_STATE_FILE_PATH = '/tmp/esp32s3_tof_state.json';
+const TOF_CMD_FILE_PATH = '/tmp/esp32s3_tof_cmd.txt';
+const TOF_MAPPING_FILE_PATH = path.join(__dirname, 'tof_sensor_mapping.json');
+const DEFAULT_TOF_MAPPING = {
+  front_left_l7cx: 1,
+  front_left_l7cx_rot: '90_ccw',
+  front_right_l7cx: 0,
+  front_right_l7cx_rot: '90_ccw',
+  rear_left_l7cx: 'auto',
+  rear_left_l7cx_rot: '90_ccw',
+  rear_right_l7cx: 'auto',
+  rear_right_l7cx_rot: '90_ccw',
+  cliff_fl: 'auto',
+  cliff_fr: 'auto',
+  cliff_rl: 'auto',
+  cliff_rr: 'auto',
+  aux_1: 'auto',
+  aux_2: 'auto'
+};
+
+function loadTofMapping() {
+  try {
+    if (fs.existsSync(TOF_MAPPING_FILE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(TOF_MAPPING_FILE_PATH, 'utf8'));
+      const mapping = { ...DEFAULT_TOF_MAPPING, ...(raw || {}) };
+      delete mapping.front_l7cx;
+      delete mapping.front_l7cx_rot;
+      delete mapping.rear_l7cx;
+      delete mapping.rear_l7cx_rot;
+      return mapping;
+    }
+  } catch (_) {}
+  return { ...DEFAULT_TOF_MAPPING };
+}
+
+let latestFrontSafetyZone = evaluateFrontSafetyZone(null, DEFAULT_TOF_MAPPING);
+
+function refreshFrontSafetyZone(preloadedData = null, preloadedMapping = null) {
+  const now = Date.now();
+  const mapping = preloadedMapping || loadTofMapping();
+  let data = preloadedData;
+  if (!data) {
+    try {
+      if (fs.existsSync(TOF_STATE_FILE_PATH)) {
+        data = JSON.parse(fs.readFileSync(TOF_STATE_FILE_PATH, 'utf8'));
+      }
+    } catch (_) {
+      data = null;
+    }
+  }
+
+  const prev = latestFrontSafetyZone || {};
+  const prevState = prev.state || 'OFFLINE';
+  const prevIndCode = prev.indicatorCode || 'OFFLINE';
+  const prevSensorLive = Boolean(prev.sensorLive);
+  const prevMinMm = prev.minMm !== undefined ? prev.minMm : null;
+  const crawlSpeedMps = parseFloat(process.env.FRONT_ZONE_CRAWL_MPS) || DEFAULT_CRAWL_LINEAR_MPS;
+  const crawlAngularRadps = parseFloat(process.env.FRONT_ZONE_CRAWL_RADPS) || DEFAULT_CRAWL_ANGULAR_RADPS;
+  const activeReq = getActiveRequestedVelocity(now);
+
+  latestFrontSafetyZone = evaluateFrontSafetyZone(data, mapping, {
+    nowMs: now,
+    stopThresholdMm: FRONT_STOP_THRESHOLD_MM,
+    crawlThresholdMm: FRONT_CRAWL_THRESHOLD_MM,
+    crawlSpeedMps,
+    crawlAngularRadps,
+    requestedLinearMps: activeReq.linear,
+    requestedAngularRadps: activeReq.angular
+  });
+
+  const changed = (
+    latestFrontSafetyZone.state !== prevState ||
+    latestFrontSafetyZone.indicatorCode !== prevIndCode ||
+    latestFrontSafetyZone.sensorLive !== prevSensorLive ||
+    (latestFrontSafetyZone.active && latestFrontSafetyZone.minMm !== prevMinMm)
+  );
+  if (changed) {
+    if (latestFrontSafetyZone.state !== prevState || latestFrontSafetyZone.indicatorCode !== prevIndCode) {
+      console.log(`[Front Safety Zone] ${prevState}/${prevIndCode} -> ${latestFrontSafetyZone.state}/${latestFrontSafetyZone.indicatorCode} (minMm=${latestFrontSafetyZone.minMm ?? 'none'} mm, sensor=${latestFrontSafetyZone.triggeredBy ?? 'none'})`);
+    }
+    broadcast({ type: 'front_safety_zone', zone: latestFrontSafetyZone });
+  }
+  return latestFrontSafetyZone;
+}
+
+setInterval(() => refreshFrontSafetyZone(), 100);
+
+// ────────────────────────────────────────────────────────────
 // WebSocket Broadcast Helper
 // ────────────────────────────────────────────────────────────
 function broadcast(data) {
@@ -938,6 +1173,10 @@ function startDriveKeepaliveLoop() {
   setInterval(() => {
     const now = Date.now();
     const hrNow = process.hrtime.bigint();
+
+    if (manualDriveWatchdog.checkExpired()) {
+      zeroManualDriveTarget(`Joystick keepalive stream stale (> ${manualDriveWatchdog.timeoutMs} ms)`);
+    }
     let dt = Number(hrNow - lastLimiterTime) / 1e9;
     lastLimiterTime = hrNow;
     if (dt <= 0 || dt > 0.1) dt = 0.05; // Guard jitter
@@ -965,6 +1204,10 @@ function startDriveKeepaliveLoop() {
 
     const isArmed = latestNormalDriveStatus && latestNormalDriveStatus.armed;
     const isMaintenance = activeTestInProgress || lidarTestState !== 'IDLE';
+    const frontZone = refreshFrontSafetyZone();
+    const zoneTarget = applyFrontSafetyZoneToVelocity(targetLinear, targetAngular, frontZone);
+    const effTargetLinear = zoneTarget.linear;
+    const effTargetAngular = zoneTarget.angular;
 
     // Safety events bypass slew limiter and force immediate zero
     if (!isArmed || isMaintenance) {
@@ -986,23 +1229,23 @@ function startDriveKeepaliveLoop() {
         const maxAngDecel = parseFloat(process.env.AUTONOMY_ANGULAR_DECEL_RADPS2) || 2.00;
 
         // Linear Slew
-        if (limitedLinear !== targetLinear) {
+        if (limitedLinear !== effTargetLinear) {
           let rate = maxLinAccel;
-          if ((targetLinear >= 0 && limitedLinear > targetLinear) || (targetLinear <= 0 && limitedLinear < targetLinear)) {
+          if ((effTargetLinear >= 0 && limitedLinear > effTargetLinear) || (effTargetLinear <= 0 && limitedLinear < effTargetLinear)) {
             rate = maxLinDecel;
-          } else if ((targetLinear > 0 && limitedLinear < 0) || (targetLinear < 0 && limitedLinear > 0)) {
+          } else if ((effTargetLinear > 0 && limitedLinear < 0) || (effTargetLinear < 0 && limitedLinear > 0)) {
             rate = maxLinDecel;
           }
           const delta = rate * dt;
-          if (targetLinear > limitedLinear) {
-            limitedLinear = Math.min(targetLinear, limitedLinear + delta);
+          if (effTargetLinear > limitedLinear) {
+            limitedLinear = Math.min(effTargetLinear, limitedLinear + delta);
           } else {
-            limitedLinear = Math.max(targetLinear, limitedLinear - delta);
+            limitedLinear = Math.max(effTargetLinear, limitedLinear - delta);
           }
         }
 
         // Snap to zero if stopping and already at low creep speed
-        if (targetLinear === 0.0 && targetAngular === 0.0) {
+        if (effTargetLinear === 0.0 && effTargetAngular === 0.0) {
           if (Math.abs(limitedAngular) <= 0.20 && Math.abs(limitedLinear) <= 0.08) {
             limitedLinear = 0.0;
             limitedAngular = 0.0;
@@ -1010,24 +1253,29 @@ function startDriveKeepaliveLoop() {
         }
 
         // Angular Slew
-        if (limitedAngular !== targetAngular) {
+        if (limitedAngular !== effTargetAngular) {
           let rate = maxAngAccel;
-          if ((targetAngular >= 0 && limitedAngular > targetAngular) || (targetAngular <= 0 && limitedAngular < targetAngular)) {
+          if ((effTargetAngular >= 0 && limitedAngular > effTargetAngular) || (effTargetAngular <= 0 && limitedAngular < effTargetAngular)) {
             rate = maxAngDecel;
-          } else if ((targetAngular > 0 && limitedAngular < 0) || (targetAngular < 0 && limitedAngular > 0)) {
+          } else if ((effTargetAngular > 0 && limitedAngular < 0) || (effTargetAngular < 0 && limitedAngular > 0)) {
             rate = maxAngDecel;
           }
           const delta = rate * dt;
-          if (targetAngular > limitedAngular) {
-            limitedAngular = Math.min(targetAngular, limitedAngular + delta);
+          if (effTargetAngular > limitedAngular) {
+            limitedAngular = Math.min(effTargetAngular, limitedAngular + delta);
           } else {
-            limitedAngular = Math.max(targetAngular, limitedAngular - delta);
+            limitedAngular = Math.max(effTargetAngular, limitedAngular - delta);
           }
         }
+
+        // Immediate front-zone override: bypass slew delay when entering <=75mm CRAWL or <=30mm STOP
+        const zoneLimited = applyFrontSafetyZoneToVelocity(limitedLinear, limitedAngular, frontZone);
+        limitedLinear = zoneLimited.linear;
+        limitedAngular = zoneLimited.angular;
       }
     } else {
-      limitedLinear = targetLinear;
-      limitedAngular = targetAngular;
+      limitedLinear = effTargetLinear;
+      limitedAngular = effTargetAngular;
     }
 
     autonomyState.limitedLinear = limitedLinear;
@@ -1044,7 +1292,10 @@ function startDriveKeepaliveLoop() {
     const vx = Math.round(limitedLinear * 1000);
     const vy = 0;
     const vz = Math.round(limitedAngular * 1000);
-    const clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
+    let clearanceMask = latestLidarClearance ? latestLidarClearance.clearanceMask : 0x00;
+    if (frontZone && frontZone.state === 'STOP') {
+      clearanceMask &= ~0x01; // Clear forward clearance bit when within <=30mm stop zone
+    }
     
     sendBinaryCommand(FUNC_MOTION, [
       ...int16ToLE(vx),
@@ -1237,6 +1488,80 @@ function processRxBuffer() {
 let lastBatteryLogTime = 0;
 let lastLoggedVoltage = null;
 let latestBatteryVoltage = null;
+let latestBatteryPercentage = null;
+let lastGeekwormBatteryTime = 0;
+let geekwormBatteryProcess = null;
+const batteryTrend = new BatteryTrend();
+
+function batteryPayload() {
+  const hasSoc = latestBatteryPercentage !== null;
+  return Object.assign({
+    voltage: latestBatteryVoltage,
+    percentage: latestBatteryPercentage,
+    source: hasSoc ? 'geekworm_x1206' : 'esp32'
+  }, hasSoc ? batteryTrend.snapshot() : {});
+}
+
+// ────────────────────────────────────────────────────────────
+// Geekworm X1206 UPS Battery Telemetry Subprocess
+// ────────────────────────────────────────────────────────────
+function startGeekwormBatteryMonitor() {
+  if (process.env.GEEKWORM_BATTERY_ENABLED === 'false') {
+    return;
+  }
+  const scriptPath = path.join(__dirname, 'geekworm_battery.py');
+  if (!fs.existsSync(scriptPath)) {
+    return;
+  }
+
+  const pythonCmd = process.platform === 'linux' ? 'python3' : 'python';
+  try {
+    geekwormBatteryProcess = spawn(pythonCmd, [scriptPath, '--stream', '3'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let buffer = '';
+    geekwormBatteryProcess.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const telem = JSON.parse(trimmed);
+          if (telem.ok && typeof telem.voltage === 'number') {
+            latestBatteryVoltage = telem.voltage;
+            latestBatteryPercentage = (typeof telem.percentage === 'number') ? telem.percentage : null;
+            lastGeekwormBatteryTime = Date.now();
+            if (latestBatteryPercentage !== null) {
+              batteryTrend.add(latestBatteryPercentage, lastGeekwormBatteryTime);
+            }
+
+            broadcast({ type: 'battery', ...batteryPayload() });
+          }
+        } catch (_) {}
+      }
+    });
+
+    geekwormBatteryProcess.stderr.on('data', () => {});
+
+    geekwormBatteryProcess.on('close', (code) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 10000);
+    });
+
+    geekwormBatteryProcess.on('error', (err) => {
+      geekwormBatteryProcess = null;
+      setTimeout(startGeekwormBatteryMonitor, 15000);
+    });
+  } catch (err) {
+    geekwormBatteryProcess = null;
+    setTimeout(startGeekwormBatteryMonitor, 15000);
+  }
+}
+startGeekwormBatteryMonitor();
 
 function parseTelemetryPacket(extType, data) {
   lastTelemetryReceivedTime = Date.now();
@@ -1246,8 +1571,12 @@ function parseTelemetryPacket(extType, data) {
     // data[] = 7 bytes payload.  data[6] = voltage * 10
     if (data.length >= 7) {
       const voltage = data[6] / 10.0;
-      latestBatteryVoltage = voltage;
       const now = Date.now();
+      const isGeekwormActive = (now - lastGeekwormBatteryTime < 15000) && (latestBatteryPercentage !== null);
+      if (voltage <= 0.1 || isGeekwormActive) {
+        return;
+      }
+      latestBatteryVoltage = voltage;
       // Rate-limit console logging: log only on significant voltage drop/change (>= 0.5V) or every 30s when VERBOSE_LOGGING is enabled
       if (lastLoggedVoltage === null || Math.abs(voltage - lastLoggedVoltage) >= 0.5 || (now - lastBatteryLogTime >= 30000)) {
         lastBatteryLogTime = now;
@@ -1926,10 +2255,20 @@ function parseTelemetryPacket(extType, data) {
       const lockStatus = data[23] === 1;
       const espClearanceMask = data.length >= 26 ? data[24] : 0x00;
       const espClearanceAgeMs = data.length >= 26 ? (data[25] * 10) : 999999;
-      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : 0;
-      const resetReasonId = data.length >= 31 ? data[30] : 0;
-      const rtcResetReasonId = data.length >= 32 ? data[31] : 0;
+      // Represent unsupported fields from older packets as null / UNKNOWN rather than 0
+      const bootCount = data.length >= 30 ? data.readUInt32LE(26) : null;
+      const resetReasonId = data.length >= 31 ? data[30] : null;
+      const rtcResetReasonId = data.length >= 32 ? data[31] : null;
       
+      const uptimeMs = data.length >= 36 ? data.readUInt32LE(32) : null;
+      const spinRecoveryCode = data.length >= 37 ? data[36] : null;
+      const spinRecoveryState = (spinRecoveryCode !== null) ? (SPIN_RECOVERY_STATES[spinRecoveryCode] || `STATE_${spinRecoveryCode}`) : 'UNKNOWN';
+      const noMotionBudgetMs = data.length >= 39 ? data.readUInt16LE(37) : null;
+      const recoveryFlags = data.length >= 40 ? data[39] : null;
+      const spinFailedExhausted = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x01) : null;
+      const chassisRebreakoutConsumed = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x02) : null;
+      const isPowerOnReset = (recoveryFlags !== null) ? Boolean(recoveryFlags & 0x04) : (resetReasonId !== null ? (resetReasonId === 1 || rtcResetReasonId === 1) : null);
+
       if (latestNormalDriveStatus && latestNormalDriveStatus.armed !== armed) {
         console.log(`[DEBUG] ESP32 Normal Drive armed state changed: ${latestNormalDriveStatus.armed} -> ${armed}. LockStatus: ${lockStatus}, Mode: ${mode}`);
       } else if (!armed && lockStatus) {
@@ -1951,9 +2290,16 @@ function parseTelemetryPacket(extType, data) {
         espClearanceAgeMs,
         bootCount,
         resetReasonId,
-        resetReason: ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`,
+        resetReason: resetReasonId !== null ? (ESP_RESET_REASONS[resetReasonId] || `UNKNOWN_${resetReasonId}`) : 'UNKNOWN',
         rtcResetReasonId,
-        rtcResetReason: RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`,
+        rtcResetReason: rtcResetReasonId !== null ? (RTC_RESET_REASONS[rtcResetReasonId] || `UNKNOWN_${rtcResetReasonId}`) : 'UNKNOWN',
+        uptimeMs,
+        spinRecoveryCode,
+        spinRecoveryState,
+        noMotionBudgetMs,
+        spinFailedExhausted,
+        chassisRebreakoutConsumed,
+        isPowerOnReset,
         seq: normalDriveStatusSeq,
         receivedAt: Date.now()
       };
@@ -1966,6 +2312,8 @@ function parseTelemetryPacket(extType, data) {
       });
       // Propagate ESP32-confirmed armed state changes to calibration-status WS consumers.
       broadcastAutoCalibStatus();
+
+// Shared fault handler invoked via normalDriveEvents 'status' listener
     }
 
     } else if (extType === TYPE_PID_DIAGNOSTIC) {
@@ -2015,8 +2363,10 @@ function parseTelemetryPacket(extType, data) {
         };
       }
       pidPacketCount++;
+      const rxNow = Date.now();
       latestPidTelemetry = {
-        timestamp: Date.now(),
+        receivedAt: rxNow,
+        timestamp: rxNow,
         sequence: pidPacketCount,
         actuationState,
         m1: wheels[0],
@@ -2255,6 +2605,10 @@ wss.on('connection', (ws, req) => {
   const serialState = (serialPort && serialPort.isOpen) ? 'connected' : 'disconnected';
   ws.send(JSON.stringify({ type: 'status', key: 'serial', val: serialState, port: COM_PORT }));
   ws.send(JSON.stringify({ type: 'cockpit_info', deployed: serverUpdatedTime }));
+  ws.send(JSON.stringify({ type: 'front_safety_zone', zone: refreshFrontSafetyZone() }));
+  if (latestBatteryVoltage !== null) {
+    ws.send(JSON.stringify({ type: 'battery', ...batteryPayload() }));
+  }
 
   // Push dynamic parameters from database immediately on client connection
   if (serialPort && serialPort.isOpen) {
@@ -2302,6 +2656,7 @@ wss.on('connection', (ws, req) => {
           autonomyState.lastRejectionReason = 'E-Stop triggered';
           targetLinear = 0.0;
           targetAngular = 0.0;
+          clearRequestedMotionCommand();
           cmdSource = 'NONE';
           latestNormalDriveStatus = { armed: false };
           broadcastAutoCalibStatus();
@@ -2322,6 +2677,7 @@ wss.on('connection', (ws, req) => {
         case 'disarm_normal_drive':
           targetLinear = 0.0;
           targetAngular = 0.0;
+          clearRequestedMotionCommand();
           latestNormalDriveStatus = { armed: false };
           broadcastAutoCalibStatus();
           resetAutonomyToSafe('Operator disarmed normal drive');
@@ -2451,13 +2807,23 @@ wss.on('connection', (ws, req) => {
               if (!backtracking && cmdSource !== 'CALIBRATION_TEST') {
                 const MAX_LINEAR = floorTesting ? 0.17 : 0.80;
                 const MAX_ANGULAR = floorTesting ? 0.90 : 3.00;
-                
-                targetLinear = throttle * MAX_LINEAR;
-                targetAngular = -turnScaled * MAX_ANGULAR;
+                const rawTargetLin = throttle * MAX_LINEAR;
+                const rawTargetAng = -turnScaled * MAX_ANGULAR;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
+                noteRequestedMotionCommand(rawTargetLin, rawTargetAng);
+                const frontZone = refreshFrontSafetyZone();
+                const zoneGated = applyFrontSafetyZoneToVelocity(rawTargetLin, rawTargetAng, frontZone);
+
+                targetLinear = zoneGated.linear;
+                targetAngular = zoneGated.angular;
+                manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(rawTargetLin) > 1e-4 || Math.abs(rawTargetAng) > 1e-4));
+                if (zoneGated.action === 'STOP' && targetLinear === 0.0 && targetAngular === 0.0) {
+                  sendZeroMotionPacket();
+                }
                 startDriveKeepaliveLoop();
               }
             } else {
+              clearRequestedMotionCommand();
               if (backtracking) {
                 abortBacktrack('Deadman released');
               } else if (cmdSource === 'CALIBRATION_TEST') {
@@ -2470,6 +2836,7 @@ wss.on('connection', (ws, req) => {
                 targetAngular = 0.0;
                 cmdSource = 'NONE';
               }
+              refreshFrontSafetyZone();
             }
           }
           break;
@@ -2775,6 +3142,9 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     console.log('Web client disconnected.');
+    if (manualDriveWatchdog.socketClosed(ws)) {
+      zeroManualDriveTarget('Commanding WebSocket closed');
+    }
   });
 });
 
@@ -4208,6 +4578,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
     // 4. Only then set autonomyState.state = READY_ARMED and return HTTP 200
     if (autonomyState.state === 'READY_DISARMED') {
       autonomyState.state = 'READY_ARMED';
+      autonomyState.lastCmdTime = performance.now();
       console.log('[Autonomy] Rover armed and confirmed by ESP32 (mode 3). State set to READY_ARMED.');
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
@@ -4281,6 +4652,7 @@ app.post('/api/drive/arm', requireOperatorAuth, async (req, res) => {
 app.post('/api/drive/disarm', (req, res) => {
   targetLinear = 0.0;
   targetAngular = 0.0;
+  clearRequestedMotionCommand();
   cmdSource = 'NONE';
   latestNormalDriveStatus = { armed: false };
   // Propagate the updated armed state to calibration-status consumers immediately.
@@ -4380,7 +4752,168 @@ app.post('/api/open-loop-pwm', (req, res) => {
 });
 
 app.get('/api/battery', (req, res) => {
-  res.json({ ok: true, voltage: latestBatteryVoltage });
+  res.json({ ok: true, ...batteryPayload() });
+});
+
+// RPi 5 health for the HUD cockpit: CPU temperature, throttle flags, EXT5V rail. Cached 2 s.
+let cachedSystemHealth = null;
+let cachedSystemHealthAt = 0;
+let systemHealthInFlight = null;
+function execFileText(cmd, args, timeoutMs) {
+  return new Promise((resolve) => {
+    try {
+      require('child_process').execFile(cmd, args, { timeout: timeoutMs || 1500 }, (err, stdout) => {
+        resolve(err ? null : String(stdout || '').trim());
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+async function collectSystemHealth() {
+  const out = {
+    ok: true,
+    platform: process.platform,
+    cpuTempC: null,
+    throttled: null,
+    ext5vV: null,
+    loadAvg: os.loadavg().map(v => Math.round(v * 100) / 100),
+    uptimeS: Math.round(os.uptime()),
+    serialConnected: (serialPort && serialPort.isOpen) === true,
+    lastPacketAgeMs: lastTelemetryReceivedTime ? (Date.now() - lastTelemetryReceivedTime) : null,
+    manualDriveWatchdog: manualDriveWatchdog.status(),
+    timestamp: Date.now()
+  };
+  if (process.platform !== 'linux') return out;
+  try {
+    const milli = parseInt(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8'), 10);
+    if (isFinite(milli)) out.cpuTempC = Math.round(milli / 100) / 10;
+  } catch (_) {}
+  const thr = await execFileText('vcgencmd', ['get_throttled'], 1500);
+  const thrMatch = thr && thr.match(/throttled=(0x[0-9a-fA-F]+)/);
+  if (thrMatch) out.throttled = thrMatch[1].toLowerCase();
+  const adc = await execFileText('vcgencmd', ['pmic_read_adc', 'EXT5V_V'], 1500);
+  const adcMatch = adc && adc.match(/EXT5V_V\s+volt\(\d+\)=([0-9.]+)V/);
+  if (adcMatch) out.ext5vV = Math.round(parseFloat(adcMatch[1]) * 1000) / 1000;
+  try {
+    const pciDir = '/sys/bus/pci/devices';
+    if (fs.existsSync(pciDir)) {
+      for (const bdf of fs.readdirSync(pciDir)) {
+        const devPath = path.join(pciDir, bdf);
+        const v = fs.existsSync(path.join(devPath, 'vendor')) ? fs.readFileSync(path.join(devPath, 'vendor'), 'utf8').trim().toLowerCase() : '';
+        const d = fs.existsSync(path.join(devPath, 'device')) ? fs.readFileSync(path.join(devPath, 'device'), 'utf8').trim().toLowerCase() : '';
+        if (v === '0x1e60' && d === '0x2864') {
+          const rt = fs.existsSync(path.join(devPath, 'power', 'runtime_status')) ? fs.readFileSync(path.join(devPath, 'power', 'runtime_status'), 'utf8').trim() : 'unknown';
+          const ctrl = fs.existsSync(path.join(devPath, 'power', 'control')) ? fs.readFileSync(path.join(devPath, 'power', 'control'), 'utf8').trim() : 'unknown';
+          const devPstate = fs.existsSync(path.join(devPath, 'power_state')) ? fs.readFileSync(path.join(devPath, 'power_state'), 'utf8').trim() : 'unknown';
+          const parentPath = fs.realpathSync(path.join(devPath, '..'));
+          let brState = fs.existsSync(path.join(parentPath, 'power_state')) ? fs.readFileSync(path.join(parentPath, 'power_state'), 'utf8').trim() : 'unknown';
+          if (brState !== 'D3hot' && rt === 'suspended' && devPstate === 'D3hot') brState = 'D3hot';
+          out.hailo = { present: true, bdf, runtimeStatus: rt, powerControl: ctrl, bridgePowerState: brState };
+          break;
+        }
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+app.get('/api/system', async (req, res) => {
+  if (cachedSystemHealth && Date.now() - cachedSystemHealthAt < 2000) {
+    return res.json(cachedSystemHealth);
+  }
+  if (!systemHealthInFlight) {
+    systemHealthInFlight = collectSystemHealth()
+      .then((r) => { cachedSystemHealth = r; cachedSystemHealthAt = Date.now(); return r; })
+      .finally(() => { systemHealthInFlight = null; });
+  }
+  try {
+    res.json(await systemHealthInFlight);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- ESP32-S3 TCA9548A (0x70) 8-Channel ToF Sensor Bench API (VL53L7CX 8x8 & VL53L4CD Cliff) ---
+app.get('/api/tof-sensors', (req, res) => {
+  const now = Date.now();
+  const mapping = loadTofMapping();
+  try {
+    if (!fs.existsSync(TOF_STATE_FILE_PATH)) {
+      const frontSafetyZone = refreshFrontSafetyZone(null, mapping);
+      return res.json({
+        ok: true,
+        connected: false,
+        stale: true,
+        hostAgeMs: null,
+        mapping,
+        frontSafetyZone,
+        data: null
+      });
+    }
+    const rawText = fs.readFileSync(TOF_STATE_FILE_PATH, 'utf8');
+    const data = JSON.parse(rawText);
+    const hostTs = Number(data.host_timestamp_ms) || 0;
+    const hostAgeMs = hostTs > 0 ? Math.max(0, now - hostTs) : null;
+    const stale = hostAgeMs === null || hostAgeMs > 3000;
+    const frontSafetyZone = refreshFrontSafetyZone(data, mapping);
+    return res.json({
+      ok: true,
+      connected: !stale,
+      stale,
+      hostAgeMs,
+      mapping,
+      frontSafetyZone,
+      data
+    });
+  } catch (err) {
+    const frontSafetyZone = refreshFrontSafetyZone(null, mapping);
+    return res.json({
+      ok: true,
+      connected: false,
+      stale: true,
+      hostAgeMs: null,
+      mapping,
+      frontSafetyZone,
+      error: err.message,
+      data: null
+    });
+  }
+});
+
+app.post('/api/tof-sensors/rescan', (req, res) => {
+  try {
+    fs.writeFileSync(TOF_CMD_FILE_PATH, 'TOF_RESCAN\n', 'utf8');
+    res.json({ ok: true, requested: 'TOF_RESCAN', timestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tof-sensors/mapping', (req, res) => {
+  try {
+    const current = loadTofMapping();
+    const incoming = (req.body && typeof req.body === 'object') ? req.body : {};
+    const updated = { ...current };
+    for (const key of Object.keys(DEFAULT_TOF_MAPPING)) {
+      if (Object.prototype.hasOwnProperty.call(incoming, key)) {
+        if (key.endsWith('_rot')) {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (['0', '90_ccw', '180', '90_cw', '90_ccw_noflip'].includes(val)) {
+            updated[key] = val;
+          }
+        } else {
+          const val = String(incoming[key]).trim().toLowerCase();
+          if (val === 'auto' || /^[0-7]$/.test(val)) {
+            updated[key] = val === 'auto' ? 'auto' : Number(val);
+          }
+        }
+      }
+    }
+    fs.writeFileSync(TOF_MAPPING_FILE_PATH, JSON.stringify(updated, null, 2), 'utf8');
+    res.json({ ok: true, mapping: updated });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get('/api/pid-telemetry', (req, res) => {
@@ -4514,7 +5047,6 @@ app.get('/api/localization/status', (req, res) => {
 // ────────────────────────────────────────────────────────────
 // ROS 2 Navigation Bridge Proxy Endpoints (port 3005)
 // ────────────────────────────────────────────────────────────
-const ROVER_NAV_BRIDGE_URL = process.env.ROVER_NAV_BRIDGE_URL || 'http://127.0.0.1:3005';
 let cachedNavMap = null;
 let cachedNavMapTime = 0;
 
@@ -4748,6 +5280,86 @@ async function refreshLocalizationBeforeDispatch(maxWaitMs = 1500) {
   };
 }
 
+async function refreshNavigationReadiness(timeoutMs = 1500) {
+  try {
+    const bridgeUrl = ROVER_NAV_BRIDGE_URL;
+    const res = await fetch(`${bridgeUrl}/api/nav/status`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        ready: false,
+        error: `rover_nav_bridge returned HTTP ${res.status}`,
+        navigation: navigationState
+      };
+    }
+    const parsed = await res.json();
+    const nav = parsed.navigation || {};
+    const nodes = (nav && typeof nav.nodes === 'object' && nav.nodes !== null) ? nav.nodes : {};
+
+    // 1. required lifecycle nodes are active
+    const inactiveNodes = REQUIRED_NAV_LIFECYCLE_NODES.filter(n => nodes[n] !== 'active');
+    const allNodesActive = (inactiveNodes.length === 0) && (Object.keys(nodes).length >= REQUIRED_NAV_LIFECYCLE_NODES.length);
+
+    // 2. bt_navigator is active
+    const btActive = (nodes['bt_navigator'] === 'active');
+
+    // 3. /navigate_to_pose is ready to accept goals
+    const actionReady = Boolean(parsed.action_server_ready);
+    const readyToGoals = Boolean(parsed.ready_to_accept_goals || (actionReady && btActive && allNodesActive));
+
+    const isReady = Boolean(allNodesActive && btActive && actionReady && readyToGoals);
+
+    // Atomically update cached navigationState when recovery succeeds
+    if (isReady) {
+      updateNavigationState({
+        ready: true,
+        state: 'ACTIVE',
+        details: 'All required navigation and collision-protection nodes active',
+        nodes: nodes,
+        action_server_ready: true
+      });
+    } else {
+      let detailMsg = '';
+      if (inactiveNodes.length > 0) {
+        detailMsg = `Required navigation lifecycle nodes inactive: ${inactiveNodes.map(n => `${n}=${nodes[n] || 'unknown'}`).join(', ')}`;
+      } else if (!actionReady) {
+        detailMsg = 'Action server endpoint /navigate_to_pose not ready';
+      } else {
+        detailMsg = nav.details || 'Navigation not ready to accept goals';
+      }
+
+      updateNavigationState({
+        ready: false,
+        state: (nav.state && nav.state !== 'ACTIVE') ? nav.state : 'INACTIVE',
+        details: detailMsg,
+        nodes: nodes,
+        action_server_ready: actionReady
+      });
+    }
+
+    return {
+      ok: isReady,
+      ready: isReady,
+      action_server_ready: actionReady,
+      ready_to_accept_goals: readyToGoals,
+      nodes: nodes,
+      inactive_nodes: inactiveNodes,
+      details: navigationState.details,
+      navigation: navigationState
+    };
+  } catch (err) {
+    const errorMsg = `Failed to refresh navigation readiness: ${err.message}`;
+    return {
+      ok: false,
+      ready: false,
+      error: errorMsg,
+      navigation: navigationState
+    };
+  }
+}
+
 app.post('/api/navigation/init_home', async (req, res) => {
   try {
     const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/init_home', {
@@ -4764,7 +5376,8 @@ app.post('/api/navigation/init_home', async (req, res) => {
 
 app.get('/api/navigation/validate_home', async (req, res) => {
   try {
-    const bridgeResp = await fetch('http://127.0.0.1:3005/api/nav/validate_home');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const bridgeResp = await fetch(`http://127.0.0.1:3005/api/nav/validate_home${query}`);
     const data = await bridgeResp.json();
     return res.status(bridgeResp.ok ? 200 : 400).json(data);
   } catch (err) {
@@ -4828,6 +5441,10 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
   };
 
   let dispatchMeta = null;
+  const dispatchGoalId = (req.body && req.body.goal_id) ? String(req.body.goal_id) : ('goal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+  if (!req.body) req.body = {};
+  req.body.goal_id = dispatchGoalId;
+
   if (req.body && req.body.relative_distance !== undefined && req.body.relative_distance !== null) {
     const d = Number(req.body.relative_distance);
     const tx = snapshotPose.x + d * Math.cos(snapshotPose.yaw);
@@ -4843,6 +5460,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     req.body.yaw = tyaw;
 
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: true,
       source_pose: snapshotPose,
       relative_distance: d,
@@ -4860,9 +5478,12 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
     const ty = Number(req.body.target_y !== undefined ? req.body.target_y : req.body.y);
     const tyaw = Number(req.body.target_yaw !== undefined ? req.body.target_yaw : (req.body.yaw || 0));
     dispatchMeta = {
+      goal_id: dispatchGoalId,
       atomic: false,
       source_pose: snapshotPose,
       relative_distance: null,
+      goal_checker: req.body.goal_checker || null,
+      behavior_tree: req.body.behavior_tree || null,
       resolved_target: {
         x: tx,
         y: ty,
@@ -4872,6 +5493,20 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       dispatched_at: Date.now()
     };
     lastDispatchedNav = dispatchMeta;
+  }
+
+  // Step 2.5: Synchronous, Authoritative Nav2 Readiness Gate Refresh BEFORE arming
+  const navReadiness = await refreshNavigationReadiness(1500);
+  if (!navReadiness.ok || !navReadiness.ready) {
+    const isArmed = Boolean((latestNormalDriveStatus && latestNormalDriveStatus.armed) || autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE');
+    if (isArmed) {
+      abortAutonomyDueToLocalizationLost(`Navigation readiness check failed while armed: ${navReadiness.error || navReadiness.details}`);
+    }
+    return res.status(409).json({
+      ok: false,
+      error: `Cannot dispatch Nav2 goal: Navigation stack not ready (${navReadiness.error || navReadiness.details || 'Lifecycle inactive'}). Drivetrain remains safely disarmed.`,
+      navigation: navigationState
+    });
   }
 
   // Safety check 3: Drivetrain arming & autonomy handshake
@@ -4949,6 +5584,7 @@ app.post('/api/navigation/dispatch', requireOperatorAuth, async (req, res) => {
       try {
         const parsed = JSON.parse(data);
         if (dispatchMeta) {
+          parsed.goal_id = dispatchMeta.goal_id;
           parsed.dispatch_meta = dispatchMeta;
           parsed.source_pose = dispatchMeta.source_pose;
           parsed.relative_distance = dispatchMeta.relative_distance;
@@ -5020,19 +5656,38 @@ app.get('/api/navigation/status', (req, res) => {
         const parsed = JSON.parse(data);
         if (lastDispatchedNav) {
           parsed.last_dispatch = lastDispatchedNav;
+          parsed.goal_id = parsed.goal_id || lastDispatchedNav.goal_id;
         }
-        if (parsed && (parsed.status === 'SUCCEEDED' || parsed.status === 'CANCELLED' || (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED')))) {
-          if (autonomyState && autonomyState.state === 'READY_ARMED') {
-            triggerNav2Cancel();
+        const isTerminal = parsed && (
+          parsed.status === 'SUCCEEDED' ||
+          parsed.status === 'CANCELLED' ||
+          parsed.status === 'ABORTED' ||
+          parsed.status === 'FAILED' ||
+          (typeof parsed.status === 'string' && parsed.status.startsWith('STOPPED'))
+        );
+        const matchesCurrentGoal = Boolean(lastDispatchedNav && (!parsed.goal_id || (parsed.goal_id === lastDispatchedNav.goal_id)));
+        if (isTerminal && matchesCurrentGoal && cmdSource !== 'CALIBRATION_TEST') {
+          if (autonomyState && (autonomyState.state === 'READY_ARMED' || autonomyState.state === 'ACTIVE' || autonomyState.enabled)) {
+            if (parsed.status !== 'SUCCEEDED') {
+              triggerNav2Cancel();
+            }
             autonomyState.enabled = false;
+            autonomyState.active = false;
             autonomyState.state = 'READY_DISARMED';
             cmdSource = 'NONE';
             targetLinear = 0.0;
             targetAngular = 0.0;
+            limitedLinear = 0.0;
+            limitedAngular = 0.0;
+            sendMotorSpeeds(0, 0, 0, 0);
             if (serialPort && serialPort.isOpen) {
+              const motionPkt = buildPacket(FUNC_MOTION, [...int16ToLE(0), ...int16ToLE(0), ...int16ToLE(0)], { dualChecksum: true });
+              serialPort.write(motionPkt);
               const disarmPkt = buildPacket(FUNC_DISARM_NORMAL_DRIVE, [1]);
               serialPort.write(disarmPkt);
             }
+
+            broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
           }
         }
         res.status(bridgeRes.statusCode).json(parsed);
@@ -5338,6 +5993,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     // Unconditional safe zeroing for any subsystem / shutdown
     targetLinear = 0.0;
     targetAngular = 0.0;
+    clearRequestedMotionCommand();
     autonomyState.rawLinear = 0.0;
     autonomyState.rawAngular = 0.0;
     autonomyState.clampedLinear = 0.0;
@@ -5346,7 +6002,8 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     autonomyState.limitedAngular = 0.0;
     autonomyState.lastCmdTime = performance.now();
     sendZeroMotionPacket();
-    return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+    const frontZone = refreshFrontSafetyZone();
+    return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state, frontSafetyZone: frontZone });
   }
 
   // 2. Non-zero command checks:
@@ -5427,22 +6084,22 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     return res.status(403).json({ ok: false, error: 'Rover is disarmed' });
   }
 
-  // Clamping
+  // Clamping + Front ToF Safety Zone Gate (<=75mm CRAWL, <=30mm STOP)
   const maxLin = parseFloat(process.env.AUTONOMY_MAX_LINEAR_MPS) || (floorTesting ? 0.17 : 0.80);
   const maxAng = parseFloat(process.env.AUTONOMY_MAX_ANGULAR_RADPS) || (floorTesting ? 0.90 : 3.00);
-  const clampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
-  const clampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
+  const baseClampedLin = Math.max(-maxLin, Math.min(maxLin, rawLin));
+  const baseClampedAng = Math.max(-maxAng, Math.min(maxAng, rawAng));
 
-  if (cmdReqSource === 'ROS_AUTONOMY') {
+  if (cmdReqSource === 'ROS_AUTONOMY' || cmdReqSource === 'CALIBRATION_TEST') {
     if (autonomyState.state === 'READY_ARMED') {
       autonomyState.state = 'ACTIVE';
       autonomyState.active = true;
       watchdogFired = false;
-      if (cmdSource !== 'ROS_AUTONOMY') {
+      if (cmdSource !== cmdReqSource) {
         sendZeroMotionPacket();
-        cmdSource = 'ROS_AUTONOMY';
+        cmdSource = cmdReqSource;
       }
-      console.log('[Autonomy] First non-zero command accepted. Transitioned to ACTIVE.');
+      console.log(`[Autonomy] First non-zero command accepted (${cmdReqSource}). Transitioned to ACTIVE.`);
       broadcast({ type: 'autonomy_status', status: getAutonomyStatusObject() });
     }
   }
@@ -5452,16 +6109,22 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     cmdSource = cmdReqSource;
   }
 
-  // Low-speed stop zero-bypass: bypass slew ramp when stopping from creep
-  if (isZeroCmd) {
-    const isLowSpeed = Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15;
+  noteRequestedMotionCommand(baseClampedLin, baseClampedAng);
+  const frontZone = refreshFrontSafetyZone();
+  const zoneGated = applyFrontSafetyZoneToVelocity(baseClampedLin, baseClampedAng, frontZone);
+  const clampedLin = zoneGated.linear;
+  const clampedAng = zoneGated.angular;
+
+  // Low-speed stop zero-bypass (or Front Safety Zone <=30mm STOP): bypass slew ramp immediately
+  if (isZeroCmd || (zoneGated.action === 'STOP' && clampedLin === 0.0 && clampedAng === 0.0)) {
+    const isLowSpeed = (Math.abs(limitedAngular) <= 0.35 && Math.abs(limitedLinear) <= 0.15) || zoneGated.action === 'STOP';
     if (isLowSpeed) {
       targetLinear = 0.0;
       targetAngular = 0.0;
       limitedLinear = 0.0;
       limitedAngular = 0.0;
-      autonomyState.rawLinear = 0.0;
-      autonomyState.rawAngular = 0.0;
+      autonomyState.rawLinear = rawLin;
+      autonomyState.rawAngular = rawAng;
       autonomyState.clampedLinear = 0.0;
       autonomyState.clampedAngular = 0.0;
       autonomyState.limitedLinear = 0.0;
@@ -5469,7 +6132,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
       autonomyState.lastCmdTime = performance.now();
       watchdogFired = false;
       sendZeroMotionPacket();
-      return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state });
+      return res.json({ ok: true, linear: 0.0, angular: 0.0, state: autonomyState.state, frontSafetyZone: frontZone });
     }
   }
 
@@ -5489,7 +6152,7 @@ internalCmdApp.post('/api/cmd_vel', (req, res) => {
     console.log(`[CmdVel Diagnostic] accepted raw=(${rawLin}, ${rawAng}) lim=(${clampedLin}, ${clampedAng}) targets=(L:${diag.wheelTargetsRadps.left.toFixed(4)}, R:${diag.wheelTargetsRadps.right.toFixed(4)}) channels=(M1:${diag.channels.m1_left_front.toFixed(4)}, M2:${diag.channels.m2_right_front.toFixed(4)}, M3:${diag.channels.m3_left_rear.toFixed(4)}, M4:${diag.channels.m4_right_rear.toFixed(4)}) packet=[${diag.packet.hexPayload}]`);
   }
 
-  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state });
+  res.json({ ok: true, linear: clampedLin, angular: clampedAng, state: autonomyState.state, frontSafetyZone: frontZone });
 });
 
 app.get('/api/encoders', (req, res) => {
@@ -5512,6 +6175,19 @@ app.get('/api/encoders', (req, res) => {
       m4: currentTicks[3]
     }
   });
+});
+
+app.get('/api/odom', async (req, res) => {
+  try {
+    const odom = await fetchRosOdometry();
+    if (odom && (odom.ok || odom.valid)) {
+      res.json(odom);
+    } else {
+      res.status(503).json({ ok: false, error: 'Odometry unavailable or stale', odom });
+    }
+  } catch (err) {
+    res.status(502).json({ ok: false, error: "Failed to fetch odometry: " + (err ? err.message : "") });
+  }
 });
 
 app.get('/api/imu', (req, res) => {
@@ -5541,6 +6217,37 @@ app.get('/api/imu', (req, res) => {
 
 app.get('/api/drive/status', (req, res) => {
   const statusObj = latestNormalDriveStatus ? { ...latestNormalDriveStatus, cmdSource: cmdSource } : { armed: false, cmdSource: cmdSource };
+  const now = Date.now();
+  let pidTelemetry = null;
+  if (latestPidTelemetry) {
+    const ageMs = now - (latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp || now);
+    const isStale = ageMs > 250;
+    pidTelemetry = {
+      receivedAt: latestPidTelemetry.receivedAt || latestPidTelemetry.timestamp,
+      ageMs: ageMs,
+      sequence: latestPidTelemetry.sequence || 0,
+      stale: isStale,
+      valid: !isStale,
+      telemetry: isStale ? null : {
+        actuationState: latestPidTelemetry.actuationState,
+        m1: latestPidTelemetry.m1,
+        m2: latestPidTelemetry.m2,
+        m3: latestPidTelemetry.m3,
+        m4: latestPidTelemetry.m4,
+        outerYaw: latestPidTelemetry.outerYaw
+      }
+    };
+  } else {
+    pidTelemetry = {
+      receivedAt: null,
+      ageMs: null,
+      sequence: 0,
+      stale: true,
+      valid: false,
+      telemetry: null
+    };
+  }
+
   res.json({
     ok: true,
     status: statusObj,
@@ -5551,7 +6258,9 @@ app.get('/api/drive/status', (req, res) => {
     backtracking,
     recording,
     pathLength: recordedPath.length,
-    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist }
+    odom: { x: odomX, y: odomY, yaw: odomYaw, left: accumLeftDist, right: accumRightDist },
+    pidTelemetry,
+    frontSafetyZone: latestFrontSafetyZone
   });
 });
 
@@ -6723,6 +7432,15 @@ module.exports = {
   updateLocalizationState,
   navigationState,
   updateNavigationState,
+  refreshNavigationReadiness,
+  REQUIRED_NAV_LIFECYCLE_NODES,
   abortAutonomyDueToLocalizationLost,
-  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); }
+  setOdomPollingDisabled: (val) => { odomPollingDisabled = Boolean(val); },
+  manualDriveWatchdog,
+  batteryTrend,
+  batteryPayload,
+  collectSystemHealth,
+  refreshFrontSafetyZone,
+  getLatestFrontSafetyZone: () => latestFrontSafetyZone,
+  getManualDriveTarget: () => ({ targetLinear, targetAngular, requestedLinear, requestedAngular, cmdSource })
 };
