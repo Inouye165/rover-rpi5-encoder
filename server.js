@@ -373,11 +373,76 @@ function getActiveRequestedVelocity(now = Date.now()) {
   };
 }
 
+function computeManualJoystickVelocity(x, y, floorTesting = false) {
+  const stickX = Number(x) || 0;
+  const stickY = Number(y) || 0;
+  const DEADZONE = 0.10;
+
+  // Linear input: preserve existing quadratic throttle response
+  const throttle = Math.abs(stickY) < DEADZONE ? 0 : Math.sign(stickY) * Math.pow(Math.abs(stickY), 2.0);
+
+  // Progressive angular input: continuous quadratic curve starting at 0 right after deadzone
+  let turnScaled = 0;
+  if (Math.abs(stickX) >= DEADZONE) {
+    const normalizedStick = (Math.abs(stickX) - DEADZONE) / (1.0 - DEADZONE);
+    const scaledStick = Math.pow(normalizedStick, 2.0);
+    turnScaled = Math.sign(stickX) * scaledStick;
+  }
+
+  const maxLinear = floorTesting ? 0.17 : 0.80;
+  const maxAngular = floorTesting ? 0.90 : 3.00;
+
+  const rawTargetLin = throttle === 0 ? 0.0 : throttle * maxLinear;
+  const rawTargetAng = turnScaled === 0 ? 0.0 : -turnScaled * maxAngular;
+
+  return {
+    throttle,
+    turnScaled,
+    rawTargetLin,
+    rawTargetAng,
+    maxLinear,
+    maxAngular
+  };
+}
+
+function stepManualAngularVelocity(currentAngular, targetAngular, dt, options = {}) {
+  const maxAccel = options.maxAngAccel !== undefined ? options.maxAngAccel : (parseFloat(process.env.MANUAL_ANGULAR_ACCEL_RADPS2) || 2.00);
+  const maxDecel = options.maxAngDecel !== undefined ? options.maxAngDecel : (parseFloat(process.env.MANUAL_ANGULAR_DECEL_RADPS2) || 3.00);
+
+  if (dt <= 0) return currentAngular;
+  if (currentAngular === targetAngular) return currentAngular;
+
+  let rate = maxAccel;
+  // If moving toward zero (decelerating) or reversing direction across zero:
+  if ((targetAngular >= 0 && currentAngular > targetAngular) || (targetAngular <= 0 && currentAngular < targetAngular)) {
+    rate = maxDecel;
+  } else if ((targetAngular > 0 && currentAngular < 0) || (targetAngular < 0 && currentAngular > 0)) {
+    rate = maxDecel;
+  }
+
+  const delta = rate * dt;
+  let nextAngular = currentAngular;
+  if (targetAngular > currentAngular) {
+    nextAngular = Math.min(targetAngular, currentAngular + delta);
+  } else {
+    nextAngular = Math.max(targetAngular, currentAngular - delta);
+  }
+
+  // Snap to zero if target is 0 and current is within small creep threshold
+  if (targetAngular === 0.0 && Math.abs(nextAngular) <= 0.05) {
+    nextAngular = 0.0;
+  }
+
+  return nextAngular;
+}
+
 function zeroManualDriveTarget(reason) {
   if (cmdSource !== 'GAMEPAD' && cmdSource !== 'BROWSER') return false;
-  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4 || Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4;
+  const wasMoving = Math.abs(targetLinear) > 1e-4 || Math.abs(targetAngular) > 1e-4 || Math.abs(requestedLinear) > 1e-4 || Math.abs(requestedAngular) > 1e-4 || Math.abs(limitedLinear) > 1e-4 || Math.abs(limitedAngular) > 1e-4;
   targetLinear = 0.0;
   targetAngular = 0.0;
+  limitedLinear = 0.0;
+  limitedAngular = 0.0;
   clearRequestedMotionCommand();
   cmdSource = 'NONE';
   deadmanPressed = false;
@@ -388,6 +453,7 @@ function zeroManualDriveTarget(reason) {
     console.warn(`[Manual Drive Watchdog] ${reason} - manual target zeroed.`);
     broadcast({ type: 'manual_drive_watchdog', reason });
   }
+  sendZeroMotionPacket();
   return wasMoving;
 }
 
@@ -1272,6 +1338,19 @@ function startDriveKeepaliveLoop() {
         const zoneLimited = applyFrontSafetyZoneToVelocity(limitedLinear, limitedAngular, frontZone);
         limitedLinear = zoneLimited.linear;
         limitedAngular = zoneLimited.angular;
+      }
+    } else if (cmdSource === 'GAMEPAD' || cmdSource === 'BROWSER') {
+      // Manual Driving: Direct forward/reverse response, slew-limited progressive angular response
+      limitedLinear = effTargetLinear;
+      limitedAngular = stepManualAngularVelocity(limitedAngular, effTargetAngular, dt);
+
+      // Immediate front-zone override: bypass slew delay when entering <=75mm CRAWL or <=30mm STOP
+      const zoneLimited = applyFrontSafetyZoneToVelocity(limitedLinear, limitedAngular, frontZone);
+      limitedLinear = zoneLimited.linear;
+      limitedAngular = zoneLimited.angular;
+      if (zoneLimited.action === 'STOP' && limitedLinear === 0.0 && limitedAngular === 0.0) {
+        targetLinear = 0.0;
+        targetAngular = 0.0;
       }
     } else {
       limitedLinear = effTargetLinear;
@@ -2656,6 +2735,8 @@ wss.on('connection', (ws, req) => {
           autonomyState.lastRejectionReason = 'E-Stop triggered';
           targetLinear = 0.0;
           targetAngular = 0.0;
+          limitedLinear = 0.0;
+          limitedAngular = 0.0;
           clearRequestedMotionCommand();
           cmdSource = 'NONE';
           latestNormalDriveStatus = { armed: false };
@@ -2677,6 +2758,8 @@ wss.on('connection', (ws, req) => {
         case 'disarm_normal_drive':
           targetLinear = 0.0;
           targetAngular = 0.0;
+          limitedLinear = 0.0;
+          limitedAngular = 0.0;
           clearRequestedMotionCommand();
           latestNormalDriveStatus = { armed: false };
           broadcastAutoCalibStatus();
@@ -2758,15 +2841,9 @@ wss.on('connection', (ws, req) => {
               deadmanPressed = true; // Implicit deadman true for keyboard/browser
             }
             
-            let throttle = Math.abs(y) < 0.10 ? 0 : Math.sign(y) * Math.pow(Math.abs(y), 2.0);
-            
-            let turnScaled = 0;
-            if (Math.abs(x) >= 0.10) {
-              const MIN_COEFF = 0.35; // Starts at 0.35 * MAX_ANGULAR to immediately break stiction
-              const normalizedStick = (Math.abs(x) - 0.10) / 0.90;
-              const scaledStick = Math.pow(normalizedStick, 1.5);
-              turnScaled = Math.sign(x) * (MIN_COEFF + scaledStick * (1.0 - MIN_COEFF));
-            }
+            const manualVel = computeManualJoystickVelocity(x, y, floorTesting);
+            const throttle = manualVel.throttle;
+            let turnScaled = manualVel.turnScaled;
 
             if (backtracking && (Math.abs(x) > 0.05 || Math.abs(y) > 0.05)) {
               abortBacktrack('Joystick override');
@@ -2776,6 +2853,8 @@ wss.on('connection', (ws, req) => {
               broadcast({ type: 'test_abort', reason: 'Joystick override' });
               targetLinear = 0.0;
               targetAngular = 0.0;
+              limitedLinear = 0.0;
+              limitedAngular = 0.0;
               cmdSource = 'NONE';
             }
 
@@ -2805,10 +2884,8 @@ wss.on('connection', (ws, req) => {
 
             if (deadmanPressed) {
               if (!backtracking && cmdSource !== 'CALIBRATION_TEST') {
-                const MAX_LINEAR = floorTesting ? 0.17 : 0.80;
-                const MAX_ANGULAR = floorTesting ? 0.90 : 3.00;
-                const rawTargetLin = throttle * MAX_LINEAR;
-                const rawTargetAng = -turnScaled * MAX_ANGULAR;
+                const rawTargetLin = manualVel.rawTargetLin;
+                const rawTargetAng = (lidarTestState !== 'IDLE') ? 0.0 : manualVel.rawTargetAng;
                 cmdSource = isGamepad ? 'GAMEPAD' : 'BROWSER';
                 noteRequestedMotionCommand(rawTargetLin, rawTargetAng);
                 const frontZone = refreshFrontSafetyZone();
@@ -2818,6 +2895,8 @@ wss.on('connection', (ws, req) => {
                 targetAngular = zoneGated.angular;
                 manualDriveWatchdog.noteCommand(ws, msg.keepalive === true && (Math.abs(rawTargetLin) > 1e-4 || Math.abs(rawTargetAng) > 1e-4));
                 if (zoneGated.action === 'STOP' && targetLinear === 0.0 && targetAngular === 0.0) {
+                  limitedLinear = 0.0;
+                  limitedAngular = 0.0;
                   sendZeroMotionPacket();
                 }
                 startDriveKeepaliveLoop();
@@ -2830,11 +2909,16 @@ wss.on('connection', (ws, req) => {
                 broadcast({ type: 'test_abort', reason: 'Deadman released' });
                 targetLinear = 0.0;
                 targetAngular = 0.0;
+                limitedLinear = 0.0;
+                limitedAngular = 0.0;
                 cmdSource = 'NONE';
               } else if (cmdSource === 'GAMEPAD' || cmdSource === 'BROWSER') {
                 targetLinear = 0.0;
                 targetAngular = 0.0;
+                limitedLinear = 0.0;
+                limitedAngular = 0.0;
                 cmdSource = 'NONE';
+                sendZeroMotionPacket();
               }
               refreshFrontSafetyZone();
             }
@@ -7442,5 +7526,7 @@ module.exports = {
   collectSystemHealth,
   refreshFrontSafetyZone,
   getLatestFrontSafetyZone: () => latestFrontSafetyZone,
-  getManualDriveTarget: () => ({ targetLinear, targetAngular, requestedLinear, requestedAngular, cmdSource })
+  getManualDriveTarget: () => ({ targetLinear, targetAngular, requestedLinear, requestedAngular, limitedLinear, limitedAngular, cmdSource }),
+  computeManualJoystickVelocity,
+  stepManualAngularVelocity
 };

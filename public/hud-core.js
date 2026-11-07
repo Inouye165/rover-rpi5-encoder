@@ -784,10 +784,10 @@
     let turn = 0;
     if (Math.abs(x) >= 0.10) {
       const n = (Math.abs(x) - 0.10) / 0.90;
-      turn = Math.sign(x) * (0.35 + Math.pow(n, 1.5) * 0.65);
+      turn = Math.sign(x) * Math.pow(n, 2.0);
     }
-    let linear = throttle * MANUAL_MAX_LINEAR_MPS;
-    let angular = -turn * MANUAL_MAX_ANGULAR_RADPS;
+    let linear = throttle === 0 ? 0 : throttle * MANUAL_MAX_LINEAR_MPS;
+    let angular = turn === 0 ? 0 : -turn * MANUAL_MAX_ANGULAR_RADPS;
     const fz = state.frontZone;
     if (fz && fz.state === 'STOP') {
       if (linear >= -1e-4) {

@@ -6,10 +6,11 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node test_lidar.js && node test/test_hud_cockpit.js",
+    "test": "node test_lidar.js && node test/test_hud_cockpit.js && node test/test_manual_turn_smoothing.js",
     "test:lidar": "node test_lidar.js",
     "test:hud": "node test/test_hud_cockpit.js",
-    "test:gamepad": "node test/test_hud_gamepad.js"
+    "test:gamepad": "node test/test_hud_gamepad.js",
+    "test:smoothing": "node test/test_manual_turn_smoothing.js"
   },
   "dependencies": {
     "express": "^4.19.2",
