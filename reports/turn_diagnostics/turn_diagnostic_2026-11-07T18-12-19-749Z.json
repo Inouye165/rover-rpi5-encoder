@@ -1,0 +1,2841 @@
+{
+  "metadata": {
+    "startTime": "2026-11-07T18:12:19.753Z",
+    "host": "10.0.0.246",
+    "port": 3000,
+    "mode": "command",
+    "durationSec": 5,
+    "runningRevision": null,
+    "firmwareUptimeAtStartMs": null,
+    "imuInitializedAtStart": null,
+    "endTime": "2026-11-07T18:12:24.779Z"
+  },
+  "events": [
+    {
+      "t_rel_ms": 22,
+      "wall_iso": "2026-11-07T18:12:19.792Z",
+      "cat": "serial_tx",
+      "data": "[HTTP POST /api/drive/arm] arm command sent"
+    },
+    {
+      "t_rel_ms": 23,
+      "wall_iso": "2026-11-07T18:12:19.793Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": false,
+        "mode": 0,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "uptimeMs": 48928,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 999999
+      }
+    },
+    {
+      "t_rel_ms": 23,
+      "wall_iso": "2026-11-07T18:12:19.793Z",
+      "cat": "status_change",
+      "data": {
+        "event": "spin_recovery_transition",
+        "from": null,
+        "to": "IDLE",
+        "exhausted": false,
+        "noMotionBudgetMs": 0
+      }
+    },
+    {
+      "t_rel_ms": 24,
+      "wall_iso": "2026-11-07T18:12:19.794Z",
+      "cat": "status_change",
+      "data": {
+        "event": "armed_transition",
+        "from": null,
+        "to": false
+      }
+    },
+    {
+      "t_rel_ms": 64,
+      "wall_iso": "2026-11-07T18:12:19.834Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "uptimeMs": 48979,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 999999
+      }
+    },
+    {
+      "t_rel_ms": 64,
+      "wall_iso": "2026-11-07T18:12:19.834Z",
+      "cat": "status_change",
+      "data": {
+        "event": "armed_transition",
+        "from": false,
+        "to": true
+      }
+    },
+    {
+      "t_rel_ms": 119,
+      "wall_iso": "2026-11-07T18:12:19.889Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "uptimeMs": 49029,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 999999
+      }
+    },
+    {
+      "t_rel_ms": 163,
+      "wall_iso": "2026-11-07T18:12:19.933Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": 0,
+        "limLinear": 0,
+        "limAngular": 0,
+        "uptimeMs": 49079,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 999999
+      }
+    },
+    {
+      "t_rel_ms": 175,
+      "wall_iso": "2026-11-07T18:12:19.945Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 99 ff 00 b3"
+    },
+    {
+      "t_rel_ms": 214,
+      "wall_iso": "2026-11-07T18:12:19.984Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.10300000011920929,
+        "limLinear": 0,
+        "limAngular": -0.10300000011920929,
+        "uptimeMs": 49129,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 20,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 22
+      }
+    },
+    {
+      "t_rel_ms": 223,
+      "wall_iso": "2026-11-07T18:12:19.993Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 37 ff 00 51"
+    },
+    {
+      "t_rel_ms": 264,
+      "wall_iso": "2026-11-07T18:12:20.034Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.20100000500679016,
+        "limLinear": 0,
+        "limAngular": -0.20100000500679016,
+        "uptimeMs": 49179,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 273,
+      "wall_iso": "2026-11-07T18:12:20.043Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 d3 fe 00 ec"
+    },
+    {
+      "t_rel_ms": 313,
+      "wall_iso": "2026-11-07T18:12:20.083Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3009999990463257,
+        "limLinear": 0,
+        "limAngular": -0.3009999990463257,
+        "uptimeMs": 49229,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 324,
+      "wall_iso": "2026-11-07T18:12:20.094Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 366,
+      "wall_iso": "2026-11-07T18:12:20.136Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49279,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 373,
+      "wall_iso": "2026-11-07T18:12:20.143Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 413,
+      "wall_iso": "2026-11-07T18:12:20.183Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49329,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 424,
+      "wall_iso": "2026-11-07T18:12:20.194Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 465,
+      "wall_iso": "2026-11-07T18:12:20.235Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49379,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 475,
+      "wall_iso": "2026-11-07T18:12:20.245Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 514,
+      "wall_iso": "2026-11-07T18:12:20.284Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49429,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 524,
+      "wall_iso": "2026-11-07T18:12:20.294Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 563,
+      "wall_iso": "2026-11-07T18:12:20.333Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49479,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 574,
+      "wall_iso": "2026-11-07T18:12:20.344Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 613,
+      "wall_iso": "2026-11-07T18:12:20.383Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49529,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 625,
+      "wall_iso": "2026-11-07T18:12:20.395Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 664,
+      "wall_iso": "2026-11-07T18:12:20.434Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49579,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 674,
+      "wall_iso": "2026-11-07T18:12:20.444Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 713,
+      "wall_iso": "2026-11-07T18:12:20.483Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49629,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 723,
+      "wall_iso": "2026-11-07T18:12:20.493Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 763,
+      "wall_iso": "2026-11-07T18:12:20.533Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49679,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 25
+      }
+    },
+    {
+      "t_rel_ms": 776,
+      "wall_iso": "2026-11-07T18:12:20.546Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 815,
+      "wall_iso": "2026-11-07T18:12:20.585Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49729,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 824,
+      "wall_iso": "2026-11-07T18:12:20.594Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 864,
+      "wall_iso": "2026-11-07T18:12:20.634Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49779,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 874,
+      "wall_iso": "2026-11-07T18:12:20.644Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 914,
+      "wall_iso": "2026-11-07T18:12:20.684Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49829,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 924,
+      "wall_iso": "2026-11-07T18:12:20.694Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 964,
+      "wall_iso": "2026-11-07T18:12:20.734Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49879,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 976,
+      "wall_iso": "2026-11-07T18:12:20.746Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1013,
+      "wall_iso": "2026-11-07T18:12:20.783Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49929,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1023,
+      "wall_iso": "2026-11-07T18:12:20.793Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1064,
+      "wall_iso": "2026-11-07T18:12:20.834Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 49979,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1075,
+      "wall_iso": "2026-11-07T18:12:20.845Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1119,
+      "wall_iso": "2026-11-07T18:12:20.889Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50029,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1123,
+      "wall_iso": "2026-11-07T18:12:20.893Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1163,
+      "wall_iso": "2026-11-07T18:12:20.933Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50079,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1173,
+      "wall_iso": "2026-11-07T18:12:20.943Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1214,
+      "wall_iso": "2026-11-07T18:12:20.984Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50129,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1224,
+      "wall_iso": "2026-11-07T18:12:20.994Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1264,
+      "wall_iso": "2026-11-07T18:12:21.034Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50179,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1274,
+      "wall_iso": "2026-11-07T18:12:21.044Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1314,
+      "wall_iso": "2026-11-07T18:12:21.084Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50229,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1326,
+      "wall_iso": "2026-11-07T18:12:21.096Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1364,
+      "wall_iso": "2026-11-07T18:12:21.134Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50279,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1375,
+      "wall_iso": "2026-11-07T18:12:21.145Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1413,
+      "wall_iso": "2026-11-07T18:12:21.183Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50329,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1424,
+      "wall_iso": "2026-11-07T18:12:21.194Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1464,
+      "wall_iso": "2026-11-07T18:12:21.234Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50379,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1475,
+      "wall_iso": "2026-11-07T18:12:21.245Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1513,
+      "wall_iso": "2026-11-07T18:12:21.283Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50429,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1523,
+      "wall_iso": "2026-11-07T18:12:21.293Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1563,
+      "wall_iso": "2026-11-07T18:12:21.333Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50479,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1574,
+      "wall_iso": "2026-11-07T18:12:21.344Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1614,
+      "wall_iso": "2026-11-07T18:12:21.384Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50529,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1624,
+      "wall_iso": "2026-11-07T18:12:21.394Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1664,
+      "wall_iso": "2026-11-07T18:12:21.434Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50579,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1673,
+      "wall_iso": "2026-11-07T18:12:21.443Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1714,
+      "wall_iso": "2026-11-07T18:12:21.484Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50629,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1724,
+      "wall_iso": "2026-11-07T18:12:21.494Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1763,
+      "wall_iso": "2026-11-07T18:12:21.533Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50679,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 1774,
+      "wall_iso": "2026-11-07T18:12:21.544Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1813,
+      "wall_iso": "2026-11-07T18:12:21.583Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50729,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 1825,
+      "wall_iso": "2026-11-07T18:12:21.595Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1864,
+      "wall_iso": "2026-11-07T18:12:21.634Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50779,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 1874,
+      "wall_iso": "2026-11-07T18:12:21.644Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1913,
+      "wall_iso": "2026-11-07T18:12:21.683Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50829,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 1925,
+      "wall_iso": "2026-11-07T18:12:21.695Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 1964,
+      "wall_iso": "2026-11-07T18:12:21.734Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50879,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 1974,
+      "wall_iso": "2026-11-07T18:12:21.744Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2013,
+      "wall_iso": "2026-11-07T18:12:21.783Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50929,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2025,
+      "wall_iso": "2026-11-07T18:12:21.795Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2064,
+      "wall_iso": "2026-11-07T18:12:21.834Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 50979,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2073,
+      "wall_iso": "2026-11-07T18:12:21.843Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2119,
+      "wall_iso": "2026-11-07T18:12:21.889Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51029,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 2125,
+      "wall_iso": "2026-11-07T18:12:21.895Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2163,
+      "wall_iso": "2026-11-07T18:12:21.933Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51079,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2174,
+      "wall_iso": "2026-11-07T18:12:21.944Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2213,
+      "wall_iso": "2026-11-07T18:12:21.983Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51129,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2225,
+      "wall_iso": "2026-11-07T18:12:21.995Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2264,
+      "wall_iso": "2026-11-07T18:12:22.034Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51179,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 22
+      }
+    },
+    {
+      "t_rel_ms": 2275,
+      "wall_iso": "2026-11-07T18:12:22.045Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2313,
+      "wall_iso": "2026-11-07T18:12:22.083Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51229,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2325,
+      "wall_iso": "2026-11-07T18:12:22.095Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2363,
+      "wall_iso": "2026-11-07T18:12:22.133Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51279,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2375,
+      "wall_iso": "2026-11-07T18:12:22.145Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2414,
+      "wall_iso": "2026-11-07T18:12:22.184Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51329,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2424,
+      "wall_iso": "2026-11-07T18:12:22.194Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2464,
+      "wall_iso": "2026-11-07T18:12:22.234Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51379,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2474,
+      "wall_iso": "2026-11-07T18:12:22.244Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2513,
+      "wall_iso": "2026-11-07T18:12:22.283Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51429,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 2525,
+      "wall_iso": "2026-11-07T18:12:22.295Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2563,
+      "wall_iso": "2026-11-07T18:12:22.333Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51479,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2574,
+      "wall_iso": "2026-11-07T18:12:22.344Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2614,
+      "wall_iso": "2026-11-07T18:12:22.384Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51529,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2624,
+      "wall_iso": "2026-11-07T18:12:22.394Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2663,
+      "wall_iso": "2026-11-07T18:12:22.433Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51579,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 2674,
+      "wall_iso": "2026-11-07T18:12:22.444Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2713,
+      "wall_iso": "2026-11-07T18:12:22.483Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51629,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2725,
+      "wall_iso": "2026-11-07T18:12:22.495Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2763,
+      "wall_iso": "2026-11-07T18:12:22.533Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51679,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2774,
+      "wall_iso": "2026-11-07T18:12:22.544Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2813,
+      "wall_iso": "2026-11-07T18:12:22.583Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51729,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2825,
+      "wall_iso": "2026-11-07T18:12:22.595Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2864,
+      "wall_iso": "2026-11-07T18:12:22.634Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51779,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 22
+      }
+    },
+    {
+      "t_rel_ms": 2874,
+      "wall_iso": "2026-11-07T18:12:22.644Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2913,
+      "wall_iso": "2026-11-07T18:12:22.683Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51829,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 24
+      }
+    },
+    {
+      "t_rel_ms": 2928,
+      "wall_iso": "2026-11-07T18:12:22.698Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 2964,
+      "wall_iso": "2026-11-07T18:12:22.734Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51879,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 2975,
+      "wall_iso": "2026-11-07T18:12:22.745Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3013,
+      "wall_iso": "2026-11-07T18:12:22.783Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51929,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 23
+      }
+    },
+    {
+      "t_rel_ms": 3025,
+      "wall_iso": "2026-11-07T18:12:22.795Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3067,
+      "wall_iso": "2026-11-07T18:12:22.837Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 51979,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 22
+      }
+    },
+    {
+      "t_rel_ms": 3075,
+      "wall_iso": "2026-11-07T18:12:22.845Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3119,
+      "wall_iso": "2026-11-07T18:12:22.889Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52029,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 22
+      }
+    },
+    {
+      "t_rel_ms": 3126,
+      "wall_iso": "2026-11-07T18:12:22.896Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3163,
+      "wall_iso": "2026-11-07T18:12:22.933Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52079,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3177,
+      "wall_iso": "2026-11-07T18:12:22.947Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3214,
+      "wall_iso": "2026-11-07T18:12:22.984Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52129,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3226,
+      "wall_iso": "2026-11-07T18:12:22.996Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3264,
+      "wall_iso": "2026-11-07T18:12:23.034Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52179,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3277,
+      "wall_iso": "2026-11-07T18:12:23.047Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3314,
+      "wall_iso": "2026-11-07T18:12:23.084Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52229,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3326,
+      "wall_iso": "2026-11-07T18:12:23.096Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3363,
+      "wall_iso": "2026-11-07T18:12:23.133Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52279,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3376,
+      "wall_iso": "2026-11-07T18:12:23.146Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3413,
+      "wall_iso": "2026-11-07T18:12:23.183Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52329,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3426,
+      "wall_iso": "2026-11-07T18:12:23.196Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3464,
+      "wall_iso": "2026-11-07T18:12:23.234Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52379,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3477,
+      "wall_iso": "2026-11-07T18:12:23.247Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3514,
+      "wall_iso": "2026-11-07T18:12:23.284Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52429,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3526,
+      "wall_iso": "2026-11-07T18:12:23.296Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3563,
+      "wall_iso": "2026-11-07T18:12:23.333Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52479,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3576,
+      "wall_iso": "2026-11-07T18:12:23.346Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3613,
+      "wall_iso": "2026-11-07T18:12:23.383Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52529,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3627,
+      "wall_iso": "2026-11-07T18:12:23.397Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3664,
+      "wall_iso": "2026-11-07T18:12:23.434Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52579,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 20
+      }
+    },
+    {
+      "t_rel_ms": 3677,
+      "wall_iso": "2026-11-07T18:12:23.447Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3713,
+      "wall_iso": "2026-11-07T18:12:23.483Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52629,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 20
+      }
+    },
+    {
+      "t_rel_ms": 3727,
+      "wall_iso": "2026-11-07T18:12:23.497Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3764,
+      "wall_iso": "2026-11-07T18:12:23.534Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52679,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 20
+      }
+    },
+    {
+      "t_rel_ms": 3777,
+      "wall_iso": "2026-11-07T18:12:23.547Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3813,
+      "wall_iso": "2026-11-07T18:12:23.583Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52729,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 21
+      }
+    },
+    {
+      "t_rel_ms": 3827,
+      "wall_iso": "2026-11-07T18:12:23.597Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3864,
+      "wall_iso": "2026-11-07T18:12:23.634Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52779,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 20
+      }
+    },
+    {
+      "t_rel_ms": 3878,
+      "wall_iso": "2026-11-07T18:12:23.648Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3914,
+      "wall_iso": "2026-11-07T18:12:23.684Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52829,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 20
+      }
+    },
+    {
+      "t_rel_ms": 3928,
+      "wall_iso": "2026-11-07T18:12:23.698Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 3963,
+      "wall_iso": "2026-11-07T18:12:23.733Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52879,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 19
+      }
+    },
+    {
+      "t_rel_ms": 3979,
+      "wall_iso": "2026-11-07T18:12:23.749Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4013,
+      "wall_iso": "2026-11-07T18:12:23.783Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52929,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4029,
+      "wall_iso": "2026-11-07T18:12:23.799Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4063,
+      "wall_iso": "2026-11-07T18:12:23.833Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 52979,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4079,
+      "wall_iso": "2026-11-07T18:12:23.849Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4119,
+      "wall_iso": "2026-11-07T18:12:23.889Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53029,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4129,
+      "wall_iso": "2026-11-07T18:12:23.899Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4164,
+      "wall_iso": "2026-11-07T18:12:23.934Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53079,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 19
+      }
+    },
+    {
+      "t_rel_ms": 4179,
+      "wall_iso": "2026-11-07T18:12:23.949Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4213,
+      "wall_iso": "2026-11-07T18:12:23.983Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53129,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 19
+      }
+    },
+    {
+      "t_rel_ms": 4229,
+      "wall_iso": "2026-11-07T18:12:23.999Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4264,
+      "wall_iso": "2026-11-07T18:12:24.034Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53179,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4279,
+      "wall_iso": "2026-11-07T18:12:24.049Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4314,
+      "wall_iso": "2026-11-07T18:12:24.084Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53229,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4329,
+      "wall_iso": "2026-11-07T18:12:24.099Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4364,
+      "wall_iso": "2026-11-07T18:12:24.134Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53279,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4379,
+      "wall_iso": "2026-11-07T18:12:24.149Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4413,
+      "wall_iso": "2026-11-07T18:12:24.183Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53329,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4429,
+      "wall_iso": "2026-11-07T18:12:24.199Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4464,
+      "wall_iso": "2026-11-07T18:12:24.234Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53379,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4479,
+      "wall_iso": "2026-11-07T18:12:24.249Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4514,
+      "wall_iso": "2026-11-07T18:12:24.284Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53429,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4529,
+      "wall_iso": "2026-11-07T18:12:24.299Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4565,
+      "wall_iso": "2026-11-07T18:12:24.335Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53479,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4579,
+      "wall_iso": "2026-11-07T18:12:24.349Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4613,
+      "wall_iso": "2026-11-07T18:12:24.383Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53529,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 19
+      }
+    },
+    {
+      "t_rel_ms": 4629,
+      "wall_iso": "2026-11-07T18:12:24.399Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4664,
+      "wall_iso": "2026-11-07T18:12:24.434Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53579,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4679,
+      "wall_iso": "2026-11-07T18:12:24.449Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4713,
+      "wall_iso": "2026-11-07T18:12:24.483Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53629,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4729,
+      "wall_iso": "2026-11-07T18:12:24.499Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4764,
+      "wall_iso": "2026-11-07T18:12:24.534Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53679,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4779,
+      "wall_iso": "2026-11-07T18:12:24.549Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4813,
+      "wall_iso": "2026-11-07T18:12:24.583Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53729,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 19
+      }
+    },
+    {
+      "t_rel_ms": 4829,
+      "wall_iso": "2026-11-07T18:12:24.599Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4922,
+      "wall_iso": "2026-11-07T18:12:24.692Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53779,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4922,
+      "wall_iso": "2026-11-07T18:12:24.692Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4922,
+      "wall_iso": "2026-11-07T18:12:24.692Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53829,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4929,
+      "wall_iso": "2026-11-07T18:12:24.699Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    },
+    {
+      "t_rel_ms": 4964,
+      "wall_iso": "2026-11-07T18:12:24.734Z",
+      "cat": "drive_status",
+      "data": {
+        "armed": true,
+        "mode": 3,
+        "reqLinear": 0,
+        "reqAngular": -0.3330000042915344,
+        "limLinear": 0,
+        "limAngular": -0.3330000042915344,
+        "uptimeMs": 53879,
+        "bootCount": 1,
+        "resetReason": "POWERON_RESET",
+        "spinRecoveryCode": 0,
+        "spinRecoveryState": "IDLE",
+        "noMotionBudgetMs": 0,
+        "spinFailedExhausted": false,
+        "chassisRebreakoutConsumed": false,
+        "cmdAge": 18
+      }
+    },
+    {
+      "t_rel_ms": 4979,
+      "wall_iso": "2026-11-07T18:12:24.749Z",
+      "cat": "serial_tx",
+      "data": "[ext] [0x12] ff fc 09 12 00 00 00 00 b3 fe 00 cc"
+    }
+  ],
+  "summary": {
+    "firstTriggeringCondition": null,
+    "firmwareOutputCutTimeMs": null,
+    "hostDisarmTimeMs": null,
+    "totalRecords": 201
+  }
+}
